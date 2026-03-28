@@ -18,18 +18,89 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('Mongo conectado'))
   .catch(err => console.error(err));
 
-// Schema
-const playerSchema = new mongoose.Schema({
-  googleId: String,
-  email: String,
-  name: String,
-  avatar: String,
-  level: { type: Number, default: 1 },
-  hp: { type: Number, default: 100 },
-  money: { type: Number, default: 0 }
-});
+// Schema novo completo
+const playerSchema = new mongoose.Schema(
+  {
+    googleId: String,
+    email: String,
+    name: String,
+    avatar: String,
+
+    niveis: {
+      playerLevel: { type: Number, default: 1 },
+      barracoLevel: { type: Number, default: 1 },
+      hierarchyLevel: { type: Number, default: 1 },
+      arsenalLevel: { type: Number, default: 1 },
+      giroLevel: { type: Number, default: 1 },
+      lavagemLevel: { type: Number, default: 1 },
+      luxuryLevel: { type: Number, default: 1 },
+      briberyLevel: { type: Number, default: 1 },
+    },
+
+    balances: {
+      dirtyMoney: { type: Number, default: 1000 },
+      cleanMoney: { type: Number, default: 0 },
+      corre: { type: Number, default: 1000 },
+    },
+
+    inventory: {
+      items: { type: Array, default: [] },
+      gifts: { type: Array, default: [] },
+      rewards: { type: Array, default: [] },
+    },
+
+    pageLevels: {
+      barraco: { type: Number, default: 1 },
+      giro: { type: Number, default: 1 },
+      lavagem: { type: Number, default: 1 },
+      luxury: { type: Number, default: 1 },
+      arsenal: { type: Number, default: 1 },
+      bribery: { type: Number, default: 1 },
+      hierarchy: { type: Number, default: 1 },
+      home: { type: Number, default: 1 },
+      game: { type: Number, default: 1 },
+    },
+
+    skills: {
+      attack: { type: Number, default: 0 },
+      defense: { type: Number, default: 0 },
+      intelligence: { type: Number, default: 0 },
+      agility: { type: Number, default: 0 },
+      respect: { type: Number, default: 0 },
+      vigor: { type: Number, default: 0 },
+    },
+
+    power: { type: Number, default: 0 },
+    hierarchyBadge: { type: String, default: 'Antena' },
+
+    barracoPosition: {
+      x: { type: Number, default: 0 },
+      y: { type: Number, default: 0 },
+      z: { type: Number, default: 0 },
+    },
+  },
+  { timestamps: true }
+);
 
 const Player = mongoose.model('Player', playerSchema);
+
+function authMiddleware(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Token não informado' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+}
 
 // LOGIN GOOGLE
 app.post('/auth/google', async (req, res) => {
@@ -62,12 +133,34 @@ app.post('/auth/google', async (req, res) => {
 
     res.json({
       token: jwtToken,
-      player
+      player,
     });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'erro no login' });
+  }
+});
+
+// SALVAR PLAYER COMPLETO
+app.patch('/player/update', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const incomingPlayer = req.body || {};
+
+    const updatedPlayer = await Player.findByIdAndUpdate(
+      userId,
+      { $set: incomingPlayer },
+      { new: true }
+    );
+
+    if (!updatedPlayer) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    res.json({ player: updatedPlayer });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao salvar player' });
   }
 });
 

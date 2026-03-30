@@ -8,17 +8,18 @@ import jwt from 'jsonwebtoken';
 dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
 app.use(cors());
 app.use(express.json());
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// Mongo
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => console.log('Mongo conectado'))
-  .catch(err => console.error(err));
+  .catch((err) => console.error('Erro Mongo:', err));
 
-// Schema novo completo
 const playerSchema = new mongoose.Schema(
   {
     googleId: String,
@@ -78,6 +79,8 @@ const playerSchema = new mongoose.Schema(
       y: { type: Number, default: 0 },
       z: { type: Number, default: 0 },
     },
+
+    lastSpinAt: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
@@ -102,7 +105,146 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// LOGIN GOOGLE
+const ALLOWED_MULTIPLIERS = [1, 2, 5, 10, 25, 50];
+
+function randomSlotSymbol() {
+  const symbols = ['💎', '💵', '🔫', '🚔'];
+  return symbols[Math.floor(Math.random() * symbols.length)];
+}
+
+function randomSlotReels() {
+  return [randomSlotSymbol(), randomSlotSymbol(), randomSlotSymbol()];
+}
+function generateSlotOutcome() {
+  const r = Math.random();
+
+  if (r < 0.03) return ['💎', '💎', '💎'];
+  if (r < 0.09) return ['🚔', '🚔', '🚔'];
+  if (r < 0.2) return ['💵', '💵', '💵'];
+  if (r < 0.34) return ['🔫', '🔫', '🔫'];
+  if (r < 0.5) return ['💵', '💵', '🔫'];
+
+  return randomSlotReels();
+}
+
+function executeSpinSlot(player, multiplier) {
+  if (!Number.isFinite(multiplier)) {
+    throw new Error('Multiplicador inválido');
+  }
+
+  if (!ALLOWED_MULTIPLIERS.includes(multiplier)) {
+    throw new Error('Multiplicador não permitido');
+  }
+
+  if (!player?.balances) {
+    throw new Error('Balances do player não encontrados');
+  }
+
+  if (player.balances.corre < multiplier) {
+    throw new Error('Sem corre suficiente pra bancar esse corre.');
+  }
+
+  const now = Date.now();
+  const lastSpinAt = player.lastSpinAt || 0;
+
+  if (now - lastSpinAt < 800) {
+    throw new Error('Ação muito rápida. Aguarde um instante.');
+  }
+
+  player.lastSpinAt = now;
+  player.balances.corre -= multiplier;
+
+  const reels = generateSlotOutcome();
+  const [a, b, c] = reels;
+
+  if (a === '🚔' && b === '🚔' && c === '🚔') {
+    const currentDirty = player.balances.dirtyMoney || 0;
+    const loss = currentDirty * 0.3;
+
+    player.balances.dirtyMoney = Math.max(0, currentDirty - loss);
+
+    return {
+      reels,
+      resultType: 'prison',
+      gain: 0,
+      lossPercent: 30,
+      multiplier,
+      message: '🚔 A casa caiu. Perdeu 30% do Commands Sujo.',
+    };
+  }
+
+  if (a === '💎' && b === '💎' && c === '💎') {
+    const gain = 10000 * multiplier;
+    player.balances.dirtyMoney += gain;
+
+    return {
+      reels,
+      resultType: 'jackpot',
+      gain,
+      lossPercent: 0,
+      multiplier,
+      message: `💎 JACKPOT! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
+    };
+  }
+
+  if (a === '💵' && b === '💵' && c === '💵') {
+    const gain = 2000 * multiplier;
+    player.balances.dirtyMoney += gain;
+
+    return {
+      reels,
+      resultType: 'big_win',
+      gain,
+      lossPercent: 0,
+      multiplier,
+      message: `💵 Bateu forte! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
+    };
+  }
+
+  if (a === '🔫' && b === '🔫' && c === '🔫') {
+    const gain = 1200 * multiplier;
+    player.balances.dirtyMoney += gain;
+
+    return {
+      reels,
+      resultType: 'medium_win',
+      gain,
+      lossPercent: 0,
+      multiplier,
+      message: `🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
+    };
+  }
+
+  if (
+    (a === '💵' && b === '💵') ||
+    (a === '💵' && c === '💵') ||
+    (b === '💵' && c === '💵')
+  ) {
+    const gain = 600 * multiplier;
+    player.balances.dirtyMoney += gain;
+
+    return {
+      reels,
+      resultType: 'small_win',
+      gain,
+      lossPercent: 0,
+      multiplier,
+      message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
+    };
+  }
+
+  const gain = 100 * multiplier;
+  player.balances.dirtyMoney += gain;
+
+  return {
+    reels,
+    resultType: 'common',
+    gain,
+    lossPercent: 0,
+    multiplier,
+    message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
+  };
+}
 app.post('/auth/google', async (req, res) => {
   try {
     const { token } = req.body;
@@ -131,36 +273,48 @@ app.post('/auth/google', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    res.json({
+    return res.json({
       token: jwtToken,
       player,
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'erro no login' });
+    console.error('Erro no login Google:', err);
+    return res.status(500).json({ error: 'erro no login' });
   }
 });
 
-// SALVAR PLAYER COMPLETO
-app.patch('/player/update', authMiddleware, async (req, res) => {
+app.post('/game/action', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
-    const incomingPlayer = req.body || {};
+    const { action, payload } = req.body;
 
-    const updatedPlayer = await Player.findByIdAndUpdate(
-      userId,
-      { $set: incomingPlayer },
-      { new: true }
-    );
+    const player = await Player.findById(userId);
 
-    if (!updatedPlayer) {
+    if (!player) {
       return res.status(404).json({ error: 'Player não encontrado' });
     }
 
-    res.json({ player: updatedPlayer });
+    if (action === 'spin_slot') {
+      const multiplier = Number(payload?.multiplier ?? 1);
+      const result = executeSpinSlot(player, multiplier);
+
+      await player.save();
+
+      return res.json({
+        success: true,
+        action,
+        player,
+        result,
+        message: result.message,
+      });
+    }
+
+    return res.status(400).json({ error: 'Ação inválida' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao salvar player' });
+    console.error('Erro em /game/action:', err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Erro interno do servidor',
+    });
   }
 });
 
@@ -168,4 +322,6 @@ app.get('/', (req, res) => {
   res.send('Servidor rodando 🚀');
 });
 
-app.listen(3000, () => console.log('Servidor ON'));
+app.listen(PORT, () => {
+  console.log(`Servidor ON na porta ${PORT}`);
+});

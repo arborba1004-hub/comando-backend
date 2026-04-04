@@ -186,9 +186,7 @@ resultType: 'jackpot',
 gain,
 lossPercent: 0,
 multiplier,
-message: 💎 JACKPOT! +${gain.toLocaleString('pt-BR')} Commands Sujo,
-};
-
+message: `💎 JACKPOT! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
 }
 
 if (a === '💵' && b === '💵' && c === '💵') {
@@ -356,5 +354,5 @@ res.send('Servidor rodando 🚀');
 });
 
 app.listen(PORT, () => {
-console.log(Servidor ON na porta ${PORT});
+console.log(`Servidor ON na porta ${PORT}`);
 });

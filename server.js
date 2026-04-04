@@ -335,19 +335,21 @@ error: err instanceof Error ? err.message : 'Erro interno do servidor',
 
 app.get('/players', authMiddleware, async (req, res) => {
 try {
-const players = await Player.find({}, {
-_id: 1,
-barracoPosition: 1,
-});
+const players = await Player.find(
+  {},
+  {
+    _id: 1,
+    mapPosition: 1,
+  }
+);
 
-const formatted = players.map(p => ({  
-  id: p._id,  
-  tileX: p.barracoPosition?.x || 0,  
-  tileY: p.barracoPosition?.z || 0,  
-  worldX: p.barracoPosition?.x || 0,  
-  worldY: p.barracoPosition?.z || 0,  
+const formatted = players.map((p) => ({
+  id: p._id,
+  tileX: p.mapPosition?.tileX || 0,
+  tileY: p.mapPosition?.tileY || 0,
+  worldX: p.mapPosition?.worldX || 0,
+  worldY: p.mapPosition?.worldY || 0,
 }));
-
 
 
 res.json(formatted);

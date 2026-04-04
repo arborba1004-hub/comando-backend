@@ -27,7 +27,6 @@ const playerSchema = new mongoose.Schema(
     name: String,
     avatar: String,
 
-
     niveis: {
       playerLevel: { type: Number, default: 1 },
       barracoLevel: { type: Number, default: 1 },
@@ -88,7 +87,7 @@ const playerSchema = new mongoose.Schema(
       worldY: { type: Number, default: 5 },
     },
 
-lastPassiveIncomeAt: { type: Number, default: Date.now },
+    lastPassiveIncomeAt: { type: Number, default: Date.now },
 
     lastSpinAt: { type: Number, default: 0 },
   },
@@ -136,8 +135,21 @@ function generateSlotOutcome() {
   if (r < 0.34) return ['🔫', '🔫', '🔫'];
   if (r < 0.5) return ['💵', '💵', '🔫'];
 
-  return randomSlotReels();
-}function applyPassiveIncome(player) {
+  // CORREÇÃO AQUI: Garante que o randomSlotReels não sorteie prêmios fechados acidentalmente
+  let fallback = randomSlotReels();
+  while (
+    (fallback[0] === '💎' && fallback[1] === '💎' && fallback[2] === '💎') ||
+    (fallback[0] === '🚔' && fallback[1] === '🚔' && fallback[2] === '🚔') ||
+    (fallback[0] === '💵' && fallback[1] === '💵' && fallback[2] === '💵') ||
+    (fallback[0] === '🔫' && fallback[1] === '🔫' && fallback[2] === '🔫')
+  ) {
+    fallback = randomSlotReels();
+  }
+
+  return fallback;
+}
+
+function applyPassiveIncome(player) {
   const now = Date.now();
   const last = player.lastPassiveIncomeAt || now;
 
@@ -166,7 +178,6 @@ function executeSpinSlot(player, multiplier) {
   if (!player?.balances) {
     throw new Error('Balances do player não encontrados');
   }
-
 
   if (player.balances.corre < multiplier) {
     throw new Error('Sem corre suficiente pra bancar esse corre.');
@@ -227,7 +238,7 @@ function executeSpinSlot(player, multiplier) {
       multiplier,
       message: `💵 Bateu forte! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
     };
-  } // <-- Chave de fechamento adicionada aqui
+  } 
 
   if (a === '🔫' && b === '🔫' && c === '🔫') {
     const gain = 1200 * multiplier;
@@ -239,7 +250,7 @@ function executeSpinSlot(player, multiplier) {
       gain,
       lossPercent: 0,
       multiplier,
-      message: `🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`, // <-- Crase adicionada aqui
+      message: `🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`, 
     };
   }
 
@@ -257,7 +268,7 @@ function executeSpinSlot(player, multiplier) {
       gain,
       lossPercent: 0,
       multiplier,
-      message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`, // <-- Crase adicionada aqui
+      message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`, 
     };
   }
 
@@ -270,7 +281,7 @@ function executeSpinSlot(player, multiplier) {
     gain,
     lossPercent: 0,
     multiplier,
-    message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`, // <-- Crase adicionada aqui
+    message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`, 
   };
 }
 
@@ -288,11 +299,21 @@ app.post('/auth/google', async (req, res) => {
     let player = await Player.findOne({ googleId: payload.sub });
 
     if (!player) {
+      // CORREÇÃO AQUI: Sorteio do mapa aleatório no primeiro login (40x20)
+      const randomX = Math.floor(Math.random() * 40);
+      const randomY = Math.floor(Math.random() * 20);
+
       player = await Player.create({
         googleId: payload.sub,
         email: payload.email,
         name: payload.name,
         avatar: payload.picture,
+        mapPosition: {
+          tileX: randomX,
+          tileY: randomY,
+          worldX: randomX,
+          worldY: randomY,
+        }
       });
     }
 
@@ -303,12 +324,12 @@ app.post('/auth/google', async (req, res) => {
     );
 
     applyPassiveIncome(player);
-await player.save();
+    await player.save();
 
-return res.json({
-  token: jwtToken,
-  player,
-});
+    return res.json({
+      token: jwtToken,
+      player,
+    });
   } catch (err) {
     console.error('Erro no login Google:', err);
     return res.status(500).json({ error: 'erro no login' });
@@ -322,11 +343,11 @@ app.post('/game/action', authMiddleware, async (req, res) => {
 
     const player = await Player.findById(userId);
 
-if (!player) {
-  return res.status(404).json({ error: 'Player não encontrado' });
-}
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
 
-applyPassiveIncome(player);
+    applyPassiveIncome(player);
 
     if (action === 'spin_slot') {
       const multiplier = Number(payload?.multiplier ?? 1);
@@ -354,20 +375,25 @@ applyPassiveIncome(player);
 
 app.get('/players', authMiddleware, async (req, res) => {
   try {
+    // CORREÇÃO AQUI: Trazendo o nome e o nível do barraco do banco
     const players = await Player.find(
       {},
       {
         _id: 1,
+        name: 1, 
         mapPosition: 1,
+        'niveis.barracoLevel': 1 
       }
     );
 
     const formatted = players.map((p) => ({
       id: p._id,
+      name: p.name,
       tileX: p.mapPosition?.tileX || 0,
       tileY: p.mapPosition?.tileY || 0,
       worldX: p.mapPosition?.worldX || 0,
       worldY: p.mapPosition?.worldY || 0,
+      barracoLevel: p.niveis?.barracoLevel || 1 // Expondo para o frontend
     }));
 
     res.json(formatted);

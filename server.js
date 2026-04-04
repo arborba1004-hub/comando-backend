@@ -95,6 +95,9 @@ const playerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// CORREÇÃO: Garante que o banco de dados não aceite dois jogadores no mesmo lugar
+playerSchema.index({ "mapPosition.tileX": 1, "mapPosition.tileY": 1 }, { unique: true, sparse: true });
+
 const Player = mongoose.model('Player', playerSchema);
 
 function authMiddleware(req, res, next) {
@@ -135,7 +138,7 @@ function generateSlotOutcome() {
   if (r < 0.34) return ['🔫', '🔫', '🔫'];
   if (r < 0.5) return ['💵', '💵', '🔫'];
 
-  // CORREÇÃO AQUI: Garante que o randomSlotReels não sorteie prêmios fechados acidentalmente
+  // CORREÇÃO: Garante que o fallback nunca sorteie prêmios máximos
   let fallback = randomSlotReels();
   while (
     (fallback[0] === '💎' && fallback[1] === '💎' && fallback[2] === '💎') ||
@@ -299,9 +302,16 @@ app.post('/auth/google', async (req, res) => {
     let player = await Player.findOne({ googleId: payload.sub });
 
     if (!player) {
-      // CORREÇÃO AQUI: Sorteio do mapa aleatório no primeiro login (40x20)
-      const randomX = Math.floor(Math.random() * 40);
-      const randomY = Math.floor(Math.random() * 20);
+      // CORREÇÃO: Sorteia posição vaga até encontrar uma disponível
+      let randomX, randomY, positionExists;
+      do {
+        randomX = Math.floor(Math.random() * 40);
+        randomY = Math.floor(Math.random() * 20);
+        positionExists = await Player.findOne({ 
+          "mapPosition.tileX": randomX, 
+          "mapPosition.tileY": randomY 
+        });
+      } while (positionExists);
 
       player = await Player.create({
         googleId: payload.sub,
@@ -375,7 +385,6 @@ app.post('/game/action', authMiddleware, async (req, res) => {
 
 app.get('/players', authMiddleware, async (req, res) => {
   try {
-    // CORREÇÃO AQUI: Trazendo o nome e o nível do barraco do banco
     const players = await Player.find(
       {},
       {
@@ -393,7 +402,7 @@ app.get('/players', authMiddleware, async (req, res) => {
       tileY: p.mapPosition?.tileY || 0,
       worldX: p.mapPosition?.worldX || 0,
       worldY: p.mapPosition?.worldY || 0,
-      barracoLevel: p.niveis?.barracoLevel || 1 // Expondo para o frontend
+      barracoLevel: p.niveis?.barracoLevel || 1 
     }));
 
     res.json(formatted);

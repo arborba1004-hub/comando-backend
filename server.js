@@ -340,7 +340,14 @@ const formatted = players.map(p => ({
   tileY: p.barracoPosition?.z || 0,  
   worldX: p.barracoPosition?.x || 0,  
   worldY: p.barracoPosition?.z || 0,  
-}));  
+});
+
+mapPosition: {
+  tileX: { type: Number, default: 10 },
+  tileY: { type: Number, default: 5 },
+  worldX: { type: Number, default: 10 },
+  worldY: { type: Number, default: 5 },
+});  
 
 res.json(formatted);
 

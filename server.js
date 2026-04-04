@@ -187,7 +187,7 @@ gain,
 lossPercent: 0,
 multiplier,
 message: `💎 JACKPOT! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
-}
+};
 
 if (a === '💵' && b === '💵' && c === '💵') {
 const gain = 2000 * multiplier;
@@ -338,7 +338,7 @@ const formatted = players.map(p => ({
   tileY: p.barracoPosition?.z || 0,  
   worldX: p.barracoPosition?.x || 0,  
   worldY: p.barracoPosition?.z || 0,  
-});
+}));
 
 
 

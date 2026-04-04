@@ -83,10 +83,10 @@ z: { type: Number, default: 0 },
 },
 
 mapPosition: {
-  tileX: { type: Number, default: 10 },
-  tileY: { type: Number, default: 5 },
-  worldX: { type: Number, default: 10 },
-  worldY: { type: Number, default: 5 },
+tileX: { type: Number, default: 10 },
+tileY: { type: Number, default: 5 },
+worldX: { type: Number, default: 10 },
+worldY: { type: Number, default: 5 },
 },
 
 lastSpinAt: { type: Number, default: 0 },

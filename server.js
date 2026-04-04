@@ -87,7 +87,6 @@ const playerSchema = new mongoose.Schema(
 
 const Player = mongoose.model('Player', playerSchema);
 
-// ================= AUTH =================
 function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
@@ -106,7 +105,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// ================= ROTA NOVA MULTIPLAYER =================
+/* ======================= NOVA ROTA ======================= */
 app.get('/players', authMiddleware, async (req, res) => {
   try {
     const players = await Player.find({}, {
@@ -128,8 +127,8 @@ app.get('/players', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Erro ao buscar players' });
   }
 });
+/* ========================================================= */
 
-// ================= LOGIN =================
 app.post('/auth/google', async (req, res) => {
   try {
     const { token } = req.body;
@@ -168,104 +167,41 @@ app.post('/auth/google', async (req, res) => {
   }
 });
 
-// ================= UPDATE PLAYER (IMPORTANTE) =================
-app.patch('/player/update', authMiddleware, async (req, res) => {
+app.post('/game/action', authMiddleware, async (req, res) => {
   try {
-    const player = await Player.findById(req.user.id);
+    const userId = req.user.id;
+    const { action, payload } = req.body;
+
+    const player = await Player.findById(userId);
 
     if (!player) {
       return res.status(404).json({ error: 'Player não encontrado' });
     }
 
-    // 🔥 SALVA POSIÇÃO DO GRID
-    if (req.body.worldX !== undefined) {
-      player.barracoPosition.x = req.body.worldX;
-    }
-    if (req.body.worldY !== undefined) {
-      player.barracoPosition.z = req.body.worldY;
-    }
-
-    await player.save();
-
-    res.json({ player });
-  } catch (err) {
-    console.error('Erro em update player:', err);
-    res.status(500).json({ error: 'Erro ao atualizar player' });
-  }
-});
-
-// ================= GAME =================
-const ALLOWED_MULTIPLIERS = [1, 2, 5, 10, 25, 50];
-
-function randomSlotSymbol() {
-  const symbols = ['💎', '💵', '🔫', '🚔'];
-  return symbols[Math.floor(Math.random() * symbols.length)];
-}
-
-function randomSlotReels() {
-  return [randomSlotSymbol(), randomSlotSymbol(), randomSlotSymbol()];
-}
-
-function generateSlotOutcome() {
-  const r = Math.random();
-
-  if (r < 0.03) return ['💎', '💎', '💎'];
-  if (r < 0.09) return ['🚔', '🚔', '🚔'];
-  if (r < 0.2) return ['💵', '💵', '💵'];
-  if (r < 0.34) return ['🔫', '🔫', '🔫'];
-  if (r < 0.5) return ['💵', '💵', '🔫'];
-
-  return randomSlotReels();
-}
-
-function executeSpinSlot(player, multiplier) {
-  if (!ALLOWED_MULTIPLIERS.includes(multiplier)) {
-    throw new Error('Multiplicador não permitido');
-  }
-
-  if (player.balances.corre < multiplier) {
-    throw new Error('Sem corre suficiente');
-  }
-
-  player.balances.corre -= multiplier;
-
-  const reels = generateSlotOutcome();
-  const [a, b, c] = reels;
-
-  if (a === '🚔' && b === '🚔' && c === '🚔') {
-    player.balances.dirtyMoney *= 0.7;
-    return { reels, resultType: 'prison' };
-  }
-
-  if (a === '💎' && b === '💎' && c === '💎') {
-    player.balances.dirtyMoney += 10000 * multiplier;
-    return { reels, resultType: 'jackpot' };
-  }
-
-  player.balances.dirtyMoney += 100 * multiplier;
-  return { reels, resultType: 'common' };
-}
-
-app.post('/game/action', authMiddleware, async (req, res) => {
-  try {
-    const player = await Player.findById(req.user.id);
-
-    const { action, payload } = req.body;
-
     if (action === 'spin_slot') {
-      const result = executeSpinSlot(player, payload.multiplier);
+      const multiplier = Number(payload?.multiplier ?? 1);
+      const result = executeSpinSlot(player, multiplier);
+
       await player.save();
 
-      return res.json({ player, result });
+      return res.json({
+        success: true,
+        action,
+        player,
+        result,
+        message: result.message,
+      });
     }
 
-    res.status(400).json({ error: 'Ação inválida' });
+    return res.status(400).json({ error: 'Ação inválida' });
   } catch (err) {
-    res.status(500).json({ error: 'Erro interno' });
+    console.error('Erro em /game/action:', err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Erro interno do servidor',
+    });
   }
 });
 
-// ================= ROOT =================
 app.get('/', (req, res) => {
   res.send('Servidor rodando 🚀');
 });

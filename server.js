@@ -197,6 +197,7 @@ lossPercent: 0,
 multiplier,
 message: `💎 JACKPOT! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
 };
+}
 
 if (a === '💵' && b === '💵' && c === '💵') {
 const gain = 2000 * multiplier;
@@ -208,10 +209,8 @@ resultType: 'big_win',
 gain,
 lossPercent: 0,
 multiplier,
-message: 💵 Bateu forte! +${gain.toLocaleString('pt-BR')} Commands Sujo,
+message: `💵 Bateu forte! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
 };
-
-}
 
 if (a === '🔫' && b === '🔫' && c === '🔫') {
 const gain = 1200 * multiplier;
@@ -223,7 +222,7 @@ resultType: 'medium_win',
 gain,
 lossPercent: 0,
 multiplier,
-message: 🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo,
+message: 🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
 };
 
 }
@@ -242,7 +241,7 @@ resultType: 'small_win',
 gain,
 lossPercent: 0,
 multiplier,
-message: 💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo,
+message: 💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
 };
 
 }
@@ -256,7 +255,7 @@ resultType: 'common',
 gain,
 lossPercent: 0,
 multiplier,
-message: ⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo,
+message: ⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
 };
 }
 app.post('/auth/google', async (req, res) => {

@@ -302,10 +302,13 @@ app.post('/auth/google', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    return res.json({
-      token: jwtToken,
-      player,
-    });
+    applyPassiveIncome(player);
+await player.save();
+
+return res.json({
+  token: jwtToken,
+  player,
+});
   } catch (err) {
     console.error('Erro no login Google:', err);
     return res.status(500).json({ error: 'erro no login' });
@@ -319,9 +322,11 @@ app.post('/game/action', authMiddleware, async (req, res) => {
 
     const player = await Player.findById(userId);
 
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
+if (!player) {
+  return res.status(404).json({ error: 'Player não encontrado' });
+}
+
+applyPassiveIncome(player);
 
     if (action === 'spin_slot') {
       const multiplier = Number(payload?.multiplier ?? 1);

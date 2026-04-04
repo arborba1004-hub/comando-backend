@@ -87,6 +87,7 @@ const playerSchema = new mongoose.Schema(
 
 const Player = mongoose.model('Player', playerSchema);
 
+// ================= AUTH =================
 function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
@@ -105,146 +106,30 @@ function authMiddleware(req, res, next) {
   }
 }
 
-const ALLOWED_MULTIPLIERS = [1, 2, 5, 10, 25, 50];
+// ================= ROTA NOVA MULTIPLAYER =================
+app.get('/players', authMiddleware, async (req, res) => {
+  try {
+    const players = await Player.find({}, {
+      _id: 1,
+      barracoPosition: 1,
+    });
 
-function randomSlotSymbol() {
-  const symbols = ['💎', '💵', '🔫', '🚔'];
-  return symbols[Math.floor(Math.random() * symbols.length)];
-}
+    const formatted = players.map(p => ({
+      id: p._id,
+      tileX: p.barracoPosition?.x || 0,
+      tileY: p.barracoPosition?.z || 0,
+      worldX: p.barracoPosition?.x || 0,
+      worldY: p.barracoPosition?.z || 0,
+    }));
 
-function randomSlotReels() {
-  return [randomSlotSymbol(), randomSlotSymbol(), randomSlotSymbol()];
-}
-function generateSlotOutcome() {
-  const r = Math.random();
-
-  if (r < 0.03) return ['💎', '💎', '💎'];
-  if (r < 0.09) return ['🚔', '🚔', '🚔'];
-  if (r < 0.2) return ['💵', '💵', '💵'];
-  if (r < 0.34) return ['🔫', '🔫', '🔫'];
-  if (r < 0.5) return ['💵', '💵', '🔫'];
-
-  return randomSlotReels();
-}
-
-function executeSpinSlot(player, multiplier) {
-  if (!Number.isFinite(multiplier)) {
-    throw new Error('Multiplicador inválido');
+    res.json(formatted);
+  } catch (error) {
+    console.error('Erro ao buscar players:', error);
+    res.status(500).json({ error: 'Erro ao buscar players' });
   }
+});
 
-  if (!ALLOWED_MULTIPLIERS.includes(multiplier)) {
-    throw new Error('Multiplicador não permitido');
-  }
-
-  if (!player?.balances) {
-    throw new Error('Balances do player não encontrados');
-  }
-
-  if (player.balances.corre < multiplier) {
-    throw new Error('Sem corre suficiente pra bancar esse corre.');
-  }
-
-  const now = Date.now();
-  const lastSpinAt = player.lastSpinAt || 0;
-
-  if (now - lastSpinAt < 800) {
-    throw new Error('Ação muito rápida. Aguarde um instante.');
-  }
-
-  player.lastSpinAt = now;
-  player.balances.corre -= multiplier;
-
-  const reels = generateSlotOutcome();
-  const [a, b, c] = reels;
-
-  if (a === '🚔' && b === '🚔' && c === '🚔') {
-    const currentDirty = player.balances.dirtyMoney || 0;
-    const loss = currentDirty * 0.3;
-
-    player.balances.dirtyMoney = Math.max(0, currentDirty - loss);
-
-    return {
-      reels,
-      resultType: 'prison',
-      gain: 0,
-      lossPercent: 30,
-      multiplier,
-      message: '🚔 A casa caiu. Perdeu 30% do Commands Sujo.',
-    };
-  }
-
-  if (a === '💎' && b === '💎' && c === '💎') {
-    const gain = 10000 * multiplier;
-    player.balances.dirtyMoney += gain;
-
-    return {
-      reels,
-      resultType: 'jackpot',
-      gain,
-      lossPercent: 0,
-      multiplier,
-      message: `💎 JACKPOT! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
-    };
-  }
-
-  if (a === '💵' && b === '💵' && c === '💵') {
-    const gain = 2000 * multiplier;
-    player.balances.dirtyMoney += gain;
-
-    return {
-      reels,
-      resultType: 'big_win',
-      gain,
-      lossPercent: 0,
-      multiplier,
-      message: `💵 Bateu forte! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
-    };
-  }
-
-  if (a === '🔫' && b === '🔫' && c === '🔫') {
-    const gain = 1200 * multiplier;
-    player.balances.dirtyMoney += gain;
-
-    return {
-      reels,
-      resultType: 'medium_win',
-      gain,
-      lossPercent: 0,
-      multiplier,
-      message: `🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
-    };
-  }
-
-  if (
-    (a === '💵' && b === '💵') ||
-    (a === '💵' && c === '💵') ||
-    (b === '💵' && c === '💵')
-  ) {
-    const gain = 600 * multiplier;
-    player.balances.dirtyMoney += gain;
-
-    return {
-      reels,
-      resultType: 'small_win',
-      gain,
-      lossPercent: 0,
-      multiplier,
-      message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
-    };
-  }
-
-  const gain = 100 * multiplier;
-  player.balances.dirtyMoney += gain;
-
-  return {
-    reels,
-    resultType: 'common',
-    gain,
-    lossPercent: 0,
-    multiplier,
-    message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
-  };
-}
+// ================= LOGIN =================
 app.post('/auth/google', async (req, res) => {
   try {
     const { token } = req.body;
@@ -283,41 +168,104 @@ app.post('/auth/google', async (req, res) => {
   }
 });
 
-app.post('/game/action', authMiddleware, async (req, res) => {
+// ================= UPDATE PLAYER (IMPORTANTE) =================
+app.patch('/player/update', authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { action, payload } = req.body;
-
-    const player = await Player.findById(userId);
+    const player = await Player.findById(req.user.id);
 
     if (!player) {
       return res.status(404).json({ error: 'Player não encontrado' });
     }
 
-    if (action === 'spin_slot') {
-      const multiplier = Number(payload?.multiplier ?? 1);
-      const result = executeSpinSlot(player, multiplier);
-
-      await player.save();
-
-      return res.json({
-        success: true,
-        action,
-        player,
-        result,
-        message: result.message,
-      });
+    // 🔥 SALVA POSIÇÃO DO GRID
+    if (req.body.worldX !== undefined) {
+      player.barracoPosition.x = req.body.worldX;
+    }
+    if (req.body.worldY !== undefined) {
+      player.barracoPosition.z = req.body.worldY;
     }
 
-    return res.status(400).json({ error: 'Ação inválida' });
+    await player.save();
+
+    res.json({ player });
   } catch (err) {
-    console.error('Erro em /game/action:', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'Erro interno do servidor',
-    });
+    console.error('Erro em update player:', err);
+    res.status(500).json({ error: 'Erro ao atualizar player' });
   }
 });
 
+// ================= GAME =================
+const ALLOWED_MULTIPLIERS = [1, 2, 5, 10, 25, 50];
+
+function randomSlotSymbol() {
+  const symbols = ['💎', '💵', '🔫', '🚔'];
+  return symbols[Math.floor(Math.random() * symbols.length)];
+}
+
+function randomSlotReels() {
+  return [randomSlotSymbol(), randomSlotSymbol(), randomSlotSymbol()];
+}
+
+function generateSlotOutcome() {
+  const r = Math.random();
+
+  if (r < 0.03) return ['💎', '💎', '💎'];
+  if (r < 0.09) return ['🚔', '🚔', '🚔'];
+  if (r < 0.2) return ['💵', '💵', '💵'];
+  if (r < 0.34) return ['🔫', '🔫', '🔫'];
+  if (r < 0.5) return ['💵', '💵', '🔫'];
+
+  return randomSlotReels();
+}
+
+function executeSpinSlot(player, multiplier) {
+  if (!ALLOWED_MULTIPLIERS.includes(multiplier)) {
+    throw new Error('Multiplicador não permitido');
+  }
+
+  if (player.balances.corre < multiplier) {
+    throw new Error('Sem corre suficiente');
+  }
+
+  player.balances.corre -= multiplier;
+
+  const reels = generateSlotOutcome();
+  const [a, b, c] = reels;
+
+  if (a === '🚔' && b === '🚔' && c === '🚔') {
+    player.balances.dirtyMoney *= 0.7;
+    return { reels, resultType: 'prison' };
+  }
+
+  if (a === '💎' && b === '💎' && c === '💎') {
+    player.balances.dirtyMoney += 10000 * multiplier;
+    return { reels, resultType: 'jackpot' };
+  }
+
+  player.balances.dirtyMoney += 100 * multiplier;
+  return { reels, resultType: 'common' };
+}
+
+app.post('/game/action', authMiddleware, async (req, res) => {
+  try {
+    const player = await Player.findById(req.user.id);
+
+    const { action, payload } = req.body;
+
+    if (action === 'spin_slot') {
+      const result = executeSpinSlot(player, payload.multiplier);
+      await player.save();
+
+      return res.json({ player, result });
+    }
+
+    res.status(400).json({ error: 'Ação inválida' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ================= ROOT =================
 app.get('/', (req, res) => {
   res.send('Servidor rodando 🚀');
 });

@@ -249,7 +249,7 @@ resultType: 'common',
 gain,
 lossPercent: 0,
 multiplier,
-message: ⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo,
+message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
 };
 }
 app.post('/auth/google', async (req, res) => {
@@ -327,10 +327,32 @@ error: err instanceof Error ? err.message : 'Erro interno do servidor',
 }
 });
 
+
+app.get('/players', authMiddleware, async (req, res) => {
+  try {
+    const players = await Player.find({}, {
+      _id: 1,
+      barracoPosition: 1,
+    });
+
+    const formatted = players.map(p => ({
+      id: p._id,
+      tileX: p.barracoPosition?.x || 0,
+      tileY: p.barracoPosition?.z || 0,
+      worldX: p.barracoPosition?.x || 0,
+      worldY: p.barracoPosition?.z || 0,
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error('Erro ao buscar players:', error);
+    res.status(500).json({ error: 'Erro ao buscar players' });
+  }
+});
 app.get('/', (req, res) => {
 res.send('Servidor rodando 🚀');
 });
 
 app.listen(PORT, () => {
-console.log(Servidor ON na porta ${PORT});
+console.log(`Servidor ON na porta ${PORT}`);
 });

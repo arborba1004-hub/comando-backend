@@ -27,6 +27,7 @@ const playerSchema = new mongoose.Schema(
     name: String,
     avatar: String,
 
+
     niveis: {
       playerLevel: { type: Number, default: 1 },
       barracoLevel: { type: Number, default: 1 },
@@ -87,8 +88,11 @@ const playerSchema = new mongoose.Schema(
       worldY: { type: Number, default: 5 },
     },
 
+lastPassiveIncomeAt: { type: Number, default: Date.now },
+
     lastSpinAt: { type: Number, default: 0 },
   },
+
   { timestamps: true }
 );
 
@@ -147,6 +151,22 @@ function executeSpinSlot(player, multiplier) {
   if (!player?.balances) {
     throw new Error('Balances do player não encontrados');
   }
+function applyPassiveIncome(player) {
+  const now = Date.now();
+  const last = player.lastPassiveIncomeAt || now;
+
+  const minutesPassed = Math.floor((now - last) / 60000);
+
+  if (minutesPassed <= 0) return;
+
+  const level = player.niveis?.playerLevel || 1;
+
+  const ganho = minutesPassed * level;
+
+  player.balances.corre += ganho;
+
+  player.lastPassiveIncomeAt = now;
+}
 
   if (player.balances.corre < multiplier) {
     throw new Error('Sem corre suficiente pra bancar esse corre.');

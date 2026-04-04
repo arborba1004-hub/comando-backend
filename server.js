@@ -137,21 +137,7 @@ function generateSlotOutcome() {
   if (r < 0.5) return ['💵', '💵', '🔫'];
 
   return randomSlotReels();
-}
-
-function executeSpinSlot(player, multiplier) {
-  if (!Number.isFinite(multiplier)) {
-    throw new Error('Multiplicador inválido');
-  }
-
-  if (!ALLOWED_MULTIPLIERS.includes(multiplier)) {
-    throw new Error('Multiplicador não permitido');
-  }
-
-  if (!player?.balances) {
-    throw new Error('Balances do player não encontrados');
-  }
-function applyPassiveIncome(player) {
+}function applyPassiveIncome(player) {
   const now = Date.now();
   const last = player.lastPassiveIncomeAt || now;
 
@@ -167,6 +153,20 @@ function applyPassiveIncome(player) {
 
   player.lastPassiveIncomeAt = now;
 }
+
+function executeSpinSlot(player, multiplier) {
+  if (!Number.isFinite(multiplier)) {
+    throw new Error('Multiplicador inválido');
+  }
+
+  if (!ALLOWED_MULTIPLIERS.includes(multiplier)) {
+    throw new Error('Multiplicador não permitido');
+  }
+
+  if (!player?.balances) {
+    throw new Error('Balances do player não encontrados');
+  }
+
 
   if (player.balances.corre < multiplier) {
     throw new Error('Sem corre suficiente pra bancar esse corre.');

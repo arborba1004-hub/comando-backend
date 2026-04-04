@@ -16,196 +16,321 @@ app.use(express.json());
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log('Mongo conectado'))
-  .catch((err) => console.error('Erro Mongo:', err));
+.connect(process.env.MONGO_URI)
+.then(() => console.log('Mongo conectado'))
+.catch((err) => console.error('Erro Mongo:', err));
 
 const playerSchema = new mongoose.Schema(
-  {
-    googleId: String,
-    email: String,
-    name: String,
-    avatar: String,
+{
+googleId: String,
+email: String,
+name: String,
+avatar: String,
 
-    niveis: {
-      playerLevel: { type: Number, default: 1 },
-      barracoLevel: { type: Number, default: 1 },
-      hierarchyLevel: { type: Number, default: 1 },
-      arsenalLevel: { type: Number, default: 1 },
-      giroLevel: { type: Number, default: 1 },
-      lavagemLevel: { type: Number, default: 1 },
-      luxuryLevel: { type: Number, default: 1 },
-      briberyLevel: { type: Number, default: 1 },
-    },
+niveis: {  
+  playerLevel: { type: Number, default: 1 },  
+  barracoLevel: { type: Number, default: 1 },  
+  hierarchyLevel: { type: Number, default: 1 },  
+  arsenalLevel: { type: Number, default: 1 },  
+  giroLevel: { type: Number, default: 1 },  
+  lavagemLevel: { type: Number, default: 1 },  
+  luxuryLevel: { type: Number, default: 1 },  
+  briberyLevel: { type: Number, default: 1 },  
+},  
 
-    balances: {
-      dirtyMoney: { type: Number, default: 1000 },
-      cleanMoney: { type: Number, default: 0 },
-      corre: { type: Number, default: 1000 },
-    },
+balances: {  
+  dirtyMoney: { type: Number, default: 1000 },  
+  cleanMoney: { type: Number, default: 0 },  
+  corre: { type: Number, default: 1000 },  
+},  
 
-    inventory: {
-      items: { type: Array, default: [] },
-      gifts: { type: Array, default: [] },
-      rewards: { type: Array, default: [] },
-    },
+inventory: {  
+  items: { type: Array, default: [] },  
+  gifts: { type: Array, default: [] },  
+  rewards: { type: Array, default: [] },  
+},  
 
-    pageLevels: {
-      barraco: { type: Number, default: 1 },
-      giro: { type: Number, default: 1 },
-      lavagem: { type: Number, default: 1 },
-      luxury: { type: Number, default: 1 },
-      arsenal: { type: Number, default: 1 },
-      bribery: { type: Number, default: 1 },
-      hierarchy: { type: Number, default: 1 },
-      home: { type: Number, default: 1 },
-      game: { type: Number, default: 1 },
-    },
+pageLevels: {  
+  barraco: { type: Number, default: 1 },  
+  giro: { type: Number, default: 1 },  
+  lavagem: { type: Number, default: 1 },  
+  luxury: { type: Number, default: 1 },  
+  arsenal: { type: Number, default: 1 },  
+  bribery: { type: Number, default: 1 },  
+  hierarchy: { type: Number, default: 1 },  
+  home: { type: Number, default: 1 },  
+  game: { type: Number, default: 1 },  
+},  
 
-    skills: {
-      attack: { type: Number, default: 0 },
-      defense: { type: Number, default: 0 },
-      intelligence: { type: Number, default: 0 },
-      agility: { type: Number, default: 0 },
-      respect: { type: Number, default: 0 },
-      vigor: { type: Number, default: 0 },
-    },
+skills: {  
+  attack: { type: Number, default: 0 },  
+  defense: { type: Number, default: 0 },  
+  intelligence: { type: Number, default: 0 },  
+  agility: { type: Number, default: 0 },  
+  respect: { type: Number, default: 0 },  
+  vigor: { type: Number, default: 0 },  
+},  
 
-    power: { type: Number, default: 0 },
-    hierarchyBadge: { type: String, default: 'Antena' },
+power: { type: Number, default: 0 },  
+hierarchyBadge: { type: String, default: 'Antena' },  
 
-    barracoPosition: {
-      x: { type: Number, default: 0 },
-      y: { type: Number, default: 0 },
-      z: { type: Number, default: 0 },
-    },
+barracoPosition: {  
+  x: { type: Number, default: 0 },  
+  y: { type: Number, default: 0 },  
+  z: { type: Number, default: 0 },  
+},  
 
-    lastSpinAt: { type: Number, default: 0 },
-  },
-  { timestamps: true }
+lastSpinAt: { type: Number, default: 0 },
+
+},
+{ timestamps: true }
 );
 
 const Player = mongoose.model('Player', playerSchema);
 
 function authMiddleware(req, res, next) {
-  try {
-    const authHeader = req.headers.authorization;
+try {
+const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Token não informado' });
-    }
+if (!authHeader || !authHeader.startsWith('Bearer ')) {  
+  return res.status(401).json({ error: 'Token não informado' });  
+}  
 
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+const token = authHeader.split(' ')[1];  
+const decoded = jwt.verify(token, process.env.JWT_SECRET);  
 
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Token inválido' });
-  }
+req.user = decoded;  
+next();
+
+} catch (error) {
+return res.status(401).json({ error: 'Token inválido' });
+}
 }
 
-/* ======================= NOVA ROTA ======================= */
-app.get('/players', authMiddleware, async (req, res) => {
-  try {
-    const players = await Player.find({}, {
-      _id: 1,
-      barracoPosition: 1,
-    });
+const ALLOWED_MULTIPLIERS = [1, 2, 5, 10, 25, 50];
 
-    const formatted = players.map(p => ({
-      id: p._id,
-      tileX: p.barracoPosition?.x || 0,
-      tileY: p.barracoPosition?.z || 0,
-      worldX: p.barracoPosition?.x || 0,
-      worldY: p.barracoPosition?.z || 0,
-    }));
+function randomSlotSymbol() {
+const symbols = ['💎', '💵', '🔫', '🚔'];
+return symbols[Math.floor(Math.random() * symbols.length)];
+}
 
-    res.json(formatted);
-  } catch (error) {
-    console.error('Erro ao buscar players:', error);
-    res.status(500).json({ error: 'Erro ao buscar players' });
-  }
-});
-/* ========================================================= */
+function randomSlotReels() {
+return [randomSlotSymbol(), randomSlotSymbol(), randomSlotSymbol()];
+}
+function generateSlotOutcome() {
+const r = Math.random();
 
+if (r < 0.03) return ['💎', '💎', '💎'];
+if (r < 0.09) return ['🚔', '🚔', '🚔'];
+if (r < 0.2) return ['💵', '💵', '💵'];
+if (r < 0.34) return ['🔫', '🔫', '🔫'];
+if (r < 0.5) return ['💵', '💵', '🔫'];
+
+return randomSlotReels();
+}
+
+function executeSpinSlot(player, multiplier) {
+if (!Number.isFinite(multiplier)) {
+throw new Error('Multiplicador inválido');
+}
+
+if (!ALLOWED_MULTIPLIERS.includes(multiplier)) {
+throw new Error('Multiplicador não permitido');
+}
+
+if (!player?.balances) {
+throw new Error('Balances do player não encontrados');
+}
+
+if (player.balances.corre < multiplier) {
+throw new Error('Sem corre suficiente pra bancar esse corre.');
+}
+
+const now = Date.now();
+const lastSpinAt = player.lastSpinAt || 0;
+
+if (now - lastSpinAt < 800) {
+throw new Error('Ação muito rápida. Aguarde um instante.');
+}
+
+player.lastSpinAt = now;
+player.balances.corre -= multiplier;
+
+const reels = generateSlotOutcome();
+const [a, b, c] = reels;
+
+if (a === '🚔' && b === '🚔' && c === '🚔') {
+const currentDirty = player.balances.dirtyMoney || 0;
+const loss = currentDirty * 0.3;
+
+player.balances.dirtyMoney = Math.max(0, currentDirty - loss);  
+
+return {  
+  reels,  
+  resultType: 'prison',  
+  gain: 0,  
+  lossPercent: 30,  
+  multiplier,  
+  message: '🚔 A casa caiu. Perdeu 30% do Commands Sujo.',  
+};
+
+}
+
+if (a === '💎' && b === '💎' && c === '💎') {
+const gain = 10000 * multiplier;
+player.balances.dirtyMoney += gain;
+
+return {  
+  reels,  
+  resultType: 'jackpot',  
+  gain,  
+  lossPercent: 0,  
+  multiplier,  
+  message: `💎 JACKPOT! +${gain.toLocaleString('pt-BR')} Commands Sujo`,  
+};
+
+}
+
+if (a === '💵' && b === '💵' && c === '💵') {
+const gain = 2000 * multiplier;
+player.balances.dirtyMoney += gain;
+
+return {  
+  reels,  
+  resultType: 'big_win',  
+  gain,  
+  lossPercent: 0,  
+  multiplier,  
+  message: `💵 Bateu forte! +${gain.toLocaleString('pt-BR')} Commands Sujo`,  
+};
+
+}
+
+if (a === '🔫' && b === '🔫' && c === '🔫') {
+const gain = 1200 * multiplier;
+player.balances.dirtyMoney += gain;
+
+return {  
+  reels,  
+  resultType: 'medium_win',  
+  gain,  
+  lossPercent: 0,  
+  multiplier,  
+  message: `🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`,  
+};
+
+}
+
+if (
+(a === '💵' && b === '💵') ||
+(a === '💵' && c === '💵') ||
+(b === '💵' && c === '💵')
+) {
+const gain = 600 * multiplier;
+player.balances.dirtyMoney += gain;
+
+return {  
+  reels,  
+  resultType: 'small_win',  
+  gain,  
+  lossPercent: 0,  
+  multiplier,  
+  message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`,  
+};
+
+}
+
+const gain = 100 * multiplier;
+player.balances.dirtyMoney += gain;
+
+return {
+reels,
+resultType: 'common',
+gain,
+lossPercent: 0,
+multiplier,
+message: ⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo,
+};
+}
 app.post('/auth/google', async (req, res) => {
-  try {
-    const { token } = req.body;
+try {
+const { token } = req.body;
 
-    const ticket = await client.verifyIdToken({
-      idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
+const ticket = await client.verifyIdToken({  
+  idToken: token,  
+  audience: process.env.GOOGLE_CLIENT_ID,  
+});  
 
-    const payload = ticket.getPayload();
+const payload = ticket.getPayload();  
 
-    let player = await Player.findOne({ googleId: payload.sub });
+let player = await Player.findOne({ googleId: payload.sub });  
 
-    if (!player) {
-      player = await Player.create({
-        googleId: payload.sub,
-        email: payload.email,
-        name: payload.name,
-        avatar: payload.picture,
-      });
-    }
+if (!player) {  
+  player = await Player.create({  
+    googleId: payload.sub,  
+    email: payload.email,  
+    name: payload.name,  
+    avatar: payload.picture,  
+  });  
+}  
 
-    const jwtToken = jwt.sign(
-      { id: player._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+const jwtToken = jwt.sign(  
+  { id: player._id },  
+  process.env.JWT_SECRET,  
+  { expiresIn: '7d' }  
+);  
 
-    return res.json({
-      token: jwtToken,
-      player,
-    });
-  } catch (err) {
-    console.error('Erro no login Google:', err);
-    return res.status(500).json({ error: 'erro no login' });
-  }
+return res.json({  
+  token: jwtToken,  
+  player,  
+});
+
+} catch (err) {
+console.error('Erro no login Google:', err);
+return res.status(500).json({ error: 'erro no login' });
+}
 });
 
 app.post('/game/action', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { action, payload } = req.body;
+try {
+const userId = req.user.id;
+const { action, payload } = req.body;
 
-    const player = await Player.findById(userId);
+const player = await Player.findById(userId);  
 
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
+if (!player) {  
+  return res.status(404).json({ error: 'Player não encontrado' });  
+}  
 
-    if (action === 'spin_slot') {
-      const multiplier = Number(payload?.multiplier ?? 1);
-      const result = executeSpinSlot(player, multiplier);
+if (action === 'spin_slot') {  
+  const multiplier = Number(payload?.multiplier ?? 1);  
+  const result = executeSpinSlot(player, multiplier);  
 
-      await player.save();
+  await player.save();  
 
-      return res.json({
-        success: true,
-        action,
-        player,
-        result,
-        message: result.message,
-      });
-    }
+  return res.json({  
+    success: true,  
+    action,  
+    player,  
+    result,  
+    message: result.message,  
+  });  
+}  
 
-    return res.status(400).json({ error: 'Ação inválida' });
-  } catch (err) {
-    console.error('Erro em /game/action:', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'Erro interno do servidor',
-    });
-  }
+return res.status(400).json({ error: 'Ação inválida' });
+
+} catch (err) {
+console.error('Erro em /game/action:', err);
+return res.status(500).json({
+error: err instanceof Error ? err.message : 'Erro interno do servidor',
+});
+}
 });
 
 app.get('/', (req, res) => {
-  res.send('Servidor rodando 🚀');
+res.send('Servidor rodando 🚀');
 });
 
 app.listen(PORT, () => {
-  console.log(`Servidor ON na porta ${PORT}`);
+console.log(Servidor ON na porta ${PORT});
 });

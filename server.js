@@ -438,13 +438,7 @@ app.post('/create-payment', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Servidor rodando 🚀');
-});
 
-app.listen(PORT, () => {
-  console.log(`Servidor ON na porta ${PORT}`);
-});
 app.get('/', (req, res) => {
   res.send('Servidor rodando 🚀');
 });

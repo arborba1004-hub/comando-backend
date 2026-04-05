@@ -6,11 +6,9 @@ import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import mercadopago from 'mercadopago';
 
-const mpClient = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN,
+mercadopago.configure({
+  access_token: process.env.MP_ACCESS_TOKEN,
 });
-
-
 
 
 dotenv.config();

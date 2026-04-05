@@ -431,13 +431,17 @@ app.get('/create-payment', async (req, res) => {
       },
     });
 
-    res.json(result.body);
-  } catch (error) {
-    console.error('Erro ao criar pagamento:', error);
-    res.status(500).json({
-      error: 'Erro ao criar pagamento',
-      details: error.message || error,
+    const data =
+      result.body.point_of_interaction.transaction_data;
+
+    res.json({
+      qr_code: data.qr_code,
+      qr_code_base64: data.qr_code_base64,
+      ticket_url: data.ticket_url,
     });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Erro ao criar pagamento');
   }
 });
 

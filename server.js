@@ -4,6 +4,14 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
+import MercadoPagoConfig, { Payment } from 'mercadopago';
+
+const mpClient = new MercadoPagoConfig({
+  accessToken: process.env.APP_USR-8801153599948445-040511-973267fa7d375a5c619ddcc4f5416322-66985400,
+});
+
+
+
 
 dotenv.config();
 

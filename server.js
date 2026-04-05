@@ -450,3 +450,33 @@ app.post('/create-payment', async (req, res) => {
     });
   }
 });
+app.post('/create-payment', async (req, res) => {
+  try {
+    const { title, amount } = req.body;
+
+    const finalTitle = title || 'Compra Domínio do Comando';
+    const finalAmount = Number(amount || 10);
+
+    const result = await mercadopago.payment.create({
+      transaction_amount: finalAmount,
+      description: finalTitle,
+      payment_method_id: 'pix',
+      payer: {
+        email: 'teste@test.com',
+      },
+    });
+
+    const data = result.body.point_of_interaction.transaction_data;
+
+    res.json({
+      qr_code: data.qr_code,
+      qr_code_base64: data.qr_code_base64,
+      ticket_url: data.ticket_url,
+    });
+  } catch (error) {
+    console.error('Erro ao criar pagamento:', error);
+    res.status(500).json({
+      error: 'Erro ao criar pagamento',
+    });
+  }
+});

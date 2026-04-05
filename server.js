@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import MercadoPagoConfig, { Payment } from 'mercadopago';
 
 const mpClient = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN,,
+  accessToken: process.env.MP_ACCESS_TOKEN,
 });
 
 

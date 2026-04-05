@@ -397,13 +397,11 @@ app.get('/players', authMiddleware, async (req, res) => {
       {},
       {
         _id: 1,
-        name: 1, 
+        name: 1,
         mapPosition: 1,
-        'niveis.barracoLevel': 1 
+        'niveis.barracoLevel': 1
       }
     );
-
-
 
     const formatted = players.map((p) => ({
       id: p._id,
@@ -412,9 +410,15 @@ app.get('/players', authMiddleware, async (req, res) => {
       tileY: p.mapPosition?.tileY || 0,
       worldX: p.mapPosition?.worldX || 0,
       worldY: p.mapPosition?.worldY || 0,
-      barracoLevel: p.niveis?.barracoLevel || 1 
+      barracoLevel: p.niveis?.barracoLevel || 1
     }));
 
+    res.json(formatted);
+  } catch (error) {
+    console.error('Erro ao buscar players:', error);
+    res.status(500).json({ error: 'Erro ao buscar players' });
+  }
+});
 
 app.post('/create-payment', async (req, res) => {
   try {
@@ -429,19 +433,18 @@ app.post('/create-payment', async (req, res) => {
 
     res.json(result.body);
   } catch (error) {
-    console.error(error);
+    console.error('Erro ao criar pagamento:', error);
     res.status(500).send('Erro ao criar pagamento');
   }
 });
 
-
-    res.json(formatted);
-  } catch (error) {
-    console.error('Erro ao buscar players:', error);
-    res.status(500).json({ error: 'Erro ao buscar players' });
-  }
+app.get('/', (req, res) => {
+  res.send('Servidor rodando 🚀');
 });
 
+app.listen(PORT, () => {
+  console.log(`Servidor ON na porta ${PORT}`);
+});
 app.get('/', (req, res) => {
   res.send('Servidor rodando 🚀');
 });

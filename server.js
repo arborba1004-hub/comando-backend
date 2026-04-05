@@ -420,7 +420,7 @@ app.get('/players', authMiddleware, async (req, res) => {
   }
 });
 
-app.post('/create-payment', async (req, res) => {
+app.get('/create-payment', async (req, res) => {
   try {
     const result = await mercadopago.payment.create({
       transaction_amount: 10,
@@ -434,7 +434,10 @@ app.post('/create-payment', async (req, res) => {
     res.json(result.body);
   } catch (error) {
     console.error('Erro ao criar pagamento:', error);
-    res.status(500).send('Erro ao criar pagamento');
+    res.status(500).json({
+      error: 'Erro ao criar pagamento',
+      details: error.message || error,
+    });
   }
 });
 

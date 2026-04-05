@@ -6,12 +6,14 @@ import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import mercadopago from 'mercadopago';
 
+
+
+dotenv.config();
+
 mercadopago.configure({
   access_token: process.env.MP_ACCESS_TOKEN,
 });
 
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -401,6 +403,8 @@ app.get('/players', authMiddleware, async (req, res) => {
       }
     );
 
+
+
     const formatted = players.map((p) => ({
       id: p._id,
       name: p.name,
@@ -410,6 +414,26 @@ app.get('/players', authMiddleware, async (req, res) => {
       worldY: p.mapPosition?.worldY || 0,
       barracoLevel: p.niveis?.barracoLevel || 1 
     }));
+
+
+app.post('/create-payment', async (req, res) => {
+  try {
+    const result = await mercadopago.payment.create({
+      transaction_amount: 10,
+      description: 'VIP Domínio do Comando',
+      payment_method_id: 'pix',
+      payer: {
+        email: 'teste@test.com',
+      },
+    });
+
+    res.json(result.body);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Erro ao criar pagamento');
+  }
+});
+
 
     res.json(formatted);
   } catch (error) {

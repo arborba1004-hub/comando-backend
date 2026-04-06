@@ -454,6 +454,266 @@ app.get('/', (req, res) => {
   res.send('Servidor rodando 🚀');
 });
 
+app.get('/player/me', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    applyPassiveIncome(player);
+    await player.save();
+
+    return res.json({ player });
+  } catch (error) {
+    console.error('Erro em /player/me:', error);
+    return res.status(500).json({ error: 'Erro ao buscar player' });
+  }
+});
+
+app.patch('/player/update', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const incoming = req.body || {};
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    if (incoming.niveis) {
+      player.niveis = {
+        ...player.niveis.toObject(),
+        ...incoming.niveis,
+      };
+    }
+
+    if (incoming.balances) {
+      player.balances = {
+        ...player.balances.toObject(),
+        ...incoming.balances,
+      };
+    }
+
+    if (incoming.inventory) {
+      player.inventory = {
+        ...player.inventory.toObject(),
+        ...incoming.inventory,
+      };
+    }
+
+    if (incoming.pageLevels) {
+      player.pageLevels = {
+        ...player.pageLevels.toObject(),
+        ...incoming.pageLevels,
+      };
+    }
+
+    if (incoming.skills) {
+      player.skills = {
+        ...player.skills.toObject(),
+        ...incoming.skills,
+      };
+    }
+
+    if (incoming.power !== undefined) player.power = incoming.power;
+    if (incoming.hierarchyBadge !== undefined) player.hierarchyBadge = incoming.hierarchyBadge;
+    if (incoming.barracoPosition) {
+      player.barracoPosition = {
+        ...player.barracoPosition.toObject(),
+        ...incoming.barracoPosition,
+      };
+    }
+
+    if (incoming.mapPosition) {
+      player.mapPosition = {
+        ...player.mapPosition.toObject(),
+        ...incoming.mapPosition,
+      };
+    }
+
+    if (incoming.headerCustomization !== undefined) {
+      player.headerCustomization = incoming.headerCustomization;
+    }
+
+    if (incoming.laundryProgress !== undefined) {
+      player.laundryProgress = incoming.laundryProgress;
+    }
+
+    if (incoming.punishments !== undefined) {
+      player.punishments = incoming.punishments;
+    }
+
+    if (incoming.skillBoostMultiplier !== undefined) {
+      player.skillBoostMultiplier = incoming.skillBoostMultiplier;
+    }
+
+    if (incoming.ownedVehicles !== undefined) {
+      player.ownedVehicles = incoming.ownedVehicles;
+    }
+
+    if (incoming.purchasedAccessories !== undefined) {
+      player.purchasedAccessories = incoming.purchasedAccessories;
+    }
+
+    if (incoming.accessories !== undefined) {
+      player.accessories = incoming.accessories;
+    }
+
+    await player.save();
+
+    return res.json({ player });
+  } catch (error) {
+    console.error('Erro em /player/update:', error);
+    return res.status(500).json({ error: 'Erro ao atualizar player' });
+  }
+});
+
+app.get('/laundry/can-operate/:businessId', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const businessId = Number(req.params.businessId);
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const dailyOperations = player.laundryProgress?.dailyOperations || [];
+
+    const alreadyUsedToday = dailyOperations.some(
+      (op) => op.businessId === businessId && op.date === today
+    );
+
+    return res.json({ allowed: !alreadyUsedToday });
+  } catch (error) {
+    console.error('Erro em /laundry/can-operate/:businessId:', error);
+    return res.status(500).json({ error: 'Erro ao verificar operação diária' });
+  }
+});
+
+app.post('/laundry/start', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      businessId,
+      businessName,
+      grossAmount,
+      feePercentage,
+      feeAmount,
+      netAmount,
+    } = req.body;
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    if (!player.laundryProgress) {
+      player.laundryProgress = {
+        activeOperations: [],
+        dailyOperations: [],
+      };
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const dailyOperations = player.laundryProgress.dailyOperations || [];
+
+    const alreadyUsedToday = dailyOperations.some(
+      (op) => op.businessId === Number(businessId) && op.date === today
+    );
+
+    if (alreadyUsedToday) {
+      return res.status(400).json({ error: 'Você já operou neste comércio hoje' });
+    }
+
+    if ((player.balances?.dirtyMoney || 0) < Number(grossAmount)) {
+      return res.status(400).json({ error: 'Dinheiro sujo insuficiente' });
+    }
+
+    player.balances.dirtyMoney -= Number(grossAmount);
+
+    const operationId = new mongoose.Types.ObjectId().toString();
+    const endsAt = new Date(Date.now() + 15000).toISOString();
+
+    player.laundryProgress.activeOperations.push({
+      id: operationId,
+      operationId,
+      businessId: Number(businessId),
+      businessName,
+      startedAt: new Date().toISOString(),
+      endsAt,
+      grossAmount: Number(grossAmount),
+      feePercentage: Number(feePercentage),
+      feeAmount: Number(feeAmount),
+      netAmount: Number(netAmount),
+      status: 'processing',
+    });
+
+    player.laundryProgress.dailyOperations.push({
+      businessId: Number(businessId),
+      date: today,
+      amount: Number(grossAmount),
+    });
+
+    await player.save();
+
+    return res.json({
+      operationId,
+      endsAt,
+      player,
+    });
+  } catch (error) {
+    console.error('Erro em /laundry/start:', error);
+    return res.status(500).json({ error: 'Erro ao iniciar lavagem' });
+  }
+});
+
+app.post('/laundry/complete', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { operationId } = req.body;
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    if (!player.laundryProgress) {
+      return res.status(400).json({ error: 'Nenhuma operação encontrada' });
+    }
+
+    const operations = player.laundryProgress.activeOperations || [];
+    const operation = operations.find(
+      (op) => op.operationId === operationId && op.status === 'processing'
+    );
+
+    if (!operation) {
+      return res.status(404).json({ error: 'Operação não encontrada' });
+    }
+
+    operation.status = 'completed';
+    player.balances.cleanMoney += Number(operation.netAmount || 0);
+
+    player.laundryProgress.activeOperations =
+      operations.filter((op) => op.operationId !== operationId);
+
+    await player.save();
+
+    return res.json({ player });
+  } catch (error) {
+    console.error('Erro em /laundry/complete:', error);
+    return res.status(500).json({ error: 'Erro ao completar lavagem' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor ON na porta ${PORT}`);
 });

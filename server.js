@@ -74,6 +74,11 @@ const playerSchema = new mongoose.Schema(
     name: String,
     avatar: String,
 
+    // 🟣 FACÇÃO (IMPORTANTE)
+    factionId: {
+      type: String,
+      default: null,
+    },
     niveis: {
       playerLevel: { type: Number, default: 1 },
       barracoLevel: { type: Number, default: 1 },
@@ -218,7 +223,7 @@ const Player = mongoose.model('Player', playerSchema);
 // ==========================================
 // HELPERS
 // ==========================================
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
 
@@ -229,7 +234,18 @@ function authMiddleware(req, res, next) {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = decoded;
+    const player = await Player.findById(decoded.id);
+
+    if (!player) {
+      return res.status(401).json({ error: 'Player não encontrado' });
+    }
+
+    req.user = {
+      id: player._id,
+      name: player.name,
+      factionId: player.factionId || null,
+    };
+
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Token inválido' });
@@ -597,6 +613,27 @@ app.patch('/player/update', authMiddleware, async (req, res) => {
   }
 });
 
+const chatSchema = new mongoose.Schema({
+  channel: String,
+
+  senderId: String,
+  senderName: String,
+
+  recipientId: String,
+  recipientName: String,
+
+  factionId: String,
+
+  body: String,
+
+  createdAt: Date,
+  read: Boolean,
+});
+
+const Chat = mongoose.model('Chat', chatSchema);
+
+
+
 // ==========================================
 // GAME
 // ==========================================
@@ -855,6 +892,78 @@ app.post('/create-payment', async (req, res) => {
     });
   }
 });
+
+// ==========================================
+// CHAT
+// ==========================================
+
+// ENVIAR MENSAGEM
+app.post('/chat/send', authMiddleware, async (req, res) => {
+  try {
+    const {
+      channel,
+      body,
+      recipientId,
+      recipientName,
+      factionId,
+    } = req.body;
+
+    const newMessage = await Chat.create({
+      channel,
+      body,
+      senderId: req.user.id,
+      senderName: req.user.name,
+      recipientId,
+      recipientName,
+      factionId,
+      createdAt: new Date(),
+      read: false,
+    });
+
+    res.json({ success: true, message: newMessage });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao enviar mensagem' });
+  }
+});
+
+// BUSCAR MENSAGENS
+app.get('/chat/messages', authMiddleware, async (req, res) => {
+  try {
+    const { channel } = req.query;
+    const userId = req.user.id;
+
+    let query = {};
+
+    if (channel === 'complexo') {
+      query.channel = 'complexo';
+    }
+
+    if (channel === 'faccao') {
+      query.channel = 'faccao';
+      query.factionId = req.user.factionId;
+    }
+
+    if (channel === 'mail') {
+      query.channel = 'mail';
+      query.$or = [
+        { senderId: userId },
+        { recipientId: userId },
+      ];
+    }
+
+    const messages = await Chat.find(query)
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json(messages.reverse());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao buscar mensagens' });
+  }
+});
+
+
 
 // ==========================================
 // HEALTHCHECK

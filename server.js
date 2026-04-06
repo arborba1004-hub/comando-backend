@@ -119,6 +119,10 @@ const playerSchema = new mongoose.Schema(
     },
 
     power: { type: Number, default: 0 },
+vip: { type: Boolean, default: false },
+
+lastSkillTrainAt: { type: Number, default: 0 },
+lastAttackAt: { type: Number, default: 0 },
     hierarchyBadge: { type: String, default: 'Antena' },
 
     barracoPosition: {

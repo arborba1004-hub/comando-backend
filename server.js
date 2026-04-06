@@ -8,30 +8,24 @@ import mercadopago from 'mercadopago';
 
 dotenv.config();
 
-mercadopago.configure({
-  access_token: process.env.MP_ACCESS_TOKEN,
-});
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
+mercadopago.configure({
+  access_token: process.env.MP_ACCESS_TOKEN,
+});
+
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// =======================
-// DB
-// =======================
-mongoose
-  .connect(process.env.MONGO_URI)
+// ================= DB =================
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('Mongo conectado'))
-  .catch((err) => console.error('Erro Mongo:', err));
-
-// =======================
-// SCHEMA COMPLETO
-// =======================
+  .catch(err => console.error(err));
 const playerSchema = new mongoose.Schema({
+
   googleId: String,
   email: String,
   name: String,
@@ -39,6 +33,13 @@ const playerSchema = new mongoose.Schema({
 
   niveis: {
     playerLevel: { type: Number, default: 1 },
+    barracoLevel: { type: Number, default: 1 },
+    hierarchyLevel: { type: Number, default: 1 },
+    arsenalLevel: { type: Number, default: 1 },
+    giroLevel: { type: Number, default: 1 },
+    lavagemLevel: { type: Number, default: 1 },
+    luxuryLevel: { type: Number, default: 1 },
+    briberyLevel: { type: Number, default: 1 },
   },
 
   balances: {
@@ -47,31 +48,71 @@ const playerSchema = new mongoose.Schema({
     corre: { type: Number, default: 1000 },
   },
 
+  inventory: {
+    items: { type: Array, default: [] },
+    gifts: { type: Array, default: [] },
+    rewards: { type: Array, default: [] },
+  },
+
   skills: {
     attack: { type: Number, default: 1 },
     defense: { type: Number, default: 1 },
     agility: { type: Number, default: 1 },
     intelligence: { type: Number, default: 1 },
     respect: { type: Number, default: 1 },
+    vigor: { type: Number, default: 1 },
   },
 
   power: { type: Number, default: 0 },
-  isVIP: { type: Boolean, default: false },
+
+  ranking: {
+    points: { type: Number, default: 0 },
+    wins: { type: Number, default: 0 },
+    losses: { type: Number, default: 0 },
+    streak: { type: Number, default: 0 },
+    bestStreak: { type: Number, default: 0 },
+  },
+
+  rivalry: {
+    nemesisPlayerId: { type: String, default: '' },
+    revengeTargetId: { type: String, default: '' },
+    lastAttackedBy: { type: String, default: '' },
+    lastAttackedAt: { type: Number, default: 0 },
+  },
+
+  attackHistory: { type: Array, default: [] },
+
+  laundryProgress: {
+    activeOperations: { type: Array, default: [] },
+    dailyOperations: { type: Array, default: [] },
+  },
+
+  punishments: { type: Object, default: {} },
 
   lastSkillTrainAt: { type: Number, default: 0 },
   lastAttackAt: { type: Number, default: 0 },
 
   mapPosition: {
-    tileX: { type: Number, default: 0 },
-    tileY: { type: Number, default: 0 },
+    tileX: { type: Number, default: 10 },
+    tileY: { type: Number, default: 5 },
   },
+
 }, { timestamps: true });
 
 const Player = mongoose.model('Player', playerSchema);
+function calculatePower(player) {
+  const s = player.skills;
 
-// =======================
-// AUTH
-// =======================
+  return Math.floor(
+    s.attack * 3 +
+    s.defense * 2 +
+    s.agility * 2 +
+    s.intelligence * 1.5 +
+    s.respect * 1 +
+    s.vigor * 1.2
+  );
+}
+
 function authMiddleware(req, res, next) {
   try {
     const token = req.headers.authorization.split(' ')[1];
@@ -79,28 +120,11 @@ function authMiddleware(req, res, next) {
     req.user = decoded;
     next();
   } catch {
-    return res.status(401).json({ error: 'Token inválido' });
+    res.status(401).json({ error: 'Token inválido' });
   }
 }
 
-// =======================
-// POWER CALCULATION
-// =======================
-function calculatePower(player) {
-  const s = player.skills;
 
-  const base =
-    s.attack * 3 +
-    s.defense * 2 +
-    s.agility * 2 +
-    s.intelligence * 1.5 +
-    s.respect * 1;
-
-  return Math.floor(base);
-}
-// =======================
-// LOGIN GOOGLE
-// =======================
 app.post('/auth/google', async (req, res) => {
   const { token } = req.body;
 
@@ -134,9 +158,7 @@ app.post('/auth/google', async (req, res) => {
   res.json({ token: jwtToken, player });
 });
 
-// =======================
-// GET PLAYER
-// =======================
+
 app.get('/player/me', authMiddleware, async (req, res) => {
   const player = await Player.findById(req.user.id);
 
@@ -146,21 +168,15 @@ app.get('/player/me', authMiddleware, async (req, res) => {
   res.json({ player });
 });
 
-// =======================
-// UPDATE PLAYER (SEM POWER)
-// =======================
 app.patch('/player/update', authMiddleware, async (req, res) => {
   const player = await Player.findById(req.user.id);
 
   const incoming = req.body;
 
-  if (incoming.balances) {
-    player.balances = incoming.balances;
-  }
-
-  if (incoming.skills) {
-    player.skills = incoming.skills;
-  }
+  if (incoming.balances) player.balances = incoming.balances;
+  if (incoming.skills) player.skills = incoming.skills;
+  if (incoming.inventory) player.inventory = incoming.inventory;
+  if (incoming.laundryProgress) player.laundryProgress = incoming.laundryProgress;
 
   player.power = calculatePower(player);
 
@@ -169,9 +185,8 @@ app.patch('/player/update', authMiddleware, async (req, res) => {
   res.json({ player });
 });
 
-// =======================
-// TREINO DE SKILL
-// =======================
+
+
 app.post('/skill/train', authMiddleware, async (req, res) => {
   const { skill } = req.body;
 
@@ -179,21 +194,18 @@ app.post('/skill/train', authMiddleware, async (req, res) => {
 
   const now = Date.now();
 
-  if (now - player.lastSkillTrainAt < 5000) {
-    return res.status(400).json({ error: 'Cooldown ativo' });
+  if (now - player.lastSkillTrainAt < 3000) {
+    return res.status(400).json({ error: 'Cooldown' });
   }
 
   const cost = 100;
 
   if (player.balances.cleanMoney < cost) {
-    return res.status(400).json({ error: 'Sem dinheiro limpo' });
+    return res.status(400).json({ error: 'Sem dinheiro' });
   }
 
   player.balances.cleanMoney -= cost;
-
-  const bonus = player.isVIP ? 2 : 1;
-
-  player.skills[skill] += bonus;
+  player.skills[skill] += 1;
 
   player.lastSkillTrainAt = now;
 
@@ -204,28 +216,31 @@ app.post('/skill/train', authMiddleware, async (req, res) => {
   res.json({ player });
 });
 
-// =======================
-// ATAQUE ENTRE JOGADORES
-// =======================
+
+
 app.post('/attack', authMiddleware, async (req, res) => {
+
   const { targetId } = req.body;
 
   const attacker = await Player.findById(req.user.id);
   const defender = await Player.findById(targetId);
 
+  if (!attacker || !defender) {
+    return res.status(404).json({ error: 'Player não encontrado' });
+  }
+
   const now = Date.now();
 
-  if (now - attacker.lastAttackAt < 10000) {
+  if (now - attacker.lastAttackAt < 5000) {
     return res.status(400).json({ error: 'Cooldown ataque' });
   }
 
   attacker.power = calculatePower(attacker);
   defender.power = calculatePower(defender);
 
-  const winChance =
-    attacker.power / (attacker.power + defender.power);
+  const chance = attacker.power / (attacker.power + defender.power);
 
-  const win = Math.random() < winChance;
+  const win = Math.random() < chance;
 
   let stolen = 0;
 
@@ -234,9 +249,35 @@ app.post('/attack', authMiddleware, async (req, res) => {
 
     defender.balances.dirtyMoney -= stolen;
     attacker.balances.dirtyMoney += stolen;
+
+    attacker.ranking.points += 20;
+    attacker.ranking.wins++;
+    attacker.ranking.streak++;
+
+    defender.ranking.losses++;
+    defender.ranking.streak = 0;
+
+    attacker.rivalry.nemesisPlayerId = defender._id.toString();
+    defender.rivalry.revengeTargetId = attacker._id.toString();
+  } else {
+    attacker.ranking.losses++;
+    attacker.ranking.streak = 0;
+
+    defender.ranking.wins++;
+    defender.ranking.streak++;
   }
 
   attacker.lastAttackAt = now;
+
+  attacker.attackHistory.unshift({
+    attackerId: attacker._id,
+    defenderId: defender._id,
+    result: win ? 'win' : 'loss',
+    stolen,
+    createdAt: now
+  });
+
+  attacker.attackHistory = attacker.attackHistory.slice(0, 20);
 
   await attacker.save();
   await defender.save();
@@ -244,36 +285,25 @@ app.post('/attack', authMiddleware, async (req, res) => {
   res.json({
     win,
     stolen,
-    attackerPower: attacker.power,
-    defenderPower: defender.power,
+    attacker,
+    defender
   });
+
+
+
+app.get('/leaderboard', authMiddleware, async (req, res) => {
+
+  const players = await Player.find().sort({ 'ranking.points': -1 }).limit(50);
+
+  res.json(players);
+
 });
 
-// =======================
-// LISTAR PLAYERS (MAPA)
-// =======================
-app.get('/players', authMiddleware, async (req, res) => {
-  const players = await Player.find();
 
-  const formatted = players.map((p) => ({
-    id: p._id,
-    name: p.name,
-    tileX: p.mapPosition?.tileX || 0,
-    tileY: p.mapPosition?.tileY || 0,
-    power: calculatePower(p),
-  }));
-
-  res.json(formatted);
-});
-
-// =======================
-// PIX
-// =======================
 app.post('/create-payment', async (req, res) => {
-  const { amount } = req.body;
 
   const result = await mercadopago.payment.create({
-    transaction_amount: Number(amount || 10),
+    transaction_amount: 10,
     description: 'Compra',
     payment_method_id: 'pix',
     payer: { email: 'teste@test.com' },
@@ -285,13 +315,26 @@ app.post('/create-payment', async (req, res) => {
     qr_code: data.qr_code,
     qr_code_base64: data.qr_code_base64,
   });
+
 });
 
-// =======================
+
 app.get('/', (req, res) => {
   res.send('Servidor ON 🚀');
 });
 
 app.listen(PORT, () => {
-  console.log(`Rodando na porta ${PORT}`);
+  console.log('Rodando 🚀');
 });
+});
+
+
+
+app.get('/leaderboard', authMiddleware, async (req, res) => {
+
+  const players = await Player.find().sort({ 'ranking.points': -1 }).limit(50);
+
+  res.json(players);
+
+});
+

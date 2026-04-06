@@ -6,14 +6,11 @@ import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import mercadopago from 'mercadopago';
 
-
-
 dotenv.config();
 
 mercadopago.configure({
   access_token: process.env.MP_ACCESS_TOKEN,
 });
-
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,9 +25,51 @@ mongoose
   .then(() => console.log('Mongo conectado'))
   .catch((err) => console.error('Erro Mongo:', err));
 
+// ==========================================
+// SCHEMAS AUXILIARES
+// ==========================================
+const activeOperationSchema = new mongoose.Schema(
+  {
+    id: { type: String, default: '' },
+    operationId: { type: String, default: '' },
+    businessId: { type: Number, required: true },
+    businessName: { type: String, default: '' },
+    startedAt: { type: String, default: '' },
+    endsAt: { type: String, default: '' },
+    grossAmount: { type: Number, default: 0 },
+    feePercentage: { type: Number, default: 0 },
+    feeAmount: { type: Number, default: 0 },
+    netAmount: { type: Number, default: 0 },
+    status: {
+      type: String,
+      enum: ['processing', 'completed'],
+      default: 'processing',
+    },
+  },
+  { _id: false }
+);
+
+const dailyOperationSchema = new mongoose.Schema(
+  {
+    businessId: { type: Number, required: true },
+    date: { type: String, required: true },
+    amount: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
+const purchasedAccessorySchema = new mongoose.Schema(
+  {
+    accessoryId: { type: String, required: true },
+    skillType: { type: String, required: true },
+    purchasedAt: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 const playerSchema = new mongoose.Schema(
   {
-    googleId: String,
+    googleId: { type: String, index: true },
     email: String,
     name: String,
     avatar: String,
@@ -95,19 +134,86 @@ const playerSchema = new mongoose.Schema(
       worldY: { type: Number, default: 5 },
     },
 
-    lastPassiveIncomeAt: { type: Number, default: Date.now },
+    laundryProgress: {
+      activeOperations: { type: [activeOperationSchema], default: [] },
+      dailyOperations: { type: [dailyOperationSchema], default: [] },
+    },
 
+    punishments: {
+      active: {
+        type: [
+          {
+            type: {
+              type: String,
+              enum: ['fiscal', 'arsenal', 'militia', 'blitz', 'threat'],
+            },
+            expiresAt: String,
+          },
+        ],
+        default: [],
+      },
+      delacao: {
+        active: { type: Boolean, default: false },
+        expiresAt: { type: String, default: null },
+      },
+      inventoryBlocked: { type: Boolean, default: false },
+      dirtyMoneyBlocked: { type: Boolean, default: false },
+      cleanMoneyBlocked: { type: Boolean, default: false },
+      levelProgressionBlocked: { type: Boolean, default: false },
+      inventoryBonusReductionPercent: { type: Number, default: 0 },
+      pvpProtectionUntil: { type: String, default: null },
+      delacaoRewardPending: { type: Boolean, default: false },
+      delacaoRewardUnlockAt: { type: String, default: null },
+      pendingSkillBoost: { type: Number, default: 0 },
+      lastVehicleLost: { type: Boolean, default: false },
+    },
+
+    skillBoostMultiplier: { type: Number, default: 1.0 },
+
+    headerCustomization: {
+      playerNameFont: { type: String, default: 'oswald' },
+      playerNameFontSize: { type: String, default: '1.875rem' },
+      playerNameColor: { type: String, default: '#1a1205' },
+    },
+
+    ownedVehicles: { type: [String], default: [] },
+
+    purchasedAccessories: {
+      type: [purchasedAccessorySchema],
+      default: [],
+    },
+
+    accessories: {
+      vehicles: {
+        type: Map,
+        of: [String],
+        default: {},
+      },
+      weapons: {
+        type: Map,
+        of: [String],
+        default: {},
+      },
+    },
+
+    version: { type: Number, default: 0 },
+
+    lastPassiveIncomeAt: { type: Number, default: Date.now },
     lastSpinAt: { type: Number, default: 0 },
   },
-
   { timestamps: true }
 );
 
-// CORREÇÃO: Garante que o banco de dados não aceite dois jogadores no mesmo lugar
-playerSchema.index({ "mapPosition.tileX": 1, "mapPosition.tileY": 1 }, { unique: true, sparse: true });
+playerSchema.index(
+  { 'mapPosition.tileX': 1, 'mapPosition.tileY': 1 },
+  { unique: true, sparse: true }
+);
 
 const Player = mongoose.model('Player', playerSchema);
 
+// ==========================================
+// HELPERS
+// ==========================================
 function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
@@ -146,7 +252,6 @@ function generateSlotOutcome() {
   if (r < 0.34) return ['🔫', '🔫', '🔫'];
   if (r < 0.5) return ['💵', '💵', '🔫'];
 
-  // CORREÇÃO: Garante que o fallback nunca sorteie prêmios máximos
   let fallback = randomSlotReels();
   while (
     (fallback[0] === '💎' && fallback[1] === '💎' && fallback[2] === '💎') ||
@@ -163,18 +268,19 @@ function generateSlotOutcome() {
 function applyPassiveIncome(player) {
   const now = Date.now();
   const last = player.lastPassiveIncomeAt || now;
-
   const minutesPassed = Math.floor((now - last) / 60000);
 
   if (minutesPassed <= 0) return;
 
   const level = player.niveis?.playerLevel || 1;
-
   const ganho = minutesPassed * level;
 
   player.balances.corre += ganho;
-
   player.lastPassiveIncomeAt = now;
+}
+
+function bumpVersion(player) {
+  player.version = (player.version || 0) + 1;
 }
 
 function executeSpinSlot(player, multiplier) {
@@ -249,7 +355,7 @@ function executeSpinSlot(player, multiplier) {
       multiplier,
       message: `💵 Bateu forte! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
     };
-  } 
+  }
 
   if (a === '🔫' && b === '🔫' && c === '🔫') {
     const gain = 1200 * multiplier;
@@ -261,7 +367,7 @@ function executeSpinSlot(player, multiplier) {
       gain,
       lossPercent: 0,
       multiplier,
-      message: `🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`, 
+      message: `🔫 Corre pesado! +${gain.toLocaleString('pt-BR')} Commands Sujo`,
     };
   }
 
@@ -279,441 +385,6 @@ function executeSpinSlot(player, multiplier) {
       gain,
       lossPercent: 0,
       multiplier,
-      message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`, 
+      message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
     };
   }
-
-  const gain = 100 * multiplier;
-  player.balances.dirtyMoney += gain;
-
-  return {
-    reels,
-    resultType: 'common',
-    gain,
-    lossPercent: 0,
-    multiplier,
-    message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`, 
-  };
-}
-
-app.post('/auth/google', async (req, res) => {
-  try {
-    const { token } = req.body;
-
-    const ticket = await client.verifyIdToken({
-      idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
-
-    const payload = ticket.getPayload();
-
-    let player = await Player.findOne({ googleId: payload.sub });
-
-    if (!player) {
-      // CORREÇÃO: Sorteia posição vaga até encontrar uma disponível
-      let randomX, randomY, positionExists;
-      do {
-        randomX = Math.floor(Math.random() * 40);
-        randomY = Math.floor(Math.random() * 20);
-        positionExists = await Player.findOne({ 
-          "mapPosition.tileX": randomX, 
-          "mapPosition.tileY": randomY 
-        });
-      } while (positionExists);
-
-      player = await Player.create({
-        googleId: payload.sub,
-        email: payload.email,
-        name: payload.name,
-        avatar: payload.picture,
-        mapPosition: {
-          tileX: randomX,
-          tileY: randomY,
-          worldX: randomX,
-          worldY: randomY,
-        }
-      });
-    }
-
-    const jwtToken = jwt.sign(
-      { id: player._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    applyPassiveIncome(player);
-    await player.save();
-
-    return res.json({
-      token: jwtToken,
-      player,
-    });
-  } catch (err) {
-    console.error('Erro no login Google:', err);
-    return res.status(500).json({ error: 'erro no login' });
-  }
-});
-
-app.post('/game/action', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { action, payload } = req.body;
-
-    const player = await Player.findById(userId);
-
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
-
-    applyPassiveIncome(player);
-
-    if (action === 'spin_slot') {
-      const multiplier = Number(payload?.multiplier ?? 1);
-      const result = executeSpinSlot(player, multiplier);
-
-      await player.save();
-
-      return res.json({
-        success: true,
-        action,
-        player,
-        result,
-        message: result.message,
-      });
-    }
-
-    return res.status(400).json({ error: 'Ação inválida' });
-  } catch (err) {
-    console.error('Erro em /game/action:', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'Erro interno do servidor',
-    });
-  }
-});
-
-app.get('/players', authMiddleware, async (req, res) => {
-  try {
-    const players = await Player.find(
-      {},
-      {
-        _id: 1,
-        name: 1,
-        mapPosition: 1,
-        'niveis.barracoLevel': 1
-      }
-    );
-
-    const formatted = players.map((p) => ({
-      id: p._id,
-      name: p.name,
-      tileX: p.mapPosition?.tileX || 0,
-      tileY: p.mapPosition?.tileY || 0,
-      worldX: p.mapPosition?.worldX || 0,
-      worldY: p.mapPosition?.worldY || 0,
-      barracoLevel: p.niveis?.barracoLevel || 1
-    }));
-
-    res.json(formatted);
-  } catch (error) {
-    console.error('Erro ao buscar players:', error);
-    res.status(500).json({ error: 'Erro ao buscar players' });
-  }
-});
-
-app.post('/create-payment', async (req, res) => {
-  try {
-    const { title, amount } = req.body;
-
-    const finalTitle = title || 'Compra Domínio do Comando';
-    const finalAmount = Number(amount || 10);
-
-    const result = await mercadopago.payment.create({
-      transaction_amount: finalAmount,
-      description: finalTitle,
-      payment_method_id: 'pix',
-      payer: {
-        email: 'teste@test.com',
-      },
-    });
-
-    const data = result.body.point_of_interaction.transaction_data;
-
-    res.json({
-      qr_code: data.qr_code,
-      qr_code_base64: data.qr_code_base64,
-      ticket_url: data.ticket_url,
-    });
-  } catch (error) {
-    console.error('Erro ao criar pagamento:', error);
-    res.status(500).json({
-      error: 'Erro ao criar pagamento',
-    });
-  }
-});
-app.get('/', (req, res) => {
-  res.send('Servidor rodando 🚀');
-});
-
-app.get('/player/me', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const player = await Player.findById(userId);
-
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
-
-    applyPassiveIncome(player);
-    await player.save();
-
-    return res.json({ player });
-  } catch (error) {
-    console.error('Erro em /player/me:', error);
-    return res.status(500).json({ error: 'Erro ao buscar player' });
-  }
-});
-
-app.patch('/player/update', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const incoming = req.body || {};
-
-    const player = await Player.findById(userId);
-
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
-
-    if (incoming.niveis) {
-      player.niveis = {
-        ...player.niveis.toObject(),
-        ...incoming.niveis,
-      };
-    }
-
-    if (incoming.balances) {
-      player.balances = {
-        ...player.balances.toObject(),
-        ...incoming.balances,
-      };
-    }
-
-    if (incoming.inventory) {
-      player.inventory = {
-        ...player.inventory.toObject(),
-        ...incoming.inventory,
-      };
-    }
-
-    if (incoming.pageLevels) {
-      player.pageLevels = {
-        ...player.pageLevels.toObject(),
-        ...incoming.pageLevels,
-      };
-    }
-
-    if (incoming.skills) {
-      player.skills = {
-        ...player.skills.toObject(),
-        ...incoming.skills,
-      };
-    }
-
-    if (incoming.power !== undefined) player.power = incoming.power;
-    if (incoming.hierarchyBadge !== undefined) player.hierarchyBadge = incoming.hierarchyBadge;
-    if (incoming.barracoPosition) {
-      player.barracoPosition = {
-        ...player.barracoPosition.toObject(),
-        ...incoming.barracoPosition,
-      };
-    }
-
-    if (incoming.mapPosition) {
-      player.mapPosition = {
-        ...player.mapPosition.toObject(),
-        ...incoming.mapPosition,
-      };
-    }
-
-    if (incoming.headerCustomization !== undefined) {
-      player.headerCustomization = incoming.headerCustomization;
-    }
-
-    if (incoming.laundryProgress !== undefined) {
-      player.laundryProgress = incoming.laundryProgress;
-    }
-
-    if (incoming.punishments !== undefined) {
-      player.punishments = incoming.punishments;
-    }
-
-    if (incoming.skillBoostMultiplier !== undefined) {
-      player.skillBoostMultiplier = incoming.skillBoostMultiplier;
-    }
-
-    if (incoming.ownedVehicles !== undefined) {
-      player.ownedVehicles = incoming.ownedVehicles;
-    }
-
-    if (incoming.purchasedAccessories !== undefined) {
-      player.purchasedAccessories = incoming.purchasedAccessories;
-    }
-
-    if (incoming.accessories !== undefined) {
-      player.accessories = incoming.accessories;
-    }
-
-    await player.save();
-
-    return res.json({ player });
-  } catch (error) {
-    console.error('Erro em /player/update:', error);
-    return res.status(500).json({ error: 'Erro ao atualizar player' });
-  }
-});
-
-app.get('/laundry/can-operate/:businessId', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const businessId = Number(req.params.businessId);
-
-    const player = await Player.findById(userId);
-
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-    const dailyOperations = player.laundryProgress?.dailyOperations || [];
-
-    const alreadyUsedToday = dailyOperations.some(
-      (op) => op.businessId === businessId && op.date === today
-    );
-
-    return res.json({ allowed: !alreadyUsedToday });
-  } catch (error) {
-    console.error('Erro em /laundry/can-operate/:businessId:', error);
-    return res.status(500).json({ error: 'Erro ao verificar operação diária' });
-  }
-});
-
-app.post('/laundry/start', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const {
-      businessId,
-      businessName,
-      grossAmount,
-      feePercentage,
-      feeAmount,
-      netAmount,
-    } = req.body;
-
-    const player = await Player.findById(userId);
-
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
-
-    if (!player.laundryProgress) {
-      player.laundryProgress = {
-        activeOperations: [],
-        dailyOperations: [],
-      };
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-    const dailyOperations = player.laundryProgress.dailyOperations || [];
-
-    const alreadyUsedToday = dailyOperations.some(
-      (op) => op.businessId === Number(businessId) && op.date === today
-    );
-
-    if (alreadyUsedToday) {
-      return res.status(400).json({ error: 'Você já operou neste comércio hoje' });
-    }
-
-    if ((player.balances?.dirtyMoney || 0) < Number(grossAmount)) {
-      return res.status(400).json({ error: 'Dinheiro sujo insuficiente' });
-    }
-
-    player.balances.dirtyMoney -= Number(grossAmount);
-
-    const operationId = new mongoose.Types.ObjectId().toString();
-    const endsAt = new Date(Date.now() + 15000).toISOString();
-
-    player.laundryProgress.activeOperations.push({
-      id: operationId,
-      operationId,
-      businessId: Number(businessId),
-      businessName,
-      startedAt: new Date().toISOString(),
-      endsAt,
-      grossAmount: Number(grossAmount),
-      feePercentage: Number(feePercentage),
-      feeAmount: Number(feeAmount),
-      netAmount: Number(netAmount),
-      status: 'processing',
-    });
-
-    player.laundryProgress.dailyOperations.push({
-      businessId: Number(businessId),
-      date: today,
-      amount: Number(grossAmount),
-    });
-
-    await player.save();
-
-    return res.json({
-      operationId,
-      endsAt,
-      player,
-    });
-  } catch (error) {
-    console.error('Erro em /laundry/start:', error);
-    return res.status(500).json({ error: 'Erro ao iniciar lavagem' });
-  }
-});
-
-app.post('/laundry/complete', authMiddleware, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { operationId } = req.body;
-
-    const player = await Player.findById(userId);
-
-    if (!player) {
-      return res.status(404).json({ error: 'Player não encontrado' });
-    }
-
-    if (!player.laundryProgress) {
-      return res.status(400).json({ error: 'Nenhuma operação encontrada' });
-    }
-
-    const operations = player.laundryProgress.activeOperations || [];
-    const operation = operations.find(
-      (op) => op.operationId === operationId && op.status === 'processing'
-    );
-
-    if (!operation) {
-      return res.status(404).json({ error: 'Operação não encontrada' });
-    }
-
-    operation.status = 'completed';
-    player.balances.cleanMoney += Number(operation.netAmount || 0);
-
-    player.laundryProgress.activeOperations =
-      operations.filter((op) => op.operationId !== operationId);
-
-    await player.save();
-
-    return res.json({ player });
-  } catch (error) {
-    console.error('Erro em /laundry/complete:', error);
-    return res.status(500).json({ error: 'Erro ao completar lavagem' });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`Servidor ON na porta ${PORT}`);
-});

@@ -388,3 +388,475 @@ function executeSpinSlot(player, multiplier) {
       message: `💵 Caiu bem. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
     };
   }
+  const gain = 100 * multiplier;
+  player.balances.dirtyMoney += gain;
+
+  return {
+    reels,
+    resultType: 'common',
+    gain,
+    lossPercent: 0,
+    multiplier,
+    message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
+  };
+}
+
+// ==========================================
+// AUTH
+// ==========================================
+app.post('/auth/google', async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+
+    let player = await Player.findOne({ googleId: payload.sub });
+
+    if (!player) {
+      let randomX, randomY, positionExists;
+      do {
+        randomX = Math.floor(Math.random() * 40);
+        randomY = Math.floor(Math.random() * 20);
+        positionExists = await Player.findOne({
+          'mapPosition.tileX': randomX,
+          'mapPosition.tileY': randomY,
+        });
+      } while (positionExists);
+
+      player = await Player.create({
+        googleId: payload.sub,
+        email: payload.email,
+        name: payload.name,
+        avatar: payload.picture,
+        mapPosition: {
+          tileX: randomX,
+          tileY: randomY,
+          worldX: randomX,
+          worldY: randomY,
+        },
+      });
+    }
+
+    const jwtToken = jwt.sign(
+      { id: player._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    applyPassiveIncome(player);
+    bumpVersion(player);
+    await player.save();
+
+    return res.json({
+      token: jwtToken,
+      player,
+    });
+  } catch (err) {
+    console.error('Erro no login Google:', err);
+    return res.status(500).json({ error: 'erro no login' });
+  }
+});
+
+// ==========================================
+// PLAYER
+// ==========================================
+app.get('/player/me', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    applyPassiveIncome(player);
+    bumpVersion(player);
+    await player.save();
+
+    return res.json({ player });
+  } catch (error) {
+    console.error('Erro em /player/me:', error);
+    return res.status(500).json({ error: 'Erro ao buscar player' });
+  }
+});
+
+app.patch('/player/update', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const incoming = req.body || {};
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    if (incoming.niveis) {
+      player.niveis = {
+        ...player.niveis.toObject(),
+        ...incoming.niveis,
+      };
+    }
+
+    if (incoming.balances) {
+      player.balances = {
+        ...player.balances.toObject(),
+        ...incoming.balances,
+      };
+    }
+
+    if (incoming.inventory) {
+      player.inventory = {
+        ...player.inventory.toObject(),
+        ...incoming.inventory,
+      };
+    }
+
+    if (incoming.pageLevels) {
+      player.pageLevels = {
+        ...player.pageLevels.toObject(),
+        ...incoming.pageLevels,
+      };
+    }
+
+    if (incoming.skills) {
+      player.skills = {
+        ...player.skills.toObject(),
+        ...incoming.skills,
+      };
+    }
+
+    if (incoming.power !== undefined) {
+      player.power = incoming.power;
+    }
+
+    if (incoming.hierarchyBadge !== undefined) {
+      player.hierarchyBadge = incoming.hierarchyBadge;
+    }
+
+    if (incoming.barracoPosition) {
+      player.barracoPosition = {
+        ...player.barracoPosition.toObject(),
+        ...incoming.barracoPosition,
+      };
+    }
+
+    if (incoming.mapPosition) {
+      player.mapPosition = {
+        ...player.mapPosition.toObject(),
+        ...incoming.mapPosition,
+      };
+    }
+
+    if (incoming.laundryProgress !== undefined) {
+      player.laundryProgress = incoming.laundryProgress;
+    }
+
+    if (incoming.punishments !== undefined) {
+      player.punishments = incoming.punishments;
+    }
+
+    if (incoming.skillBoostMultiplier !== undefined) {
+      player.skillBoostMultiplier = incoming.skillBoostMultiplier;
+    }
+
+    if (incoming.headerCustomization !== undefined) {
+      player.headerCustomization = incoming.headerCustomization;
+    }
+
+    if (incoming.ownedVehicles !== undefined) {
+      player.ownedVehicles = incoming.ownedVehicles;
+    }
+
+    if (incoming.purchasedAccessories !== undefined) {
+      player.purchasedAccessories = incoming.purchasedAccessories;
+    }
+
+    if (incoming.accessories !== undefined) {
+      player.accessories = incoming.accessories;
+    }
+
+    bumpVersion(player);
+    await player.save();
+
+    return res.json({ player });
+  } catch (error) {
+    console.error('Erro em /player/update:', error);
+    return res.status(500).json({ error: 'Erro ao atualizar player' });
+  }
+});
+
+// ==========================================
+// GAME
+// ==========================================
+app.post('/game/action', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { action, payload } = req.body;
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    applyPassiveIncome(player);
+
+    if (action === 'spin_slot') {
+      const multiplier = Number(payload?.multiplier ?? 1);
+      const result = executeSpinSlot(player, multiplier);
+
+      bumpVersion(player);
+      await player.save();
+
+      return res.json({
+        success: true,
+        action,
+        player,
+        result,
+        message: result.message,
+      });
+    }
+
+    return res.status(400).json({ error: 'Ação inválida' });
+  } catch (err) {
+    console.error('Erro em /game/action:', err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : 'Erro interno do servidor',
+    });
+  }
+});
+
+// ==========================================
+// PLAYERS
+// ==========================================
+app.get('/players', authMiddleware, async (req, res) => {
+  try {
+    const players = await Player.find(
+      {},
+      {
+        _id: 1,
+        name: 1,
+        mapPosition: 1,
+        'niveis.barracoLevel': 1,
+      }
+    );
+
+    const formatted = players.map((p) => ({
+      id: p._id,
+      name: p.name,
+      tileX: p.mapPosition?.tileX || 0,
+      tileY: p.mapPosition?.tileY || 0,
+      worldX: p.mapPosition?.worldX || 0,
+      worldY: p.mapPosition?.worldY || 0,
+      barracoLevel: p.niveis?.barracoLevel || 1,
+    }));
+
+    res.json(formatted);
+  } catch (error) {
+    console.error('Erro ao buscar players:', error);
+    res.status(500).json({ error: 'Erro ao buscar players' });
+  }
+});
+
+// ==========================================
+// LAVAGEM
+// ==========================================
+app.get('/laundry/can-operate/:businessId', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const businessId = Number(req.params.businessId);
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    if (!player.laundryProgress) {
+      player.laundryProgress = {
+        activeOperations: [],
+        dailyOperations: [],
+      };
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const alreadyUsedToday = (player.laundryProgress.dailyOperations || []).some(
+      (op) => op.businessId === businessId && op.date === today
+    );
+
+    return res.json({ allowed: !alreadyUsedToday });
+  } catch (error) {
+    console.error('Erro em /laundry/can-operate/:businessId:', error);
+    return res.status(500).json({ error: 'Erro ao verificar operação diária' });
+  }
+});
+
+app.post('/laundry/start', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      businessId,
+      businessName,
+      grossAmount,
+      feePercentage,
+      feeAmount,
+      netAmount,
+    } = req.body;
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    if (!player.laundryProgress) {
+      player.laundryProgress = {
+        activeOperations: [],
+        dailyOperations: [],
+      };
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    const alreadyUsedToday = (player.laundryProgress.dailyOperations || []).some(
+      (op) => op.businessId === Number(businessId) && op.date === today
+    );
+
+    if (alreadyUsedToday) {
+      return res.status(400).json({ error: 'Você já realizou uma operação neste comércio hoje' });
+    }
+
+    if ((player.balances?.dirtyMoney || 0) < Number(grossAmount)) {
+      return res.status(400).json({ error: 'Dinheiro sujo insuficiente' });
+    }
+
+    player.balances.dirtyMoney -= Number(grossAmount);
+
+    const operationId = new mongoose.Types.ObjectId().toString();
+    const endsAt = new Date(Date.now() + 15000).toISOString();
+
+    player.laundryProgress.activeOperations.push({
+      id: operationId,
+      operationId,
+      businessId: Number(businessId),
+      businessName: String(businessName || ''),
+      startedAt: new Date().toISOString(),
+      endsAt,
+      grossAmount: Number(grossAmount),
+      feePercentage: Number(feePercentage),
+      feeAmount: Number(feeAmount),
+      netAmount: Number(netAmount),
+      status: 'processing',
+    });
+
+    player.laundryProgress.dailyOperations.push({
+      businessId: Number(businessId),
+      date: today,
+      amount: Number(grossAmount),
+    });
+
+    bumpVersion(player);
+    await player.save();
+
+    return res.json({
+      operationId,
+      endsAt,
+      player,
+    });
+  } catch (error) {
+    console.error('Erro em /laundry/start:', error);
+    return res.status(500).json({ error: 'Erro ao iniciar lavagem' });
+  }
+});
+
+app.post('/laundry/complete', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { operationId } = req.body;
+
+    const player = await Player.findById(userId);
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player não encontrado' });
+    }
+
+    if (!player.laundryProgress) {
+      return res.status(400).json({ error: 'Nenhuma operação encontrada' });
+    }
+
+    const operations = player.laundryProgress.activeOperations || [];
+    const operation = operations.find(
+      (op) => op.operationId === operationId && op.status === 'processing'
+    );
+
+    if (!operation) {
+      return res.status(404).json({ error: 'Operação não encontrada' });
+    }
+
+    operation.status = 'completed';
+    player.balances.cleanMoney += Number(operation.netAmount || 0);
+
+    player.laundryProgress.activeOperations = operations.filter(
+      (op) => op.operationId !== operationId
+    );
+
+    bumpVersion(player);
+    await player.save();
+
+    return res.json({ player });
+  } catch (error) {
+    console.error('Erro em /laundry/complete:', error);
+    return res.status(500).json({ error: 'Erro ao completar lavagem' });
+  }
+});
+
+// ==========================================
+// PAGAMENTO
+// ==========================================
+app.post('/create-payment', async (req, res) => {
+  try {
+    const { title, amount } = req.body;
+
+    const finalTitle = title || 'Compra Domínio do Comando';
+    const finalAmount = Number(amount || 10);
+
+    const result = await mercadopago.payment.create({
+      transaction_amount: finalAmount,
+      description: finalTitle,
+      payment_method_id: 'pix',
+      payer: {
+        email: 'teste@test.com',
+      },
+    });
+
+    const data = result.body.point_of_interaction.transaction_data;
+
+    res.json({
+      qr_code: data.qr_code,
+      qr_code_base64: data.qr_code_base64,
+      ticket_url: data.ticket_url,
+    });
+  } catch (error) {
+    console.error('Erro ao criar pagamento:', error);
+    res.status(500).json({
+      error: 'Erro ao criar pagamento',
+    });
+  }
+});
+
+// ==========================================
+// HEALTHCHECK
+// ==========================================
+app.get('/', (req, res) => {
+  res.send('Servidor rodando 🚀');
+});
+
+app.listen(PORT, () => {
+  console.log(`Servidor ON na porta ${PORT}`);
+});

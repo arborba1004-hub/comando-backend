@@ -612,7 +612,6 @@ app.patch('/player/update', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: 'Erro ao atualizar player' });
   }
 });
-
 const chatSchema = new mongoose.Schema({
   channel: String,
 
@@ -623,12 +622,14 @@ const chatSchema = new mongoose.Schema({
   recipientName: String,
 
   factionId: String,
+  subject: String, // <-- O campo do assunto foi adicionado aqui
 
   body: String,
 
   createdAt: Date,
   read: Boolean,
 });
+
 
 const Chat = mongoose.model('Chat', chatSchema);
 
@@ -906,6 +907,7 @@ app.post('/chat/send', authMiddleware, async (req, res) => {
       recipientId,
       recipientName,
       factionId,
+      subject, // <-- Recebendo o subject que vem do frontend
     } = req.body;
 
     const newMessage = await Chat.create({
@@ -916,9 +918,18 @@ app.post('/chat/send', authMiddleware, async (req, res) => {
       recipientId,
       recipientName,
       factionId,
+      subject, // <-- Salvando no banco de dados
       createdAt: new Date(),
       read: false,
     });
+
+    res.json({ success: true, message: newMessage });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao enviar mensagem' });
+  }
+});
+
 
     res.json({ success: true, message: newMessage });
   } catch (err) {
@@ -931,7 +942,7 @@ app.post('/chat/send', authMiddleware, async (req, res) => {
 app.get('/chat/messages', authMiddleware, async (req, res) => {
   try {
     const { channel } = req.query;
-    const userId = req.user.id;
+    const userId = req.user.id.toString(); // <-- O segredo está no .toString() aqui!
 
     let query = {};
 
@@ -962,6 +973,7 @@ app.get('/chat/messages', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Erro ao buscar mensagens' });
   }
 });
+
 
 
 

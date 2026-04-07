@@ -419,6 +419,7 @@ function executeSpinSlot(player, multiplier) {
     message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
   };
 }
+
 // ==========================================
 // AUTH
 // ==========================================
@@ -459,8 +460,7 @@ app.post('/auth/google', async (req, res) => {
         },
       });
     }
-
-    const jwtToken = jwt.sign(
+        const jwtToken = jwt.sign(
       { id: player._id },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }

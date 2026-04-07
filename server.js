@@ -124,10 +124,10 @@ const playerSchema = new mongoose.Schema(
     },
 
     power: { type: Number, default: 0 },
-vip: { type: Boolean, default: false },
+    vip: { type: Boolean, default: false },
 
-lastSkillTrainAt: { type: Number, default: 0 },
-lastAttackAt: { type: Number, default: 0 },
+    lastSkillTrainAt: { type: Number, default: 0 },
+    lastAttackAt: { type: Number, default: 0 },
     hierarchyBadge: { type: String, default: 'Antena' },
 
     barracoPosition: {
@@ -194,13 +194,11 @@ lastAttackAt: { type: Number, default: 0 },
 
     accessories: {
       vehicles: {
-        type: Map,
-        of: [String],
+        type: Object,
         default: {},
       },
       weapons: {
-        type: Map,
-        of: [String],
+        type: Object,
         default: {},
       },
     },
@@ -600,6 +598,30 @@ app.patch('/player/update', authMiddleware, async (req, res) => {
 
     if (incoming.accessories !== undefined) {
       player.accessories = incoming.accessories;
+    }
+
+    if (incoming.vip !== undefined) {
+      player.vip = incoming.vip;
+    }
+
+    if (incoming.factionId !== undefined) {
+      player.factionId = incoming.factionId;
+    }
+
+    if (incoming.lastSkillTrainAt !== undefined) {
+      player.lastSkillTrainAt = incoming.lastSkillTrainAt;
+    }
+
+    if (incoming.lastAttackAt !== undefined) {
+      player.lastAttackAt = incoming.lastAttackAt;
+    }
+
+    if (incoming.lastPassiveIncomeAt !== undefined) {
+      player.lastPassiveIncomeAt = incoming.lastPassiveIncomeAt;
+    }
+
+    if (incoming.lastSpinAt !== undefined) {
+      player.lastSpinAt = incoming.lastSpinAt;
     }
 
     bumpVersion(player);

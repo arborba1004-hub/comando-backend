@@ -460,7 +460,8 @@ app.post('/auth/google', async (req, res) => {
         },
       });
     }
-        const jwtToken = jwt.sign(
+
+    const jwtToken = jwt.sign(
       { id: player._id },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
@@ -479,7 +480,6 @@ app.post('/auth/google', async (req, res) => {
     return res.status(500).json({ error: 'erro no login' });
   }
 });
-
 
 // ==========================================
 // PLAYER
@@ -911,6 +911,142 @@ app.post('/create-payment', async (req, res) => {
     console.error('Erro ao criar pagamento:', error);
     res.status(500).json({
       error: 'Erro ao criar pagamento',
+    });
+  }
+});
+
+// ==========================================
+// ATTACK (PVP)
+// ==========================================
+
+app.post('/attack/initiate', authMiddleware, async (req, res) => {
+  try {
+    const attackerId = req.user.id;
+    const { targetId } = req.body;
+
+    if (!targetId) {
+      return res.status(400).json({ error: 'targetId é obrigatório' });
+    }
+
+    // Buscar atacante e defensor
+    const attacker = await Player.findById(attackerId);
+    const defender = await Player.findById(targetId);
+
+    if (!attacker) {
+      return res.status(404).json({ error: 'Atacante não encontrado' });
+    }
+
+    if (!defender) {
+      return res.status(404).json({ error: 'Defensor não encontrado' });
+    }
+
+    // Verificar proteção PVP
+    if (defender.punishments?.pvpProtectionUntil) {
+      const protectionEnd = new Date(defender.punishments.pvpProtectionUntil);
+      if (new Date() < protectionEnd) {
+        return res.status(400).json({ 
+          error: 'Defensor está protegido contra PVP',
+          protectionUntil: defender.punishments.pvpProtectionUntil
+        });
+      }
+    }
+
+    // Calcular resultado do combate
+    const atk = attacker.skills || {};
+    const def = defender.skills || {};
+
+    const offense =
+      (atk.attack || 0) * 1.5 +
+      (atk.agility || 0) * 1.1 +
+      (atk.intelligence || 0) * 1.0 +
+      (atk.respect || 0) * 0.6;
+
+    const defense =
+      (def.defense || 0) * 1.5 +
+      (def.vigor || 0) * 1.2 +
+      (def.intelligence || 0) * 0.8 +
+      (def.respect || 0) * 0.7;
+
+    const atkRand = 0.9 + Math.random() * 0.2;
+    const defRand = 0.9 + Math.random() * 0.2;
+
+    const finalAtk = offense * atkRand;
+    const finalDef = defense * defRand;
+
+    let winChance = finalAtk / (finalAtk + finalDef);
+    winChance = Math.max(0.1, Math.min(0.9, winChance));
+
+    const didWin = Math.random() < winChance;
+
+    // Calcular espólios
+    let spoils = {
+      dirtyMoney: 0,
+      cleanMoney: 0,
+      items: [],
+    };
+
+    if (didWin) {
+      // Atacante venceu - rouba recursos do defensor
+      const dirtyMoneyStolen = Math.floor((defender.balances?.dirtyMoney || 0) * 0.15);
+      const cleanMoneyStolen = Math.floor((defender.balances?.cleanMoney || 0) * 0.1);
+
+      spoils.dirtyMoney = dirtyMoneyStolen;
+      spoils.cleanMoney = cleanMoneyStolen;
+
+      // Transferir recursos
+      attacker.balances.dirtyMoney += dirtyMoneyStolen;
+      attacker.balances.cleanMoney += cleanMoneyStolen;
+
+      defender.balances.dirtyMoney = Math.max(0, (defender.balances?.dirtyMoney || 0) - dirtyMoneyStolen);
+      defender.balances.cleanMoney = Math.max(0, (defender.balances?.cleanMoney || 0) - cleanMoneyStolen);
+
+      // Roubar itens aleatoriamente
+      if (defender.inventory?.items && defender.inventory.items.length > 0) {
+        const itemsToSteal = Math.floor(Math.random() * 3); // 0-2 itens
+        for (let i = 0; i < itemsToSteal && defender.inventory.items.length > 0; i++) {
+          const randomIndex = Math.floor(Math.random() * defender.inventory.items.length);
+          const stolenItem = defender.inventory.items.splice(randomIndex, 1)[0];
+          spoils.items.push(stolenItem);
+          attacker.inventory.items.push(stolenItem);
+        }
+      }
+    } else {
+      // Defensor venceu - atacante perde recursos
+      const dirtyMoneyLost = Math.floor((attacker.balances?.dirtyMoney || 0) * 0.1);
+      const cleanMoneyLost = Math.floor((attacker.balances?.cleanMoney || 0) * 0.05);
+
+      attacker.balances.dirtyMoney = Math.max(0, (attacker.balances?.dirtyMoney || 0) - dirtyMoneyLost);
+      attacker.balances.cleanMoney = Math.max(0, (attacker.balances?.cleanMoney || 0) - cleanMoneyLost);
+
+      // Defensor recupera parte dos recursos
+      defender.balances.dirtyMoney += Math.floor(dirtyMoneyLost * 0.5);
+    }
+
+    // Atualizar timestamps
+    attacker.lastAttackAt = Date.now();
+    bumpVersion(attacker);
+    bumpVersion(defender);
+
+    // Salvar ambos os players
+    await attacker.save();
+    await defender.save();
+
+    return res.json({
+      success: true,
+      attackResult: {
+        didWin,
+        winChance,
+        finalAtk,
+        finalDef,
+        spoils,
+      },
+      attacker,
+      defender,
+    });
+  } catch (error) {
+    console.error('Erro em /attack/initiate:', error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : 'Erro ao iniciar ataque',
     });
   }
 });

@@ -421,7 +421,6 @@ function executeSpinSlot(player, multiplier) {
     message: `⚡ Corre pequeno. +${gain.toLocaleString('pt-BR')} Commands Sujo`,
   };
 }
-
 // ==========================================
 // AUTH
 // ==========================================
@@ -940,28 +939,27 @@ app.get('/chat/messages', authMiddleware, async (req, res) => {
 
     if (channel === 'complexo') {
       query.channel = 'complexo';
-    }
-
-    if (channel === 'faccao') {
+    } else if (channel === 'faccao') {
       query.channel = 'faccao';
       query.factionId = req.user.factionId;
-    }
-
-    if (channel === 'mail') {
+    } else if (channel === 'mail') {
       query.channel = 'mail';
       query.$or = [
         { senderId: userId },
         { recipientId: userId },
       ];
+    } else {
+      return res.status(400).json({ error: 'Canal inválido' });
     }
 
     const messages = await Chat.find(query)
-      .sort({ createdAt: -1 })
-      .limit(50);
+      .sort({ createdAt: 1 })
+      .limit(50)
+      .lean();
 
-    res.json(messages.reverse());
+    res.json(messages);
   } catch (err) {
-    console.error(err);
+    console.error('Erro ao buscar mensagens:', err);
     res.status(500).json({ error: 'Erro ao buscar mensagens' });
   }
 });

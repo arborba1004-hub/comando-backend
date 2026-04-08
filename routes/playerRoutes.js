@@ -1,10 +1,8 @@
 import { Router } from 'express';
-import { authMiddleware } from '../middlewares/authMiddleware.js';
-import { getMe, updateMe } from '../controllers/playerController.js';
+import { getAllPlayers } from '../controllers/playersController.js';
 
 const router = Router();
 
-router.get('/me', authMiddleware, getMe);
-router.patch('/update', authMiddleware, updateMe);
+router.get('/', getAllPlayers);
 
 export default router;

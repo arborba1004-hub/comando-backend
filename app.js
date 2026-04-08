@@ -3,6 +3,7 @@ import cors from 'cors';
 import { env } from './config/env.js';
 import authRoutes from './routes/authRoutes.js';
 import playerRoutes from './routes/playerRoutes.js';
+import playersRoutes from './routes/playersRoutes.js';
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.get('/health', (req, res) => {
 
 app.use('/auth', authRoutes);
 app.use('/player', playerRoutes);
+app.use('/players', playersRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

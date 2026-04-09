@@ -1,46 +1,71 @@
 import mongoose from 'mongoose';
+import { getDefaultPlayerState } from '../utils/playerDefaults.js';
 
-const skillSchema = new mongoose.Schema(
+const activeOperationSchema = new mongoose.Schema(
   {
-    attack: { type: Number, default: 1, min: 1 },
-    defense: { type: Number, default: 1, min: 1 },
-    intelligence: { type: Number, default: 1, min: 1 },
-    agility: { type: Number, default: 1, min: 1 },
-    respect: { type: Number, default: 1, min: 1 },
-    vigor: { type: Number, default: 1, min: 1 },
+    id: { type: String, default: '' },
+    operationId: { type: String, default: '' },
+    businessId: { type: Number, required: true },
+    businessName: { type: String, default: '' },
+    startedAt: { type: String, default: '' },
+    endsAt: { type: String, default: '' },
+    grossAmount: { type: Number, default: 0, min: 0 },
+    feePercentage: { type: Number, default: 0, min: 0 },
+    feeAmount: { type: Number, default: 0, min: 0 },
+    netAmount: { type: Number, default: 0, min: 0 },
+    status: {
+      type: String,
+      enum: ['processing', 'completed'],
+      default: 'processing',
+    },
   },
   { _id: false }
 );
 
-const levelSchema = new mongoose.Schema(
+const dailyOperationSchema = new mongoose.Schema(
   {
-    playerLevel: { type: Number, default: 1, min: 1 },
-    barracoLevel: { type: Number, default: 1, min: 1 },
-    hierarchyLevel: { type: Number, default: 1, min: 1 },
-    arsenalLevel: { type: Number, default: 1, min: 1 },
-    giroLevel: { type: Number, default: 1, min: 1 },
-    lavagemLevel: { type: Number, default: 1, min: 1 },
-    luxuryLevel: { type: Number, default: 1, min: 1 },
-    briberyLevel: { type: Number, default: 1, min: 1 },
+    businessId: { type: Number, required: true },
+    date: { type: String, required: true },
+    amount: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
 
-const mapPositionSchema = new mongoose.Schema(
+const purchasedAccessorySchema = new mongoose.Schema(
   {
-    tileX: { type: Number, default: 20 },
-    tileY: { type: Number, default: 10 },
-    worldX: { type: Number, default: 0 },
-    worldY: { type: Number, default: 0 },
+    accessoryId: { type: String, required: true },
+    skillType: { type: String, required: true },
+    purchasedAt: { type: String, required: true },
   },
   { _id: false }
 );
 
-const inventorySchema = new mongoose.Schema(
+const notificationSchema = new mongoose.Schema(
   {
-    items: { type: [mongoose.Schema.Types.Mixed], default: [] },
-    gifts: { type: [mongoose.Schema.Types.Mixed], default: [] },
-    rewards: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    id: { type: String, required: true },
+    type: { type: String, required: true },
+    attackerId: { type: String, default: '' },
+    attackerName: { type: String, default: '' },
+    targetId: { type: String, default: '' },
+    targetName: { type: String, default: '' },
+    success: { type: Boolean, default: false },
+    loot: { type: Number, default: 0 },
+    createdAt: { type: String, required: true },
+    read: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+const attackHistorySchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    attackerId: { type: String, required: true },
+    attackerName: { type: String, required: true },
+    targetId: { type: String, required: true },
+    targetName: { type: String, required: true },
+    success: { type: Boolean, default: false },
+    loot: { type: Number, default: 0 },
+    createdAt: { type: String, required: true },
   },
   { _id: false }
 );
@@ -72,46 +97,64 @@ const playerSchema = new mongoose.Schema(
       default: '',
     },
 
-    dirtyMoney: {
+    hp: {
       type: Number,
-      default: 0,
-      min: 0,
-    },
-    cleanMoney: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    corre: {
-      type: Number,
-      default: 100,
+      default: getDefaultPlayerState().hp,
       min: 0,
     },
 
-    hp: {
-      type: Number,
-      default: 100,
-      min: 0,
+    factionId: {
+      type: String,
+      default: null,
+    },
+
+    gangId: {
+      type: String,
+      default: null,
     },
 
     niveis: {
-      type: levelSchema,
-      default: () => ({}),
+      playerLevel: { type: Number, default: 1, min: 1 },
+      barracoLevel: { type: Number, default: 1, min: 1 },
+      hierarchyLevel: { type: Number, default: 1, min: 1 },
+      arsenalLevel: { type: Number, default: 1, min: 1 },
+      giroLevel: { type: Number, default: 1, min: 1 },
+      lavagemLevel: { type: Number, default: 1, min: 1 },
+      luxuryLevel: { type: Number, default: 1, min: 1 },
+      briberyLevel: { type: Number, default: 1, min: 1 },
     },
 
-    skills: {
-      type: skillSchema,
-      default: () => ({}),
+    balances: {
+      dirtyMoney: { type: Number, default: 1000, min: 0 },
+      cleanMoney: { type: Number, default: 0, min: 0 },
+      corre: { type: Number, default: 1000, min: 0 },
     },
 
     inventory: {
-      type: inventorySchema,
-      default: () => ({}),
+      items: { type: [mongoose.Schema.Types.Mixed], default: [] },
+      gifts: { type: [mongoose.Schema.Types.Mixed], default: [] },
+      rewards: { type: [mongoose.Schema.Types.Mixed], default: [] },
     },
 
-    mapPosition: {
-      type: mapPositionSchema,
-      default: () => ({}),
+    pageLevels: {
+      barraco: { type: Number, default: 1, min: 1 },
+      giro: { type: Number, default: 1, min: 1 },
+      lavagem: { type: Number, default: 1, min: 1 },
+      luxury: { type: Number, default: 1, min: 1 },
+      arsenal: { type: Number, default: 1, min: 1 },
+      bribery: { type: Number, default: 1, min: 1 },
+      hierarchy: { type: Number, default: 1, min: 1 },
+      home: { type: Number, default: 1, min: 1 },
+      game: { type: Number, default: 1, min: 1 },
+    },
+
+    skills: {
+      attack: { type: Number, default: 0, min: 0 },
+      defense: { type: Number, default: 0, min: 0 },
+      intelligence: { type: Number, default: 0, min: 0 },
+      agility: { type: Number, default: 0, min: 0 },
+      respect: { type: Number, default: 0, min: 0 },
+      vigor: { type: Number, default: 0, min: 0 },
     },
 
     power: {
@@ -120,37 +163,65 @@ const playerSchema = new mongoose.Schema(
       min: 0,
     },
 
+    vip: {
+      type: Boolean,
+      default: false,
+    },
+
+    lastSkillTrainAt: {
+      type: Number,
+      default: 0,
+    },
+
+    lastAttackAt: {
+      type: Number,
+      default: 0,
+    },
+
     hierarchyBadge: {
       type: String,
-      default: 'Soldado',
+      default: 'Antena',
     },
 
-    lastLoginAt: {
-      type: Date,
-      default: Date.now,
+    barracoPosition: {
+      x: { type: Number, default: 0 },
+      y: { type: Number, default: 0 },
+      z: { type: Number, default: 0 },
     },
 
-    lastPassiveIncomeAt: {
-      type: Date,
-      default: Date.now,
+    mapPosition: {
+      tileX: { type: Number, default: 20 },
+      tileY: { type: Number, default: 10 },
+      worldX: { type: Number, default: 0 },
+      worldY: { type: Number, default: 0 },
     },
 
-    lastSpinAt: {
-      type: Date,
-      default: null,
+    laundryProgress: {
+      activeOperations: { type: [activeOperationSchema], default: [] },
+      dailyOperations: { type: [dailyOperationSchema], default: [] },
     },
-  },
-  {
-    timestamps: true,
-    versionKey: false,
-  }
-);
 
-playerSchema.index(
-  { 'mapPosition.tileX': 1, 'mapPosition.tileY': 1 },
-  { unique: false }
-);
-
-const Player = mongoose.models.Player || mongoose.model('Player', playerSchema);
-
-export default Player;
+    punishments: {
+      active: {
+        type: [
+          {
+            type: {
+              type: String,
+              enum: ['fiscal', 'arsenal', 'militia', 'blitz', 'threat'],
+            },
+            expiresAt: String,
+          },
+        ],
+        default: [],
+      },
+      delacao: {
+        active: { type: Boolean, default: false },
+        expiresAt: { type: String, default: null },
+      },
+      inventoryBlocked: { type: Boolean, default: false },
+      dirtyMoneyBlocked: { type: Boolean, default: false },
+      cleanMoneyBlocked: { type: Boolean, default: false },
+      levelProgressionBlocked: { type: Boolean, default: false },
+      inventoryBonusReductionPercent: { type: Number, default: 0, min: 0 },
+      pvpProtectionUntil: { type: String, default: null },
+      delacaoRewardPending: {

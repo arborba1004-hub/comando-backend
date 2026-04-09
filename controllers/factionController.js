@@ -1,106 +1,100 @@
-const Faction = require('../models/Faction');
-const Player = require('../models/Player');
+import Faction from '../models/Faction.js';
+import Player from '../models/Player.js';
+import { generateId, bumpVersion } from '../utils/gameHelpers.js';
 
-exports.getMyFaction = async (req, res) => {
+export async function createFaction(req, res) {
   try {
-    const player = await Player.findById(req.user.id);
-    if (!player.factionId) return res.json({ faction: null });
-    const faction = await Faction.findById(player.factionId);
-    res.json({ faction });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+    const { name, tag } = req.body || {};
+    const player = req.player;
 
-exports.createFaction = async (req, res) => {
-  try {
-    const { name, tag, description, minPowerToJoin, maxMembers } = req.body;
-    const player = await Player.findById(req.user.id);
-    if (player.factionId) return res.status(400).json({ error: 'Already in faction' });
+    if (!name || !tag) {
+      return res.status(400).json({ error: 'Nome e tag são obrigatórios' });
+    }
 
-    const existing = await Faction.findOne({ $or: [{ name }, { tag }] });
-    if (existing) return res.status(400).json({ error: 'Name or tag taken' });
-
-    const newFaction = new Faction({
-      name,
-      tag: tag.toUpperCase().slice(0,5),
-      leaderId: req.user.id,
-      description,
-      minPowerToJoin: minPowerToJoin || 0,
-      maxMembers: maxMembers || 20,
-      members: [{
-        playerId: req.user.id,
-        name: player.name,
-        power: player.power,
-        role: 'leader',
-        joinedAt: new Date(),
-      }],
+    const existingFaction = await Faction.findOne({
+      $or: [{ name: String(name).trim() }, { tag: String(tag).trim() }],
     });
-    await newFaction.save();
 
-    player.factionId = newFaction._id;
+    if (existingFaction) {
+      return res.status(400).json({ error: 'Já existe uma facção com esse nome ou tag' });
+    }
+
+    if (player.factionId) {
+      return res.status(400).json({ error: 'Você já pertence a uma facção' });
+    }
+
+    const faction = await Faction.create({
+      id: generateId(),
+      name: String(name).trim(),
+      tag: String(tag).trim(),
+      leaderId: String(player._id),
+      memberIds: [String(player._id)],
+    });
+
+    player.factionId = faction.id;
+    bumpVersion(player);
     await player.save();
 
-    res.status(201).json({ faction: newFaction });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(201).json({ faction });
+  } catch (error) {
+    console.error('Erro ao criar facção:', error);
+    return res.status(500).json({ error: 'Erro ao criar facção' });
   }
-};
+}
 
-exports.invitePlayer = async (req, res) => {
+export async function getMyFaction(req, res) {
   try {
-    const { invitedPlayerId, invitedPlayerName } = req.body;
-    const faction = await Faction.findOne({ leaderId: req.user.id });
-    if (!faction) return res.status(403).json({ error: 'Only leader can invite' });
-    if (faction.members.length >= faction.maxMembers) return res.status(400).json({ error: 'Faction full' });
+    const player = req.player;
 
-    const invite = {
-      id: Math.random().toString(36).substr(2, 9),
-      factionId: faction._id,
-      factionName: faction.name,
-      factionTag: faction.tag,
-      invitedPlayerId,
-      invitedPlayerName,
-      invitedByPlayerId: req.user.id,
-      invitedByPlayerName: (await Player.findById(req.user.id)).name,
-      createdAt: new Date(),
-    };
-    faction.invites.push(invite);
-    await faction.save();
-    res.json({ invite });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (!player.factionId) {
+      return res.status(404).json({ error: 'Você não pertence a nenhuma facção' });
+    }
+
+    const faction = await Faction.findOne({ id: player.factionId });
+
+    if (!faction) {
+      return res.status(404).json({ error: 'Facção não encontrada' });
+    }
+
+    return res.json({ faction });
+  } catch (error) {
+    console.error('Erro ao buscar facção:', error);
+    return res.status(500).json({ error: 'Erro ao buscar facção' });
   }
-};
+}
 
-exports.acceptInvite = async (req, res) => {
+export async function joinFaction(req, res) {
   try {
-    const { inviteId } = req.body;
-    const faction = await Faction.findOne({ 'invites.id': inviteId });
-    if (!faction) return res.status(404).json({ error: 'Invite not found' });
+    const player = req.player;
+    const { factionId } = req.body || {};
 
-    const invite = faction.invites.find(i => i.id === inviteId);
-    if (invite.invitedPlayerId !== req.user.id) return res.status(403).json({ error: 'Not your invite' });
-    if (faction.members.length >= faction.maxMembers) return res.status(400).json({ error: 'Faction full' });
+    if (!factionId) {
+      return res.status(400).json({ error: 'factionId é obrigatório' });
+    }
 
-    const player = await Player.findById(req.user.id);
-    faction.members.push({
-      playerId: req.user.id,
-      name: player.name,
-      power: player.power,
-      role: 'member',
-      joinedAt: new Date(),
-    });
-    faction.invites = faction.invites.filter(i => i.id !== inviteId);
-    await faction.save();
+    if (player.factionId) {
+      return res.status(400).json({ error: 'Você já pertence a uma facção' });
+    }
 
-    player.factionId = faction._id;
+    const faction = await Faction.findOne({ id: factionId });
+
+    if (!faction) {
+      return res.status(404).json({ error: 'Facção não encontrada' });
+    }
+
+    if (!faction.memberIds.includes(String(player._id))) {
+      faction.memberIds.push(String(player._id));
+    }
+
+    player.factionId = faction.id;
+
+    bumpVersion(player);
     await player.save();
+    await faction.save();
 
-    res.json({ faction });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.json({ faction });
+  } catch (error) {
+    console.error('Erro ao entrar na facção:', error);
+    return res.status(500).json({ error: 'Erro ao entrar na facção' });
   }
-};
-
-// Adicione mais: leaveFaction, kickMember, promoteMember, etc.
+}

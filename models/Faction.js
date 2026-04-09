@@ -1,45 +1,31 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
-const factionMemberSchema = new mongoose.Schema({
-  playerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', required: true },
-  name: String,
-  power: Number,
-  role: { type: String, enum: ['leader','subleader','captain','soldier','member'], default: 'member' },
-  joinedAt: Date,
-  lastSeenAt: Date,
-});
+const factionSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    name: { type: String, required: true, unique: true, index: true },
+    tag: { type: String, required: true, unique: true, index: true },
+    leaderId: { type: String, required: true, index: true },
+    memberIds: { type: [String], default: [] },
+    treasury: {
+      dirtyMoney: { type: Number, default: 0, min: 0 },
+      cleanMoney: { type: Number, default: 0, min: 0 },
+      corre: { type: Number, default: 0, min: 0 },
+    },
+    level: { type: Number, default: 1, min: 1 },
+    exp: { type: Number, default: 0, min: 0 },
+    expToNext: { type: Number, default: 100, min: 1 },
+    createdAtIso: {
+      type: String,
+      default: () => new Date().toISOString(),
+    },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  }
+);
 
-const factionInviteSchema = new mongoose.Schema({
-  id: { type: String, required: true },
-  factionId: mongoose.Schema.Types.ObjectId,
-  factionName: String,
-  factionTag: String,
-  invitedPlayerId: String,
-  invitedPlayerName: String,
-  invitedByPlayerId: String,
-  invitedByPlayerName: String,
-  createdAt: Date,
-});
+const Faction = mongoose.models.Faction || mongoose.model('Faction', factionSchema);
 
-const factionJoinRequestSchema = new mongoose.Schema({
-  id: { type: String, required: true },
-  playerId: String,
-  playerName: String,
-  power: Number,
-  createdAt: Date,
-});
-
-const factionSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true },
-  tag: { type: String, required: true, unique: true, uppercase: true, maxlength: 5 },
-  leaderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', required: true },
-  description: String,
-  minPowerToJoin: { type: Number, default: 0 },
-  maxMembers: { type: Number, default: 20 },
-  totalPower: { type: Number, default: 0 },
-  members: [factionMemberSchema],
-  invites: [factionInviteSchema],
-  joinRequests: [factionJoinRequestSchema],
-}, { timestamps: true });
-
-module.exports = mongoose.model('Faction', factionSchema);
+export default Faction;

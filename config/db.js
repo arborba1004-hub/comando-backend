@@ -4,28 +4,25 @@ import { env } from './env.js';
 let isConnected = false;
 
 export async function connectDB() {
-  if (isConnected) {
-    return mongoose.connection;
-  }
+  if (isConnected) return mongoose.connection;
 
-  try {
-    await mongoose.connect(env.MONGO_URI);
-    isConnected = true;
+  mongoose.set('strictQuery', true);
 
-    console.log('✅ MongoDB conectado com sucesso');
+  await mongoose.connect(env.MONGO_URI, {
+    autoIndex: true,
+  });
 
-    mongoose.connection.on('error', (error) => {
-      console.error('❌ Erro na conexão MongoDB:', error);
-    });
+  isConnected = true;
+  console.log('✅ Mongo conectado');
 
-    mongoose.connection.on('disconnected', () => {
-      console.warn('⚠️ MongoDB desconectado');
-      isConnected = false;
-    });
+  mongoose.connection.on('error', (error) => {
+    console.error('❌ Erro Mongo:', error);
+  });
 
-    return mongoose.connection;
-  } catch (error) {
-    console.error('❌ Falha ao conectar no MongoDB:', error);
-    throw error;
-  }
+  mongoose.connection.on('disconnected', () => {
+    isConnected = false;
+    console.warn('⚠️ Mongo desconectado');
+  });
+
+  return mongoose.connection;
 }

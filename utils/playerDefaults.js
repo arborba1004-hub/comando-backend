@@ -1,5 +1,5 @@
-export const GRID_WIDTH = 40;
-export const GRID_HEIGHT = 20;
+export const GRID_WIDTH = 120;
+export const GRID_HEIGHT = 120;
 
 export function getDefaultPlayerState() {
   return {

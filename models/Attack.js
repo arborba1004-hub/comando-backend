@@ -1,23 +1,27 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
-const attackSchema = new mongoose.Schema({
-  attackerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', required: true },
-  defenderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', required: true },
-  success: Boolean,
-  critical: Boolean,
-  loot: Number,
-  chance: Number,
-  attackerPower: Number,
-  defenderPower: Number,
-  spoils: {
-    dirtyMoneyLoot: Number,
-    correLoot: Number,
-    prestigeLoot: Number,
-    brokenLuxuryItemId: String,
-    brokenLuxuryItemName: String,
-    brokenLuxuryItemValue: Number,
-    luxuryConvertedDirtyMoney: Number,
+const attackSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    attackerId: { type: String, required: true, index: true },
+    attackerName: { type: String, required: true },
+    targetId: { type: String, required: true, index: true },
+    targetName: { type: String, required: true },
+    success: { type: Boolean, default: false },
+    critical: { type: Boolean, default: false },
+    loot: { type: Number, default: 0, min: 0 },
+    chance: { type: Number, default: 0 },
+    attackerPower: { type: Number, default: 0 },
+    defenderPower: { type: Number, default: 0 },
+    message: { type: String, default: '' },
+    createdAtIso: { type: String, default: () => new Date().toISOString() },
   },
-}, { timestamps: { createdAt: 'createdAt', updatedAt: false } });
+  {
+    timestamps: true,
+    versionKey: false,
+  }
+);
 
-module.exports = mongoose.model('Attack', attackSchema);
+const Attack = mongoose.models.Attack || mongoose.model('Attack', attackSchema);
+
+export default Attack;

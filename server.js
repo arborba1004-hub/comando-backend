@@ -8,6 +8,9 @@ import authRoutes from './routes/authRoutes.js';
 import playerRoutes from './routes/playerRoutes.js';
 import playersRoutes from './routes/playersRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
+import laundryRoutes from './routes/laundryRoutes.js';
+import gameRoutes from './routes/gameRoutes.js';
+import briberyRoutes from './routes/briberyRoutes.js';
 
 const app = express();
 
@@ -37,6 +40,9 @@ app.use('/auth', authRoutes);
 app.use('/player', playerRoutes);
 app.use('/players', playersRoutes);
 app.use('/chat', chatRoutes);
+app.use('/laundry', laundryRoutes);
+app.use('/game', gameRoutes);
+app.use('/', briberyRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota não encontrada' });

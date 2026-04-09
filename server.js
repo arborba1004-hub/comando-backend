@@ -15,6 +15,11 @@ import gangRoutes from './routes/gangRoutes.js';
 import attackRoutes from './routes/attackRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import factionRoutes from './routes/factionRoutes.js';
+import shopRoutes from './routes/shopRoutes.js';
+import arsenalRoutes from './routes/arsenalRoutes.js';
+import fugaRoutes from './routes/fugaRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
 
 const app = express();
 
@@ -50,7 +55,12 @@ app.use('/gang', gangRoutes);
 app.use('/attack', attackRoutes);
 app.use('/notifications', notificationRoutes);
 app.use('/faction', factionRoutes);
+app.use('/shop', shopRoutes);
+app.use('/arsenal', arsenalRoutes);
+app.use('/fuga', fugaRoutes);
 app.use('/', briberyRoutes);
+app.use('/', paymentRoutes);
+app.use('/admin', adminRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota não encontrada' });

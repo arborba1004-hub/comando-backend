@@ -11,6 +11,10 @@ import chatRoutes from './routes/chatRoutes.js';
 import laundryRoutes from './routes/laundryRoutes.js';
 import gameRoutes from './routes/gameRoutes.js';
 import briberyRoutes from './routes/briberyRoutes.js';
+import gangRoutes from './routes/gangRoutes.js';
+import attackRoutes from './routes/attackRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
+import factionRoutes from './routes/factionRoutes.js';
 
 const app = express();
 
@@ -42,6 +46,10 @@ app.use('/players', playersRoutes);
 app.use('/chat', chatRoutes);
 app.use('/laundry', laundryRoutes);
 app.use('/game', gameRoutes);
+app.use('/gang', gangRoutes);
+app.use('/attack', attackRoutes);
+app.use('/notifications', notificationRoutes);
+app.use('/faction', factionRoutes);
 app.use('/', briberyRoutes);
 
 app.use((req, res) => {

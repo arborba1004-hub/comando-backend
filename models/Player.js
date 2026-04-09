@@ -224,4 +224,76 @@ const playerSchema = new mongoose.Schema(
       levelProgressionBlocked: { type: Boolean, default: false },
       inventoryBonusReductionPercent: { type: Number, default: 0, min: 0 },
       pvpProtectionUntil: { type: String, default: null },
-      delacaoRewardPending: {
+      delacaoRewardPending: { type: Boolean, default: false },
+      delacaoRewardUnlockAt: { type: String, default: null },
+      pendingSkillBoost: { type: Number, default: 0, min: 0 },
+      lastVehicleLost: { type: Boolean, default: false },
+    },
+
+    skillBoostMultiplier: {
+      type: Number,
+      default: 1,
+      min: 0,
+    },
+
+    headerCustomization: {
+      playerNameFont: { type: String, default: 'oswald' },
+      playerNameFontSize: { type: String, default: '1.875rem' },
+      playerNameColor: { type: String, default: '#1a1205' },
+    },
+
+    ownedVehicles: {
+      type: [String],
+      default: [],
+    },
+
+    purchasedAccessories: {
+      type: [purchasedAccessorySchema],
+      default: [],
+    },
+
+    accessories: {
+      vehicles: { type: Object, default: {} },
+      weapons: { type: Object, default: {} },
+    },
+
+    notifications: {
+      type: [notificationSchema],
+      default: [],
+    },
+
+    attackHistory: {
+      type: [attackHistorySchema],
+      default: [],
+    },
+
+    version: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    lastPassiveIncomeAt: {
+      type: Number,
+      default: () => Date.now(),
+    },
+
+    lastSpinAt: {
+      type: Number,
+      default: 0,
+    },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  }
+);
+
+playerSchema.index(
+  { 'mapPosition.tileX': 1, 'mapPosition.tileY': 1 },
+  { unique: true, sparse: true }
+);
+
+const Player = mongoose.models.Player || mongoose.model('Player', playerSchema);
+
+export default Player;

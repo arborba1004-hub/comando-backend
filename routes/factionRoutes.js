@@ -1,12 +1,15 @@
-const express = require('express');
-const authMiddleware = require('../middleware/auth');
-const factionController = require('../controllers/factionController');
+import { Router } from 'express';
+import authMiddleware from '../middlewares/authMiddleware.js';
+import {
+  createFaction,
+  getMyFaction,
+  joinFaction,
+} from '../controllers/factionController.js';
 
-const router = express.Router();
-router.get('/my', authMiddleware, factionController.getMyFaction);
-router.post('/create', authMiddleware, factionController.createFaction);
-router.post('/invite', authMiddleware, factionController.invitePlayer);
-router.post('/accept-invite', authMiddleware, factionController.acceptInvite);
-// adicione outras rotas
+const router = Router();
 
-module.exports = router;
+router.post('/create', authMiddleware, createFaction);
+router.get('/my', authMiddleware, getMyFaction);
+router.post('/join', authMiddleware, joinFaction);
+
+export default router;

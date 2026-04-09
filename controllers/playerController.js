@@ -1,185 +1,132 @@
-import Player from '../models/Player.js';
-import { deepMerge } from '../utils/deepMerge.js';
+import { mergePlayerState, sanitizePlayerState } from '../utils/playerMapper.js';
+import { applyPassiveIncome, bumpVersion } from '../utils/gameHelpers.js';
 
-const ALLOWED_UPDATE_FIELDS = [
-  'dirtyMoney',
-  'cleanMoney',
-  'corre',
+const ALLOWED_TOP_LEVEL_FIELDS = [
   'hp',
   'niveis',
-  'skills',
+  'balances',
   'inventory',
-  'mapPosition',
+  'pageLevels',
+  'skills',
   'power',
+  'vip',
+  'lastSkillTrainAt',
+  'lastAttackAt',
   'hierarchyBadge',
-];
-
-const BLOCKED_TOP_LEVEL_FIELDS = [
-  '_id',
-  'googleId',
-  'email',
-  'name',
-  'avatar',
-  'lastLoginAt',
-  'lastPassiveIncomeAt',
-  'lastSpinAt',
-  'createdAt',
-  'updatedAt',
+  'barracoPosition',
+  'mapPosition',
+  'laundryProgress',
+  'punishments',
+  'skillBoostMultiplier',
+  'headerCustomization',
+  'ownedVehicles',
+  'purchasedAccessories',
+  'accessories',
+  'notifications',
+  'attackHistory',
+  'factionId',
+  'gangId',
 ];
 
 function pickAllowedFields(payload) {
-  const safeData = {};
+  const safe = {};
 
-  for (const field of ALLOWED_UPDATE_FIELDS) {
+  for (const field of ALLOWED_TOP_LEVEL_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(payload, field)) {
-      safeData[field] = payload[field];
+      safe[field] = payload[field];
     }
   }
 
-  return safeData;
-}
-
-function containsBlockedFields(payload) {
-  return BLOCKED_TOP_LEVEL_FIELDS.some((field) =>
-    Object.prototype.hasOwnProperty.call(payload, field)
-  );
-}
-
-function sanitizeNumber(value, fallback = 0) {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return fallback;
-  }
-
-  return value;
-}
-
-function normalizePlayerUpdate(currentPlayer, incomingData) {
-  const merged = deepMerge(currentPlayer.toObject(), incomingData);
-
-  merged.dirtyMoney = Math.max(0, sanitizeNumber(merged.dirtyMoney, currentPlayer.dirtyMoney));
-  merged.cleanMoney = Math.max(0, sanitizeNumber(merged.cleanMoney, currentPlayer.cleanMoney));
-  merged.corre = Math.max(0, sanitizeNumber(merged.corre, currentPlayer.corre));
-  merged.hp = Math.max(0, sanitizeNumber(merged.hp, currentPlayer.hp));
-  merged.power = Math.max(0, sanitizeNumber(merged.power, currentPlayer.power));
-
-  if (merged.niveis) {
-    for (const key of Object.keys(currentPlayer.niveis.toObject())) {
-      merged.niveis[key] = Math.max(
-        1,
-        sanitizeNumber(merged.niveis[key], currentPlayer.niveis[key])
-      );
-    }
-  }
-
-  if (merged.skills) {
-    for (const key of Object.keys(currentPlayer.skills.toObject())) {
-      merged.skills[key] = Math.max(
-        1,
-        sanitizeNumber(merged.skills[key], currentPlayer.skills[key])
-      );
-    }
-  }
-
-  if (merged.inventory) {
-    merged.inventory.items = Array.isArray(merged.inventory.items)
-      ? merged.inventory.items
-      : currentPlayer.inventory.items;
-
-    merged.inventory.gifts = Array.isArray(merged.inventory.gifts)
-      ? merged.inventory.gifts
-      : currentPlayer.inventory.gifts;
-
-    merged.inventory.rewards = Array.isArray(merged.inventory.rewards)
-      ? merged.inventory.rewards
-      : currentPlayer.inventory.rewards;
-  }
-
-  if (merged.mapPosition) {
-    merged.mapPosition.tileX = sanitizeNumber(
-      merged.mapPosition.tileX,
-      currentPlayer.mapPosition.tileX
-    );
-    merged.mapPosition.tileY = sanitizeNumber(
-      merged.mapPosition.tileY,
-      currentPlayer.mapPosition.tileY
-    );
-    merged.mapPosition.worldX = sanitizeNumber(
-      merged.mapPosition.worldX,
-      currentPlayer.mapPosition.worldX
-    );
-    merged.mapPosition.worldY = sanitizeNumber(
-      merged.mapPosition.worldY,
-      currentPlayer.mapPosition.worldY
-    );
-  }
-
-  if (typeof merged.hierarchyBadge !== 'string') {
-    merged.hierarchyBadge = currentPlayer.hierarchyBadge;
-  }
-
-  return merged;
+  return safe;
 }
 
 export async function getMe(req, res) {
   try {
-    return res.status(200).json({
-      ok: true,
-      player: req.player,
+    const player = req.player;
+
+    applyPassiveIncome(player);
+    bumpVersion(player);
+    await player.save();
+
+    return res.json({
+      player: mergePlayerState(player.toObject()),
     });
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro ao buscar jogador',
-    });
+    console.error('Erro em /player/me:', error);
+    return res.status(500).json({ error: 'Erro ao buscar player' });
   }
 }
 
 export async function updateMe(req, res) {
   try {
-    const payload = req.body || {};
+    const player = req.player;
+    const incoming = req.body || {};
 
-    if (containsBlockedFields(payload)) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Tentativa de alteração de campos protegidos',
-      });
-    }
-
-    const safeIncomingData = pickAllowedFields(payload);
-    const normalizedData = normalizePlayerUpdate(req.player, safeIncomingData);
-
-    const updatedPlayer = await Player.findByIdAndUpdate(
-      req.player._id,
-      {
-        $set: {
-          dirtyMoney: normalizedData.dirtyMoney,
-          cleanMoney: normalizedData.cleanMoney,
-          corre: normalizedData.corre,
-          hp: normalizedData.hp,
-          niveis: normalizedData.niveis,
-          skills: normalizedData.skills,
-          inventory: normalizedData.inventory,
-          mapPosition: normalizedData.mapPosition,
-          power: normalizedData.power,
-          hierarchyBadge: normalizedData.hierarchyBadge,
+    const allowedIncoming = pickAllowedFields(incoming);
+    const merged = mergePlayerState({
+      ...player.toObject(),
+      ...allowedIncoming,
+      balances: {
+        ...(player.toObject().balances || {}),
+        ...(allowedIncoming.balances || {}),
+      },
+      niveis: {
+        ...(player.toObject().niveis || {}),
+        ...(allowedIncoming.niveis || {}),
+      },
+      skills: {
+        ...(player.toObject().skills || {}),
+        ...(allowedIncoming.skills || {}),
+      },
+      inventory: {
+        ...(player.toObject().inventory || {}),
+        ...(allowedIncoming.inventory || {}),
+      },
+      pageLevels: {
+        ...(player.toObject().pageLevels || {}),
+        ...(allowedIncoming.pageLevels || {}),
+      },
+      barracoPosition: {
+        ...(player.toObject().barracoPosition || {}),
+        ...(allowedIncoming.barracoPosition || {}),
+      },
+      mapPosition: {
+        ...(player.toObject().mapPosition || {}),
+        ...(allowedIncoming.mapPosition || {}),
+      },
+      laundryProgress: {
+        ...(player.toObject().laundryProgress || {}),
+        ...(allowedIncoming.laundryProgress || {}),
+      },
+      punishments: {
+        ...(player.toObject().punishments || {}),
+        ...(allowedIncoming.punishments || {}),
+        delacao: {
+          ...(player.toObject().punishments?.delacao || {}),
+          ...(allowedIncoming.punishments?.delacao || {}),
         },
       },
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
+      headerCustomization: {
+        ...(player.toObject().headerCustomization || {}),
+        ...(allowedIncoming.headerCustomization || {}),
+      },
+      accessories: {
+        ...(player.toObject().accessories || {}),
+        ...(allowedIncoming.accessories || {}),
+      },
+    });
 
-    return res.status(200).json({
-      ok: true,
-      player: updatedPlayer,
+    const sanitized = sanitizePlayerState(merged);
+
+    Object.assign(player, sanitized);
+    bumpVersion(player);
+    await player.save();
+
+    return res.json({
+      player: mergePlayerState(player.toObject()),
     });
   } catch (error) {
-    console.error('Erro em PATCH /player/update:', error);
-
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro ao atualizar jogador',
-    });
+    console.error('Erro em /player/update:', error);
+    return res.status(500).json({ error: 'Erro ao atualizar player' });
   }
 }

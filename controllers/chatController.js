@@ -17,12 +17,17 @@ function normalizeMessage(message) {
   };
 }
 
+function sanitizeText(value, maxLength = 2000) {
+  return String(value || '').trim().slice(0, maxLength);
+}
+
 export async function sendChatMessage(req, res) {
   try {
+    const player = req.player;
+    const user = req.user;
+
     const {
       channel,
-      senderId,
-      senderName,
       recipientId,
       recipientName,
       factionId,
@@ -31,34 +36,55 @@ export async function sendChatMessage(req, res) {
       system,
     } = req.body || {};
 
-    if (!channel || !['complexo', 'faccao', 'mail'].includes(channel)) {
+    if (!channel || !['complexo', 'faccao', 'mail'].includes(String(channel))) {
       return res.status(400).json({ error: 'Canal inválido' });
     }
 
-    if (!senderId || !senderName || !body || !String(body).trim()) {
+    const safeBody = sanitizeText(body, 3000);
+    const safeSubject = sanitizeText(subject, 120);
+
+    if (!safeBody) {
       return res.status(400).json({ error: 'Mensagem inválida' });
     }
 
-    if (channel === 'mail' && (!recipientId || !recipientName)) {
-      return res.status(400).json({ error: 'Destinatário obrigatório no correio' });
-    }
-
-    if (channel === 'faccao' && !factionId) {
-      return res.status(400).json({ error: 'factionId obrigatório no chat da facção' });
-    }
-
-    const message = await ChatMessage.create({
-      channel,
-      senderId,
-      senderName,
-      recipientId: recipientId || null,
-      recipientName: recipientName || null,
-      factionId: factionId || null,
-      subject: subject || null,
-      body: String(body).trim(),
+    const messagePayload = {
+      channel: String(channel),
+      senderId: String(user.id),
+      senderName: player.name,
+      recipientId: null,
+      recipientName: null,
+      factionId: null,
+      subject: null,
+      body: safeBody,
       read: false,
       system: Boolean(system),
-    });
+    };
+
+    if (channel === 'mail') {
+      if (!recipientId || !recipientName) {
+        return res.status(400).json({ error: 'Destinatário obrigatório no correio' });
+      }
+
+      if (String(recipientId) === String(user.id)) {
+        return res.status(400).json({ error: 'Não pode enviar correio para si mesmo' });
+      }
+
+      messagePayload.recipientId = String(recipientId);
+      messagePayload.recipientName = sanitizeText(recipientName, 120);
+      messagePayload.subject = safeSubject || null;
+    }
+
+    if (channel === 'faccao') {
+      const effectiveFactionId = user.factionId || factionId || null;
+
+      if (!effectiveFactionId) {
+        return res.status(400).json({ error: 'factionId obrigatório no chat da facção' });
+      }
+
+      messagePayload.factionId = String(effectiveFactionId);
+    }
+
+    const message = await ChatMessage.create(messagePayload);
 
     return res.status(201).json({
       message: normalizeMessage(message),
@@ -72,7 +98,7 @@ export async function sendChatMessage(req, res) {
 export async function getChatMessages(req, res) {
   try {
     const { channel } = req.query;
-    const userId = req.user.id;
+    const userId = String(req.user.id);
     const factionId = req.user.factionId;
 
     if (!channel || !['complexo', 'faccao', 'mail'].includes(String(channel))) {
@@ -89,7 +115,8 @@ export async function getChatMessages(req, res) {
       if (!factionId) {
         return res.json([]);
       }
-      filters.factionId = factionId;
+
+      filters.factionId = String(factionId);
     }
 
     const messages = await ChatMessage.find(filters)
@@ -107,7 +134,7 @@ export async function getChatMessages(req, res) {
 export async function markChatMessageRead(req, res) {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = String(req.user.id);
 
     const message = await ChatMessage.findById(id);
 
@@ -116,17 +143,24 @@ export async function markChatMessageRead(req, res) {
     }
 
     if (message.channel !== 'mail') {
-      return res.status(400).json({ error: 'Somente mensagens de correio podem ser marcadas como lidas' });
+      return res.status(400).json({
+        error: 'Somente mensagens de correio podem ser marcadas como lidas',
+      });
     }
 
-    if (String(message.recipientId) !== String(userId)) {
+    if (String(message.recipientId) !== userId) {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    message.read = true;
-    await message.save();
+    if (!message.read) {
+      message.read = true;
+      await message.save();
+    }
 
-    return res.json({ success: true, message: normalizeMessage(message) });
+    return res.json({
+      success: true,
+      message: normalizeMessage(message),
+    });
   } catch (error) {
     console.error('Erro ao marcar mensagem como lida:', error);
     return res.status(500).json({ error: 'Erro ao marcar mensagem como lida' });

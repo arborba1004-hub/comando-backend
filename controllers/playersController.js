@@ -8,6 +8,8 @@ export async function getAllPlayers(req, res) {
         _id: 1,
         name: 1,
         mapPosition: 1,
+        power: 1,
+        balances: 1,
         'niveis.barracoLevel': 1,
       }
     ).lean();
@@ -20,6 +22,8 @@ export async function getAllPlayers(req, res) {
       worldX: p.mapPosition?.worldX || 0,
       worldY: p.mapPosition?.worldY || 0,
       barracoLevel: p.niveis?.barracoLevel || 1,
+      power: p.power || 0,
+      dirtyMoney: p.balances?.dirtyMoney || 0,
     }));
 
     return res.json(formatted);

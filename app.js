@@ -4,6 +4,8 @@ import { env } from './config/env.js';
 import authRoutes from './routes/authRoutes.js';
 import playerRoutes from './routes/playerRoutes.js';
 import playersRoutes from './routes/playersRoutes.js';
+import attackRoutes from './routes/attackRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 
 const app = express();
 
@@ -34,6 +36,9 @@ app.get('/health', (req, res) => {
 app.use('/auth', authRoutes);
 app.use('/player', playerRoutes);
 app.use('/players', playersRoutes);
+app.use('/battle', attackRoutes);
+app.use('/attack', attackRoutes);
+app.use('/notifications', notificationRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

@@ -6,4 +6,4 @@ const router = Router();
 
 router.get('/', authMiddleware, getAllPlayers);
 
-export default router;
+export default router; 

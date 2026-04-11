@@ -52,7 +52,13 @@ app.use('/chat', chatRoutes);
 app.use('/laundry', laundryRoutes);
 app.use('/game', gameRoutes);
 app.use('/gang', gangRoutes);
+
+// rota nova esperada pelo front
+app.use('/battle', attackRoutes);
+
+// compatibilidade com rota antiga
 app.use('/attack', attackRoutes);
+
 app.use('/notifications', notificationRoutes);
 app.use('/faction', factionRoutes);
 app.use('/shop', shopRoutes);

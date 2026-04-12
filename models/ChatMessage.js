@@ -21,6 +21,18 @@ const chatMessageSchema = new mongoose.Schema(
 
     read: { type: Boolean, default: false },
     system: { type: Boolean, default: false },
+
+    messageType: {
+      type: String,
+      enum: ['text', 'faction_help_request', 'faction_help_update'],
+      default: 'text',
+      index: true,
+    },
+
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
   },
   {
     timestamps: true,

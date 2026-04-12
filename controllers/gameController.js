@@ -235,13 +235,14 @@ export async function gameAction(req, res) {
       const result = resolveSlotSpin();
 
       let finalDirtyGain = 0;
+      let baseDirtyGain = 0;
 
       if (result.prison) {
         const loss = Math.floor((player.balances.dirtyMoney || 0) * 0.3);
         player.balances.dirtyMoney = Math.max(0, player.balances.dirtyMoney - loss);
       } else {
-        const baseGain = Math.floor(result.dirtyGain * multiplier);
-        finalDirtyGain = Math.floor(baseGain * (1 + factionDirtyBonusPercent / 100));
+        baseDirtyGain = Math.floor(result.dirtyGain * multiplier);
+        finalDirtyGain = Math.floor(baseDirtyGain * (1 + factionDirtyBonusPercent / 100));
         player.balances.dirtyMoney += finalDirtyGain;
       }
 
@@ -252,7 +253,7 @@ export async function gameAction(req, res) {
         result: {
           ...result,
           dirtyGain: finalDirtyGain,
-          baseDirtyGain: result.prison ? 0 : Math.floor(result.dirtyGain * multiplier),
+          baseDirtyGain,
           factionDirtyBonusPercent,
         },
         factionBuffs: factionContext

@@ -143,7 +143,10 @@ function calculateInvestmentBuffs(investments = DEFAULT_INVESTMENTS) {
 }
 
 function calculateTotalInvestmentLevel(investments = DEFAULT_INVESTMENTS) {
-  return BRANCHES.reduce((sum, branch) => sum + Math.max(0, safeNumber(investments[branch], 0)), 0);
+  return BRANCHES.reduce(
+    (sum, branch) => sum + Math.max(0, safeNumber(investments[branch], 0)),
+    0
+  );
 }
 
 function getTierName(totalLevel) {
@@ -205,7 +208,6 @@ function buildFactionMemberFromPlayer(player, role = 'member') {
     },
   };
 }
-
 function refreshFactionDerivedFields(faction) {
   if (!faction.investments) {
     faction.investments = { ...DEFAULT_INVESTMENTS };
@@ -320,11 +322,15 @@ function normalizeFactionDocument(faction) {
         }))
       : [],
 
-    joinRequests: Array.isArray(faction.joinRequests) ? faction.joinRequests : [],
+joinRequests: Array.isArray(faction.joinRequests) ? faction.joinRequests : [],
     invites: Array.isArray(faction.invites) ? faction.invites : [],
     activeBuffs: Array.isArray(faction.activeBuffs) ? faction.activeBuffs : [],
-    enemyFactionIds: Array.isArray(faction.enemyFactionIds) ? faction.enemyFactionIds.map(String) : [],
-    allyFactionIds: Array.isArray(faction.allyFactionIds) ? faction.allyFactionIds.map(String) : [],
+    enemyFactionIds: Array.isArray(faction.enemyFactionIds)
+      ? faction.enemyFactionIds.map(String)
+      : [],
+    allyFactionIds: Array.isArray(faction.allyFactionIds)
+      ? faction.allyFactionIds.map(String)
+      : [],
 
     investments: {
       arsenalColetivo: Math.max(0, safeNumber(faction.investments?.arsenalColetivo, 0)),
@@ -347,7 +353,10 @@ function normalizeFactionDocument(faction) {
       intelligencePercent: safeNumber(faction.investmentBuffs?.intelligencePercent, 0),
       respectPercent: safeNumber(faction.investmentBuffs?.respectPercent, 0),
       baseDefensePercent: safeNumber(faction.investmentBuffs?.baseDefensePercent, 0),
-      donationEfficiencyPercent: safeNumber(faction.investmentBuffs?.donationEfficiencyPercent, 0),
+      donationEfficiencyPercent: safeNumber(
+        faction.investmentBuffs?.donationEfficiencyPercent,
+        0
+      ),
       buffDurationPercent: safeNumber(faction.investmentBuffs?.buffDurationPercent, 0),
     },
 
@@ -381,17 +390,6 @@ async function clearPlayerFaction(playerId) {
   if (!player) return null;
 
   player.factionId = null;
-  bumpVersion(player);
-  await player.save();
-
-  return player;
-}
-
-async function setPlayerFaction(playerId, factionId) {
-  const player = await Player.findById(playerId);
-  if (!player) return null;
-
-  player.factionId = factionId;
   bumpVersion(player);
   await player.save();
 
@@ -441,8 +439,7 @@ export async function createFaction(req, res) {
     }
 
     const leaderMember = buildFactionMemberFromPlayer(player, 'leader');
-
-    const faction = await Faction.create({
+const faction = await Faction.create({
       id: generateId(),
       name: safeName,
       tag: safeTag,
@@ -480,7 +477,9 @@ export async function createFaction(req, res) {
       activityLog: [],
     });
 
-    addFactionActivity(faction, 'member_joined', player, player, { reason: 'faction_created' });
+    addFactionActivity(faction, 'member_joined', player, player, {
+      reason: 'faction_created',
+    });
     refreshFactionDerivedFields(faction);
     await faction.save();
 
@@ -506,77 +505,6 @@ export async function getMyFaction(req, res) {
     }
 
     const faction = await Faction.findOne({ id: String(player.factionId) });
-
-    if (!faction) {
-      player.factionId = null;
-      bumpVersion(player);
-      await player.save();
-      return res.status(404).json({ error: 'Facção não encontrada' });
-    }
-
-    await syncFactionMemberSnapshot(faction, player._id);
-    refreshFactionDerivedFields(faction);
-    await faction.save();
-
-    return res.json({
-      faction: normalizeFactionDocument(faction),
-    });
-  } catch (error) {
-    console.error('Erro ao buscar facção:', error);
-    return res.status(500).json({ error: 'Erro ao buscar facção' });
-  }
-}
-
-export async function listFactions(req, res) {
-  try {
-    const factions = await Faction.find({})
-      .sort({ level: -1, totalInvestmentLevel: -1, createdAt: 1 })
-      .limit(100);
-
-    const normalized = factions.map((faction) => {
-      refreshFactionDerivedFields(faction);
-      const data = normalizeFactionDocument(faction);
-
-      return {
-        id: data.id,
-        name: data.name,
-        tag: data.tag,
-        leaderId: data.leaderId,
-        level: data.level,
-        exp: data.exp,
-        expToNext: data.expToNext,
-        description: data.description,
-        isPrivate: data.isPrivate,
-        minimumPower: data.minimumPower,
-        minimumBarracoLevel: data.minimumBarracoLevel,
-        createdAt: data.createdAt,
-        updatedAt: data.updatedAt,
-        memberCount: Array.isArray(data.members) ? data.members.length : 0,
-        totalInvestmentLevel: data.totalInvestmentLevel,
-        investmentTierName: data.investmentTierName,
-      };
-    });
-
-    return res.json({ factions: normalized });
-  } catch (error) {
-    console.error('Erro ao listar facções:', error);
-    return res.status(500).json({ error: 'Erro ao listar facções' });
-  }
-}
-
-export async function joinFaction(req, res) {
-  try {
-    const player = req.player;
-    const factionId = normalizeText(req.body?.factionId, 80);
-
-    if (!factionId) {
-      return res.status(400).json({ error: 'factionId é obrigatório' });
-    }
-
-    if (player.factionId) {
-      return res.status(400).json({ error: 'Você já pertence a uma facção' });
-    }
-const faction = await Faction.findOne({ id: String(player.factionId) });
 
     if (!faction) {
       player.factionId = null;
@@ -678,8 +606,13 @@ export async function joinFaction(req, res) {
       return res.status(403).json({ error: 'Power insuficiente para entrar nesta facção' });
     }
 
-    if (safeNumber(player.niveis?.barracoLevel, 1) < safeNumber(faction.minimumBarracoLevel, 1)) {
-      return res.status(403).json({ error: 'Nível de barraco insuficiente para entrar nesta facção' });
+    if (
+      safeNumber(player.niveis?.barracoLevel, 1) <
+      safeNumber(faction.minimumBarracoLevel, 1)
+    ) {
+      return res
+        .status(403)
+        .json({ error: 'Nível de barraco insuficiente para entrar nesta facção' });
     }
 
     const newMember = buildFactionMemberFromPlayer(player, 'member');
@@ -714,7 +647,7 @@ export async function leaveFaction(req, res) {
 
     const faction = await Faction.findOne({ id: String(player.factionId) });
 
-    if (!faction) {
+if (!faction) {
       player.factionId = null;
       bumpVersion(player);
       await player.save();
@@ -723,10 +656,13 @@ export async function leaveFaction(req, res) {
     }
 
     const playerId = String(player._id);
-    const leavingMember = faction.members.find((member) => String(member.playerId) === playerId) || null;
+    const leavingMember =
+      faction.members.find((member) => String(member.playerId) === playerId) || null;
     const isLeader = String(faction.leaderId) === playerId;
 
-    faction.members = faction.members.filter((member) => String(member.playerId) !== playerId);
+    faction.members = faction.members.filter(
+      (member) => String(member.playerId) !== playerId
+    );
 
     player.factionId = null;
     bumpVersion(player);
@@ -748,13 +684,9 @@ export async function leaveFaction(req, res) {
       nextLeader.role = 'leader';
       nextLeader.permissions = getDefaultPermissionsByRole('leader');
 
-      addFactionActivity(
-        faction,
-        'leadership_transferred',
-        leavingMember || player,
-        nextLeader,
-        { reason: 'leader_left' }
-      );
+      addFactionActivity(faction, 'leadership_transferred', leavingMember || player, nextLeader, {
+        reason: 'leader_left',
+      });
     }
 
     addFactionActivity(faction, 'member_left', player, leavingMember || player, {});
@@ -796,7 +728,10 @@ export async function donate(req, res) {
       return res.status(404).json({ error: 'Facção não encontrada' });
     }
 
-    const member = faction.members.find((item) => String(item.playerId) === String(player._id));
+    const member = faction.members.find(
+      (item) => String(item.playerId) === String(player._id)
+    );
+
     if (!member) {
       return res.status(403).json({ error: 'Você não consta como membro dessa facção' });
     }
@@ -809,7 +744,8 @@ export async function donate(req, res) {
     bumpVersion(player);
     await player.save();
 
-    faction.treasury[currency] = Math.max(0, safeNumber(faction.treasury?.[currency], 0)) + amount;
+    faction.treasury[currency] =
+      Math.max(0, safeNumber(faction.treasury?.[currency], 0)) + amount;
 
     member.contribution[currency] =
       Math.max(0, safeNumber(member.contribution?.[currency], 0)) + amount;
@@ -880,7 +816,9 @@ export async function invest(req, res) {
 
     const cost = getInvestmentUpgradeCost(branch, currentLevel);
     if (safeNumber(faction.treasury?.cleanMoney, 0) < safeNumber(cost.cleanMoney, 0)) {
-      return res.status(400).json({ error: 'Tesouro limpo insuficiente para esse investimento' });
+      return res
+        .status(400)
+        .json({ error: 'Tesouro limpo insuficiente para esse investimento' });
     }
 
     faction.treasury.cleanMoney -= cost.cleanMoney;
@@ -980,7 +918,7 @@ export async function updateSettings(req, res) {
     refreshFactionDerivedFields(faction);
     await faction.save();
 
-return res.json({
+    return res.json({
       faction: normalizeFactionDocument(faction),
     });
   } catch (error) {
@@ -999,7 +937,9 @@ export async function updateMemberRole(req, res) {
       return res.status(400).json({ error: 'targetPlayerId e role são obrigatórios' });
     }
 
-    if (!['leader', 'subleader', 'recruiter', 'treasurer', 'diplomat', 'member'].includes(role)) {
+    if (
+      !['leader', 'subleader', 'recruiter', 'treasurer', 'diplomat', 'member'].includes(role)
+    ) {
       return res.status(400).json({ error: 'Cargo inválido' });
     }
 
@@ -1078,12 +1018,17 @@ export async function kickMember(req, res) {
       return res.status(400).json({ error: 'O líder não pode expulsar a si mesmo' });
     }
 
-    const targetMember = faction.members.find((member) => String(member.playerId) === String(memberId));
+    const targetMember = faction.members.find(
+      (member) => String(member.playerId) === String(memberId)
+    );
+
     if (!targetMember) {
       return res.status(404).json({ error: 'Membro não encontrado na facção' });
     }
 
-    faction.members = faction.members.filter((member) => String(member.playerId) !== String(memberId));
+    faction.members = faction.members.filter(
+      (member) => String(member.playerId) !== String(memberId)
+    );
 
     addFactionActivity(faction, 'member_kicked', player, targetMember, {});
     refreshFactionDerivedFields(faction);
@@ -1119,7 +1064,10 @@ export async function transferLeadership(req, res) {
       return res.status(403).json({ error: 'Somente o líder pode transferir a liderança' });
     }
 
-    const newLeader = faction.members.find((member) => String(member.playerId) === String(memberId));
+    const newLeader = faction.members.find(
+      (member) => String(member.playerId) === String(memberId)
+    );
+
     if (!newLeader) {
       return res.status(404).json({ error: 'Membro não encontrado na facção' });
     }
@@ -1150,4 +1098,3 @@ export async function transferLeadership(req, res) {
     return res.status(500).json({ error: 'Erro ao transferir liderança' });
   }
 }
-    

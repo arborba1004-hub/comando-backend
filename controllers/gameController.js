@@ -1,3 +1,4 @@
+import Faction from '../models/Faction.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { applyPassiveIncome, bumpVersion } from '../utils/gameHelpers.js';
 
@@ -5,6 +6,88 @@ const ALLOWED_MULTIPLIERS = [1, 2, 5, 10, 25, 50];
 
 function randomFrom(pool) {
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function safeNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function calculateFactionInvestmentBuffs(investments = {}) {
+  const arsenal = Math.max(0, safeNumber(investments.arsenalColetivo, 0));
+  const caixa = Math.max(0, safeNumber(investments.caixaOperacional, 0));
+  const mobilidade = Math.max(0, safeNumber(investments.mobilidade, 0));
+  const influencia = Math.max(0, safeNumber(investments.influencia, 0));
+  const inteligencia = Math.max(0, safeNumber(investments.inteligencia, 0));
+  const fortificacao = Math.max(0, safeNumber(investments.fortificacao, 0));
+  const logistica = Math.max(0, safeNumber(investments.logistica, 0));
+  const doutrina = Math.max(0, safeNumber(investments.doutrina, 0));
+
+  return {
+    attackPercent: arsenal * 2 + doutrina * 0.5,
+    defensePercent: arsenal * 1.5 + fortificacao * 2 + doutrina * 0.5,
+    hpPercent: arsenal * 1 + fortificacao * 1.5 + doutrina * 0.5,
+    dirtyMoneyGainPercent: caixa * 2 + doutrina * 0.5,
+    cleanMoneyGainPercent: caixa * 1.5 + doutrina * 0.5,
+    agilityPercent: mobilidade * 2 + doutrina * 0.5,
+    intelligencePercent: inteligencia * 2 + doutrina * 0.5,
+    respectPercent: influencia * 2 + doutrina * 0.5,
+    baseDefensePercent: fortificacao * 2 + doutrina * 0.5,
+    donationEfficiencyPercent: logistica * 2 + doutrina * 0.5,
+    buffDurationPercent: logistica * 1.5 + doutrina * 0.5,
+  };
+}
+
+async function getFactionBuffsForPlayer(player) {
+  try {
+    if (!player?.factionId) {
+      return null;
+    }
+
+    const faction = await Faction.findOne(
+      { id: String(player.factionId) },
+      {
+        id: 1,
+        name: 1,
+        tag: 1,
+        investments: 1,
+        investmentBuffs: 1,
+        activeBuffs: 1,
+      }
+    ).lean();
+
+    if (!faction) {
+      return null;
+    }
+
+    const investmentBuffs =
+      faction.investmentBuffs && typeof faction.investmentBuffs === 'object'
+        ? {
+            attackPercent: safeNumber(faction.investmentBuffs.attackPercent, 0),
+            defensePercent: safeNumber(faction.investmentBuffs.defensePercent, 0),
+            hpPercent: safeNumber(faction.investmentBuffs.hpPercent, 0),
+            dirtyMoneyGainPercent: safeNumber(faction.investmentBuffs.dirtyMoneyGainPercent, 0),
+            cleanMoneyGainPercent: safeNumber(faction.investmentBuffs.cleanMoneyGainPercent, 0),
+            agilityPercent: safeNumber(faction.investmentBuffs.agilityPercent, 0),
+            intelligencePercent: safeNumber(faction.investmentBuffs.intelligencePercent, 0),
+            respectPercent: safeNumber(faction.investmentBuffs.respectPercent, 0),
+            baseDefensePercent: safeNumber(faction.investmentBuffs.baseDefensePercent, 0),
+            donationEfficiencyPercent: safeNumber(faction.investmentBuffs.donationEfficiencyPercent, 0),
+            buffDurationPercent: safeNumber(faction.investmentBuffs.buffDurationPercent, 0),
+          }
+        : calculateFactionInvestmentBuffs(faction.investments || {});
+
+    return {
+      factionId: String(faction.id),
+      factionName: String(faction.name || ''),
+      factionTag: String(faction.tag || ''),
+      investmentBuffs,
+      activeBuffs: Array.isArray(faction.activeBuffs) ? faction.activeBuffs : [],
+    };
+  } catch (error) {
+    console.error('Erro ao carregar buffs de facção no gameController:', error);
+    return null;
+  }
 }
 
 function resolveSlotSpin() {
@@ -140,17 +223,26 @@ export async function gameAction(req, res) {
         return res.status(400).json({ error: 'Corre insuficiente' });
       }
 
+      const factionContext = await getFactionBuffsForPlayer(player);
+      const factionDirtyBonusPercent = safeNumber(
+        factionContext?.investmentBuffs?.dirtyMoneyGainPercent,
+        0
+      );
+
       player.balances.corre -= correCost;
       player.lastSpinAt = now;
 
       const result = resolveSlotSpin();
 
+      let finalDirtyGain = 0;
+
       if (result.prison) {
         const loss = Math.floor((player.balances.dirtyMoney || 0) * 0.3);
         player.balances.dirtyMoney = Math.max(0, player.balances.dirtyMoney - loss);
       } else {
-        const gain = Math.floor(result.dirtyGain * multiplier);
-        player.balances.dirtyMoney += gain;
+        const baseGain = Math.floor(result.dirtyGain * multiplier);
+        finalDirtyGain = Math.floor(baseGain * (1 + factionDirtyBonusPercent / 100));
+        player.balances.dirtyMoney += finalDirtyGain;
       }
 
       bumpVersion(player);
@@ -159,8 +251,18 @@ export async function gameAction(req, res) {
       return res.json({
         result: {
           ...result,
-          dirtyGain: result.prison ? 0 : Math.floor(result.dirtyGain * multiplier),
+          dirtyGain: finalDirtyGain,
+          baseDirtyGain: result.prison ? 0 : Math.floor(result.dirtyGain * multiplier),
+          factionDirtyBonusPercent,
         },
+        factionBuffs: factionContext
+          ? {
+              factionId: factionContext.factionId,
+              factionName: factionContext.factionName,
+              factionTag: factionContext.factionTag,
+              investmentBuffs: factionContext.investmentBuffs,
+            }
+          : null,
         player: mergePlayerState(player.toObject()),
       });
     }

@@ -12,7 +12,7 @@ import {
   kickMember,
   transferLeadership,
 } from '../controllers/factionController.js';
-import { authMiddleware } from '../middlewares/authMiddleware.js';
+import authMiddleware from '../middlewares/authMiddleware.js';
 
 const router = Router();
 

@@ -19,7 +19,8 @@ import shopRoutes from './routes/shopRoutes.js';
 import arsenalRoutes from './routes/arsenalRoutes.js';
 import fugaRoutes from './routes/fugaRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
-import adminRoutes from './routes/adminRoutes.js';
+import adminRoutes from './routes/adminRoutes.js'
+import factionHelpRoutes from './routes/factionHelpRoutes.js';
 
 const app = express();
 
@@ -49,6 +50,7 @@ app.use('/auth', authRoutes);
 app.use('/player', playerRoutes);
 app.use('/players', playersRoutes);
 app.use('/chat', chatRoutes);
+app.use('/faction-help', factionHelpRoutes);
 app.use('/laundry', laundryRoutes);
 app.use('/game', gameRoutes);
 app.use('/gang', gangRoutes);

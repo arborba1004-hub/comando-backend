@@ -14,6 +14,8 @@ function normalizeMessage(message) {
     createdAt: message.createdAt,
     read: message.read ?? false,
     system: message.system ?? false,
+    messageType: message.messageType ?? 'text',
+    metadata: message.metadata ?? {},
   };
 }
 
@@ -34,6 +36,8 @@ export async function sendChatMessage(req, res) {
       subject,
       body,
       system,
+      messageType,
+      metadata,
     } = req.body || {};
 
     if (!channel || !['complexo', 'faccao', 'mail'].includes(String(channel))) {
@@ -58,6 +62,11 @@ export async function sendChatMessage(req, res) {
       body: safeBody,
       read: false,
       system: Boolean(system),
+      messageType:
+        ['text', 'faction_help_request', 'faction_help_update'].includes(String(messageType))
+          ? String(messageType)
+          : 'text',
+      metadata: metadata && typeof metadata === 'object' ? metadata : {},
     };
 
     if (channel === 'mail') {

@@ -528,4 +528,68 @@ export async function resolveBattle(req, res) {
       attackerNotification,
       MAX_NOTIFICATIONS
     );
-    def
+    defender.notifications = pushLimited(
+      defender.notifications,
+      defenderNotification,
+      MAX_NOTIFICATIONS
+    );
+
+    bumpVersion(attacker);
+    bumpVersion(defender);
+
+    await attacker.save();
+    await defender.save();
+    await attack.save();
+
+    return res.json(buildBattleResponse(attack));
+  } catch (error) {
+    console.error('Erro ao resolver batalha:', error);
+    return res.status(500).json({ error: 'Erro ao resolver batalha' });
+  }
+}
+
+export async function getBattleReport(req, res) {
+  try {
+    const requester = req.player;
+    const { battleId } = req.params;
+
+    const attack = await Attack.findOne({ id: battleId });
+    if (!attack) {
+      return res.status(404).json({ error: 'Relatório não encontrado' });
+    }
+
+    if (
+      String(attack.attackerId) !== String(requester._id) &&
+      String(attack.targetId) !== String(requester._id)
+    ) {
+      return res.status(403).json({ error: 'Você não tem acesso a este relatório' });
+    }
+
+    return res.json(buildBattleResponse(attack));
+  } catch (error) {
+    console.error('Erro ao buscar relatório:', error);
+    return res.status(500).json({ error: 'Erro ao buscar relatório' });
+  }
+}
+
+export async function getBattleHistory(req, res) {
+  try {
+    const requester = req.player;
+
+    const attacks = await Attack.find({
+      $or: [{ attackerId: String(requester._id) }, { targetId: String(requester._id) }],
+    })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    return res.json(attacks.map(buildBattleResponse));
+  } catch (error) {
+    console.error('Erro ao buscar histórico de batalhas:', error);
+    return res.status(500).json({ error: 'Erro ao buscar histórico de batalhas' });
+  }
+}
+
+export async function initiateAttack(req, res) {
+  return startBattle(req, res);
+}

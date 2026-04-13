@@ -21,6 +21,7 @@ import fugaRoutes from './routes/fugaRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import adminRoutes from './routes/adminRoutes.js'
 import factionHelpRoutes from './routes/factionHelpRoutes.js';
+import factionInviteRoutes from './routes/factionInviteRoutes.js';
 
 const app = express();
 
@@ -69,6 +70,7 @@ app.use('/fuga', fugaRoutes);
 app.use('/', briberyRoutes);
 app.use('/', paymentRoutes);
 app.use('/admin', adminRoutes);
+app.use('/faction-invite', factionInviteRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota não encontrada' });

@@ -11,6 +11,8 @@ import {
   updateMemberRole,
   kickMember,
   transferLeadership,
+acceptJoinRequest,
+  rejectJoinRequest,
 } from '../controllers/factionController.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
 
@@ -30,5 +32,7 @@ router.post('/update-settings', authMiddleware, updateSettings);
 router.post('/update-member-role', authMiddleware, updateMemberRole);
 router.post('/kick', authMiddleware, kickMember);
 router.post('/transfer-leadership', authMiddleware, transferLeadership);
+router.post('/accept-join-request', authMiddleware, acceptJoinRequest);
+router.post('/reject-join-request', authMiddleware, rejectJoinRequest);
 
 export default router;

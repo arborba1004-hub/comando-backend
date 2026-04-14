@@ -1,6 +1,7 @@
 import Attack from '../models/Attack.js';
 import Player from '../models/Player.js';
 import Faction from '../models/Faction.js';
+import GangWar from '../models/GangWar.js';
 import {
   bumpVersion,
   calculateLoot,
@@ -8,7 +9,6 @@ import {
   calculateWinChance,
   generateId,
 } from '../utils/gameHelpers.js';
-import { mergePlayerState } from '../utils/playerMapper.js';
 
 const ATTACK_COOLDOWN_MS = 30000;
 const ATTACK_CORRE_COST = 10;
@@ -16,8 +16,316 @@ const DEFENDER_PVP_PROTECTION_MS = 30000;
 const MAX_HISTORY = 50;
 const MAX_NOTIFICATIONS = 20;
 
+const GANG_MEMBER_TYPES = [
+  'capanga',
+  'frente',
+  'executor',
+  'assassino',
+  'muralha',
+  'certeiro',
+  'motorista',
+  'nitro',
+  'armeiro',
+  'informante',
+  'wifi',
+  'medico',
+  'lavador',
+  'ladrao',
+  'negociador',
+];
+
 function safeNumber(value, fallback = 0) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function safeString(value, fallback = '') {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function randomBetween(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function emptyGangStats() {
+  return {
+    totalMembers: 0,
+    ativos: 0,
+    feridos: 0,
+    mortos: 0,
+    rajada: 0,
+    blindagem: 0,
+    folego: 0,
+    quebra: 0,
+    medicalPower: 0,
+    economyPower: 0,
+    lootPower: 0,
+    intelPower: 0,
+    mobilityPower: 0,
+    weaponPower: 0,
+    coordinationPower: 0,
+    negotiationPower: 0,
+    totalPower: 0,
+  };
+}
+
+function emptyGangLosses() {
+  return {
+    mortos: {
+      capanga: 0,
+      frente: 0,
+      executor: 0,
+      assassino: 0,
+      muralha: 0,
+      certeiro: 0,
+      motorista: 0,
+      nitro: 0,
+      armeiro: 0,
+      informante: 0,
+      wifi: 0,
+      medico: 0,
+      lavador: 0,
+      ladrao: 0,
+      negociador: 0,
+    },
+    feridos: {
+      capanga: 0,
+      frente: 0,
+      executor: 0,
+      assassino: 0,
+      muralha: 0,
+      certeiro: 0,
+      motorista: 0,
+      nitro: 0,
+      armeiro: 0,
+      informante: 0,
+      wifi: 0,
+      medico: 0,
+      lavador: 0,
+      ladrao: 0,
+      negociador: 0,
+    },
+    preservadosPeloMedico: 0,
+  };
+}
+
+function normalizeGangMembers(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((member) => ({
+      id: safeString(member?.id),
+      type: GANG_MEMBER_TYPES.includes(member?.type) ? member.type : 'capanga',
+      level: Math.max(1, safeNumber(member?.level, 1)),
+      status: safeString(member?.status, 'ativo'),
+      recruitedAt: safeString(member?.recruitedAt, new Date().toISOString()),
+      trainingEndsAt: member?.trainingEndsAt || null,
+      injuryEndsAt: member?.injuryEndsAt || null,
+      lastBattleAt: member?.lastBattleAt || null,
+    }))
+    .filter((member) => member.id);
+}
+
+function memberContribution(type, level, status) {
+  const statusMultiplier =
+    status === 'ativo' ? 1 : status === 'treinando' ? 0.55 : status === 'ferido' ? 0.25 : 0;
+
+  const power = Math.max(1, level) * statusMultiplier;
+
+  switch (type) {
+    case 'capanga':
+      return { rajada: power * 1.0, blindagem: power * 0.4, folego: power * 0.6 };
+    case 'frente':
+      return { rajada: power * 1.3, blindagem: power * 0.4, quebra: power * 0.8 };
+    case 'executor':
+      return { rajada: power * 1.2, quebra: power * 1.2, weaponPower: power * 0.7 };
+    case 'assassino':
+      return { rajada: power * 1.5, quebra: power * 1.4, mobilityPower: power * 0.5 };
+    case 'muralha':
+      return { blindagem: power * 1.8, folego: power * 1.2 };
+    case 'certeiro':
+      return { rajada: power * 1.1, intelPower: power * 0.7, weaponPower: power * 0.9 };
+    case 'motorista':
+      return { mobilityPower: power * 1.5, folego: power * 0.4 };
+    case 'nitro':
+      return { mobilityPower: power * 1.4, rajada: power * 0.8, quebra: power * 0.5 };
+    case 'armeiro':
+      return { weaponPower: power * 1.6, rajada: power * 0.5 };
+    case 'informante':
+      return { intelPower: power * 1.7, coordinationPower: power * 0.7 };
+    case 'wifi':
+      return { coordinationPower: power * 1.8, intelPower: power * 0.6 };
+    case 'medico':
+      return { medicalPower: power * 1.8, folego: power * 0.7 };
+    case 'lavador':
+      return { economyPower: power * 1.8, lootPower: power * 0.4 };
+    case 'ladrao':
+      return { lootPower: power * 1.7, mobilityPower: power * 0.5, quebra: power * 0.4 };
+    case 'negociador':
+      return { negotiationPower: power * 1.8, economyPower: power * 0.7, coordinationPower: power * 0.5 };
+    default:
+      return {};
+  }
+}
+
+function buildGangBattleCompositionStats(members = []) {
+  const stats = emptyGangStats();
+  const normalizedMembers = normalizeGangMembers(members);
+
+  stats.totalMembers = normalizedMembers.length;
+  stats.ativos = normalizedMembers.filter((m) => m.status === 'ativo').length;
+  stats.feridos = normalizedMembers.filter((m) => m.status === 'ferido').length;
+  stats.mortos = normalizedMembers.filter((m) => m.status === 'morto').length;
+
+  normalizedMembers.forEach((member) => {
+    const contribution = memberContribution(member.type, member.level, member.status);
+    Object.entries(contribution).forEach(([key, value]) => {
+      stats[key] = safeNumber(stats[key], 0) + safeNumber(value, 0);
+    });
+  });
+
+  stats.totalPower = Number(
+    (
+      stats.rajada * 1.15 +
+      stats.blindagem * 1.05 +
+      stats.folego * 0.95 +
+      stats.quebra * 1.2 +
+      stats.intelPower * 0.35 +
+      stats.mobilityPower * 0.3 +
+      stats.weaponPower * 0.4 +
+      stats.coordinationPower * 0.25
+    ).toFixed(2)
+  );
+
+  return stats;
+}
+
+function pickRandomMemberOfType(members, type) {
+  const pool = members.filter((member) => member.type === type && member.status === 'ativo');
+  if (!pool.length) return null;
+  return pool[Math.floor(Math.random() * pool.length)] || null;
+}
+
+function resolveGangCasualties({ members = [], ownStats = null, enemyStats = null, ctLevel = 1, side = 'attacker' }) {
+  const normalizedMembers = normalizeGangMembers(members);
+  const losses = emptyGangLosses();
+
+  if (!normalizedMembers.length) {
+    return losses;
+  }
+
+  const localOwnStats = ownStats && typeof ownStats === 'object' ? ownStats : buildGangBattleCompositionStats(normalizedMembers);
+  const localEnemyStats = enemyStats && typeof enemyStats === 'object' ? enemyStats : emptyGangStats();
+
+  const activeMembers = normalizedMembers.filter((member) => member.status === 'ativo');
+  if (!activeMembers.length) {
+    return losses;
+  }
+
+  const enemyPressure = safeNumber(localEnemyStats.totalPower, 0) / Math.max(1, safeNumber(localOwnStats.totalPower, 0) + 1);
+  const casualtyPressure = clamp(
+    0.06 +
+      enemyPressure * 0.12 +
+      (side === 'attacker' ? 0.03 : 0.01) -
+      safeNumber(localOwnStats.blindagem, 0) * 0.0008 -
+      safeNumber(localOwnStats.folego, 0) * 0.0006,
+    0.01,
+    0.35
+  );
+
+  const affectedCount = clamp(
+    Math.round(activeMembers.length * casualtyPressure * randomBetween(0.75, 1.1)),
+    0,
+    activeMembers.length
+  );
+
+  if (affectedCount <= 0) {
+    return losses;
+  }
+
+  const preserveChance = clamp(
+    safeNumber(localOwnStats.medicalPower, 0) * 0.003 + safeNumber(ctLevel, 1) * 0.015,
+    0,
+    0.65
+  );
+
+  const deathChance = clamp(
+    0.28 +
+      safeNumber(localEnemyStats.quebra, 0) * 0.002 -
+      safeNumber(localOwnStats.medicalPower, 0) * 0.003 -
+      safeNumber(ctLevel, 1) * 0.015,
+    0.05,
+    0.75
+  );
+
+  const mutablePool = [...activeMembers];
+
+  for (let i = 0; i < affectedCount && mutablePool.length > 0; i += 1) {
+    const index = Math.floor(Math.random() * mutablePool.length);
+    const member = mutablePool.splice(index, 1)[0];
+
+    if (!member) continue;
+
+    const savedByMedic = Math.random() < preserveChance;
+    if (!savedByMedic && Math.random() < deathChance) {
+      losses.mortos[member.type] += 1;
+    } else {
+      losses.feridos[member.type] += 1;
+      if (savedByMedic) {
+        losses.preservadosPeloMedico += 1;
+      }
+    }
+  }
+
+  return losses;
+}
+
+function applyGangLossesToMembers(gangDoc, losses) {
+  if (!gangDoc || !Array.isArray(gangDoc.members) || !losses) return;
+
+  const now = Date.now();
+  const sixHoursFromNow = new Date(now + 6 * 60 * 60 * 1000).toISOString();
+
+  GANG_MEMBER_TYPES.forEach((type) => {
+    let deathsToApply = safeNumber(losses?.mortos?.[type], 0);
+    let injuriesToApply = safeNumber(losses?.feridos?.[type], 0);
+
+    if (deathsToApply > 0) {
+      gangDoc.members.forEach((member) => {
+        if (
+          deathsToApply > 0 &&
+          member?.type === type &&
+          safeString(member?.status, 'ativo') === 'ativo'
+        ) {
+          member.status = 'morto';
+          member.injuryEndsAt = null;
+          member.trainingEndsAt = null;
+          member.lastBattleAt = new Date().toISOString();
+          deathsToApply -= 1;
+        }
+      });
+    }
+
+    if (injuriesToApply > 0) {
+      gangDoc.members.forEach((member) => {
+        if (
+          injuriesToApply > 0 &&
+          member?.type === type &&
+          safeString(member?.status, 'ativo') === 'ativo'
+        ) {
+          member.status = 'ferido';
+          member.injuryEndsAt = sixHoursFromNow;
+          member.trainingEndsAt = null;
+          member.lastBattleAt = new Date().toISOString();
+          injuriesToApply -= 1;
+        }
+      });
+    }
+  });
+
+  gangDoc.markModified('members');
 }
 
 function calculateFactionInvestmentBuffs(investments = {}) {
@@ -92,6 +400,33 @@ async function getFactionCombatContext(player) {
   } catch (error) {
     console.error('Erro ao carregar contexto de facção no ataque:', error);
     return null;
+  }
+}
+
+async function getGangCombatContext(playerId) {
+  try {
+    if (!playerId) {
+      return { members: [], stats: emptyGangStats(), ctLevel: 1, doc: null };
+    }
+
+    const gangDoc = await GangWar.findOne({ playerId: String(playerId) });
+    if (!gangDoc) {
+      return { members: [], stats: emptyGangStats(), ctLevel: 1, doc: null };
+    }
+
+    const members = normalizeGangMembers(gangDoc.members || []);
+    const stats = buildGangBattleCompositionStats(members);
+    const ctLevel = Math.max(1, safeNumber(gangDoc?.ct?.level, 1));
+
+    return {
+      members,
+      stats,
+      ctLevel,
+      doc: gangDoc,
+    };
+  } catch (error) {
+    console.error('Erro ao carregar contexto da gangue no ataque:', error);
+    return { members: [], stats: emptyGangStats(), ctLevel: 1, doc: null };
   }
 }
 
@@ -181,6 +516,10 @@ function buildBattleResponse(attack) {
       defenderFactionDefenseBonusPercent: safeNumber(attack.defenderFactionDefenseBonusPercent, 0),
       defenderFactionBaseDefenseBonusPercent: safeNumber(attack.defenderFactionBaseDefenseBonusPercent, 0),
       defenderFactionHpBonusPercent: safeNumber(attack.defenderFactionHpBonusPercent, 0),
+      attackerGangLosses: attack.attackerGangLosses || null,
+      defenderGangLosses: attack.defenderGangLosses || null,
+      attackerGangStats: attack.attackerGangStats || null,
+      defenderGangStats: attack.defenderGangStats || null,
     },
     attacker: {
       playerId: attack.attackerId,
@@ -199,7 +538,14 @@ function buildBattleResponse(attack) {
   };
 }
 
-function resolveAttackMath(attacker, defender, attackerFaction, defenderFaction) {
+function resolveAttackMath(
+  attacker,
+  defender,
+  attackerFaction,
+  defenderFaction,
+  attackerGangStats,
+  defenderGangStats
+) {
   const attackerBasePower = safeNumber(attacker.power, calculatePlayerPower(attacker));
   const defenderBasePower = safeNumber(defender.power, calculatePlayerPower(defender));
 
@@ -217,6 +563,9 @@ function resolveAttackMath(attacker, defender, attackerFaction, defenderFaction)
   const defenderAgilityPercent = safeNumber(defenderBuffs.agilityPercent, 0);
   const defenderIntelligencePercent = safeNumber(defenderBuffs.intelligencePercent, 0);
 
+  const attackerGangPower = safeNumber(attackerGangStats?.totalPower, 0);
+  const defenderGangPower = safeNumber(defenderGangStats?.totalPower, 0);
+
   const effectiveAttackerPower = Math.floor(
     attackerBasePower *
       (1 +
@@ -224,7 +573,8 @@ function resolveAttackMath(attacker, defender, attackerFaction, defenderFaction)
           attackerAgilityPercent * 0.35 +
           attackerIntelligencePercent * 0.25 +
           attackerRespectPercent * 0.15) /
-          100)
+          100) +
+      attackerGangPower * 0.45
   );
 
   const effectiveDefenderPower = Math.floor(
@@ -235,7 +585,8 @@ function resolveAttackMath(attacker, defender, attackerFaction, defenderFaction)
           defenderHpPercent * 0.4 +
           defenderAgilityPercent * 0.2 +
           defenderIntelligencePercent * 0.2) /
-          100)
+          100) +
+      defenderGangPower * 0.45
   );
 
   const chance = calculateWinChance(effectiveAttackerPower, effectiveDefenderPower);
@@ -260,10 +611,12 @@ function resolveAttackMath(attacker, defender, attackerFaction, defenderFaction)
         1 +
           (attackerAttackPercent * 0.0025 +
             attackerRespectPercent * 0.002 +
-            attackerIntelligencePercent * 0.0015 -
+            attackerIntelligencePercent * 0.0015 +
+            safeNumber(attackerGangStats?.lootPower, 0) * 0.003 -
             defenderDefensePercent * 0.0015 -
             defenderBaseDefensePercent * 0.0025 -
-            defenderHpPercent * 0.0015)
+            defenderHpPercent * 0.0015 -
+            safeNumber(defenderGangStats?.blindagem, 0) * 0.001)
       )
     );
 
@@ -312,6 +665,9 @@ export async function startBattle(req, res) {
       targetTileY,
       originTileX,
       originTileY,
+      attackerGangMembers = [],
+      attackerGangStats = null,
+      attackerCTLevel = 1,
     } = req.body || {};
 
     if (!targetId) {
@@ -327,7 +683,11 @@ export async function startBattle(req, res) {
       return res.status(404).json({ error: 'Jogador alvo não encontrado' });
     }
 
-    if (attacker.factionId && defender.factionId && String(attacker.factionId) === String(defender.factionId)) {
+    if (
+      attacker.factionId &&
+      defender.factionId &&
+      String(attacker.factionId) === String(defender.factionId)
+    ) {
       return res.status(403).json({ error: 'Você não pode atacar membros da mesma facção' });
     }
 
@@ -351,8 +711,22 @@ export async function startBattle(req, res) {
 
     const attackerFaction = await getFactionCombatContext(attacker);
     const defenderFaction = await getFactionCombatContext(defender);
+    const defenderGangContext = await getGangCombatContext(defender._id);
 
-    const previewMath = resolveAttackMath(attacker, defender, attackerFaction, defenderFaction);
+    const normalizedAttackerGangMembers = normalizeGangMembers(attackerGangMembers);
+    const normalizedAttackerGangStats =
+      attackerGangStats && typeof attackerGangStats === 'object'
+        ? attackerGangStats
+        : buildGangBattleCompositionStats(normalizedAttackerGangMembers);
+
+    const previewMath = resolveAttackMath(
+      attacker,
+      defender,
+      attackerFaction,
+      defenderFaction,
+      normalizedAttackerGangStats,
+      defenderGangContext.stats
+    );
 
     const attack = await Attack.create({
       id: generateId(),
@@ -363,7 +737,7 @@ export async function startBattle(req, res) {
       attackerFactionName: attackerFaction?.factionName || '',
       attackerFactionTag: attackerFaction?.factionTag || '',
       targetId: String(defender._id),
-      targetName: defender.name,
+      targetName: targetName || defender.name,
       defenderFactionId: defenderFaction?.factionId || null,
       defenderFactionName: defenderFaction?.factionName || '',
       defenderFactionTag: defenderFaction?.factionTag || '',
@@ -387,6 +761,10 @@ export async function startBattle(req, res) {
       defenderFactionHpBonusPercent: previewMath.defenderFactionHpBonusPercent,
       attackerSnapshot: buildSnapshot(attacker),
       defenderSnapshot: buildSnapshot(defender),
+      attackerGangMembers: normalizedAttackerGangMembers,
+      attackerGangStats: normalizedAttackerGangStats,
+      attackerCTLevel: Math.max(1, safeNumber(attackerCTLevel, 1)),
+      defenderGangStats: defenderGangContext.stats,
       message: 'Batalha iniciada.',
     });
 
@@ -455,7 +833,11 @@ export async function resolveBattle(req, res) {
       return res.status(404).json({ error: 'Atacante ou defensor não encontrado' });
     }
 
-    if (attacker.factionId && defender.factionId && String(attacker.factionId) === String(defender.factionId)) {
+    if (
+      attacker.factionId &&
+      defender.factionId &&
+      String(attacker.factionId) === String(defender.factionId)
+    ) {
       return res.status(403).json({ error: 'Você não pode atacar membros da mesma facção' });
     }
 
@@ -463,7 +845,38 @@ export async function resolveBattle(req, res) {
 
     const attackerFaction = await getFactionCombatContext(attacker);
     const defenderFaction = await getFactionCombatContext(defender);
-    const math = resolveAttackMath(attacker, defender, attackerFaction, defenderFaction);
+
+    const defenderGangContext = await getGangCombatContext(defender._id);
+    const attackerGangMembers = normalizeGangMembers(attack.attackerGangMembers || []);
+    const attackerGangStats =
+      attack.attackerGangStats && typeof attack.attackerGangStats === 'object'
+        ? attack.attackerGangStats
+        : buildGangBattleCompositionStats(attackerGangMembers);
+
+    const math = resolveAttackMath(
+      attacker,
+      defender,
+      attackerFaction,
+      defenderFaction,
+      attackerGangStats,
+      defenderGangContext.stats
+    );
+
+    const attackerGangLosses = resolveGangCasualties({
+      members: attackerGangMembers,
+      ownStats: attackerGangStats,
+      enemyStats: defenderGangContext.stats,
+      ctLevel: safeNumber(attack.attackerCTLevel, 1),
+      side: 'attacker',
+    });
+
+    const defenderGangLosses = resolveGangCasualties({
+      members: defenderGangContext.members,
+      ownStats: defenderGangContext.stats,
+      enemyStats: attackerGangStats,
+      ctLevel: defenderGangContext.ctLevel,
+      side: 'defender',
+    });
 
     attacker.balances.dirtyMoney = Math.max(
       0,
@@ -490,7 +903,11 @@ export async function resolveBattle(req, res) {
       now + DEFENDER_PVP_PROTECTION_MS
     ).toISOString();
 
-    attack.status = 'resolved';
+    if (defenderGangContext.doc) {
+      applyGangLossesToMembers(defenderGangContext.doc, defenderGangLosses);
+      await defenderGangContext.doc.save();
+    }
+attack.status = 'resolved';
     attack.success = math.success;
     attack.critical = math.critical;
     attack.loot = math.loot;
@@ -513,6 +930,10 @@ export async function resolveBattle(req, res) {
     attack.defenderFactionId = defenderFaction?.factionId || null;
     attack.defenderFactionName = defenderFaction?.factionName || '';
     attack.defenderFactionTag = defenderFaction?.factionTag || '';
+    attack.attackerGangStats = attackerGangStats;
+    attack.defenderGangStats = defenderGangContext.stats;
+    attack.attackerGangLosses = attackerGangLosses;
+    attack.defenderGangLosses = defenderGangLosses;
     attack.message = math.message;
     attack.resolvedAtIso = new Date().toISOString();
 

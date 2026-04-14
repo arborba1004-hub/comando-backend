@@ -17,6 +17,14 @@ const attackSchema = new mongoose.Schema(
     targetId: { type: String, required: true, index: true },
     targetName: { type: String, required: true },
 
+    attackerFactionId: { type: String, default: null },
+    attackerFactionName: { type: String, default: '' },
+    attackerFactionTag: { type: String, default: '' },
+
+    defenderFactionId: { type: String, default: null },
+    defenderFactionName: { type: String, default: '' },
+    defenderFactionTag: { type: String, default: '' },
+
     origin: {
       tileX: { type: Number, default: 0 },
       tileY: { type: Number, default: 0 },
@@ -61,6 +69,21 @@ const attackSchema = new mongoose.Schema(
     defenderDirtyMoneyDelta: { type: Number, default: 0 },
     attackerCorreDelta: { type: Number, default: 0 },
     defenderCorreDelta: { type: Number, default: 0 },
+
+    attackerFactionAttackBonusPercent: { type: Number, default: 0 },
+    attackerFactionAgilityBonusPercent: { type: Number, default: 0 },
+    attackerFactionIntelligenceBonusPercent: { type: Number, default: 0 },
+    defenderFactionDefenseBonusPercent: { type: Number, default: 0 },
+    defenderFactionBaseDefenseBonusPercent: { type: Number, default: 0 },
+    defenderFactionHpBonusPercent: { type: Number, default: 0 },
+
+    attackerGangMembers: { type: Array, default: [] },
+    attackerGangStats: { type: Object, default: null },
+    attackerCTLevel: { type: Number, default: 1 },
+
+    attackerGangLosses: { type: Object, default: null },
+    defenderGangLosses: { type: Object, default: null },
+    defenderGangStats: { type: Object, default: null },
 
     message: { type: String, default: '' },
     createdAtIso: { type: String, default: () => new Date().toISOString() },

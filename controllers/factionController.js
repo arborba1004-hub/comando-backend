@@ -1098,3 +1098,139 @@ export async function transferLeadership(req, res) {
     return res.status(500).json({ error: 'Erro ao transferir liderança' });
   }
 }
+
+export async function acceptJoinRequest(req, res) {
+  try {
+    const player = req.player;
+    const targetPlayerId = normalizeText(req.body?.targetPlayerId, 80);
+
+    if (!targetPlayerId) {
+      return res.status(400).json({ error: 'targetPlayerId é obrigatório' });
+    }
+
+    const faction = await getFactionByPlayer(player);
+    if (!faction) {
+      return res.status(404).json({ error: 'Facção não encontrada' });
+    }
+
+    const isLeader = String(faction.leaderId) === String(player._id);
+    const canAccept = requireFactionPermission(
+      faction,
+      String(player._id),
+      'canAcceptRequests'
+    );
+
+    if (!isLeader && !canAccept) {
+      return res.status(403).json({ error: 'Sem permissão para aceitar solicitações' });
+    }
+
+    refreshFactionDerivedFields(faction);
+
+    const joinRequest = faction.joinRequests.find(
+      (item) => String(item.playerId) === String(targetPlayerId)
+    );
+
+    if (!joinRequest) {
+      return res.status(404).json({ error: 'Solicitação não encontrada' });
+    }
+
+    if (faction.members.length >= MAX_FACTION_MEMBERS) {
+      return res.status(400).json({ error: 'A facção já atingiu o limite de membros' });
+    }
+
+    const targetPlayer = await Player.findById(targetPlayerId);
+    if (!targetPlayer) {
+      faction.joinRequests = faction.joinRequests.filter(
+        (item) => String(item.playerId) !== String(targetPlayerId)
+      );
+      await faction.save();
+      return res.status(404).json({ error: 'Jogador não encontrado' });
+    }
+
+    if (targetPlayer.factionId) {
+      faction.joinRequests = faction.joinRequests.filter(
+        (item) => String(item.playerId) !== String(targetPlayerId)
+      );
+      await faction.save();
+      return res.status(400).json({ error: 'Jogador já está em uma facção' });
+    }
+
+    const newMember = buildFactionMemberFromPlayer(targetPlayer, 'member');
+    faction.members.push(newMember);
+
+    faction.joinRequests = faction.joinRequests.filter(
+      (item) => String(item.playerId) !== String(targetPlayerId)
+    );
+
+    addFactionActivity(faction, 'member_joined', player, targetPlayer, {
+      via: 'join_request_accepted',
+    });
+
+    addFactionExp(faction, 20);
+    refreshFactionDerivedFields(faction);
+    await faction.save();
+
+    targetPlayer.factionId = faction.id;
+    bumpVersion(targetPlayer);
+    await targetPlayer.save();
+
+    return res.json({
+      success: true,
+      faction: normalizeFactionDocument(faction),
+    });
+  } catch (error) {
+    console.error('Erro ao aceitar solicitação:', error);
+    return res.status(500).json({ error: 'Erro ao aceitar solicitação' });
+  }
+}
+
+export async function rejectJoinRequest(req, res) {
+  try {
+    const player = req.player;
+    const targetPlayerId = normalizeText(req.body?.targetPlayerId, 80);
+
+    if (!targetPlayerId) {
+      return res.status(400).json({ error: 'targetPlayerId é obrigatório' });
+    }
+
+    const faction = await getFactionByPlayer(player);
+    if (!faction) {
+      return res.status(404).json({ error: 'Facção não encontrada' });
+    }
+
+    const isLeader = String(faction.leaderId) === String(player._id);
+    const canAccept = requireFactionPermission(
+      faction,
+      String(player._id),
+      'canAcceptRequests'
+    );
+
+    if (!isLeader && !canAccept) {
+      return res.status(403).json({ error: 'Sem permissão para recusar solicitações' });
+    }
+
+    const joinRequest = faction.joinRequests.find(
+      (item) => String(item.playerId) === String(targetPlayerId)
+    );
+
+    if (!joinRequest) {
+      return res.status(404).json({ error: 'Solicitação não encontrada' });
+    }
+
+    faction.joinRequests = faction.joinRequests.filter(
+      (item) => String(item.playerId) !== String(targetPlayerId)
+    );
+
+    addFactionActivity(faction, 'request_rejected', player, joinRequest, {});
+    refreshFactionDerivedFields(faction);
+    await faction.save();
+
+    return res.json({
+      success: true,
+      faction: normalizeFactionDocument(faction),
+    });
+  } catch (error) {
+    console.error('Erro ao recusar solicitação:', error);
+    return res.status(500).json({ error: 'Erro ao recusar solicitação' });
+  }
+}

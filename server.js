@@ -11,7 +11,7 @@ import chatRoutes from './routes/chatRoutes.js';
 import laundryRoutes from './routes/laundryRoutes.js';
 import gameRoutes from './routes/gameRoutes.js';
 import briberyRoutes from './routes/briberyRoutes.js';
-import gangWarRoutes from './routes/gangWarRoutes.js
+import gangWarRoutes from './routes/gangWarRoutes.js';
 import gangRoutes from './routes/gangRoutes.js';
 import attackRoutes from './routes/attackRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
@@ -20,7 +20,7 @@ import shopRoutes from './routes/shopRoutes.js';
 import arsenalRoutes from './routes/arsenalRoutes.js';
 import fugaRoutes from './routes/fugaRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
-import adminRoutes from './routes/adminRoutes.js'
+import adminRoutes from './routes/adminRoutes.js';
 import factionHelpRoutes from './routes/factionHelpRoutes.js';
 import factionInviteRoutes from './routes/factionInviteRoutes.js';
 
@@ -55,7 +55,6 @@ app.use('/chat', chatRoutes);
 app.use('/faction-help', factionHelpRoutes);
 app.use('/laundry', laundryRoutes);
 app.use('/game', gameRoutes);
-import gangWarRoutes from './routes/gangWarRoutes.js';
 app.use(gangWarRoutes);
 app.use('/gang', gangRoutes);
 

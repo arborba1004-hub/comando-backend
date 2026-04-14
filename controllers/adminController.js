@@ -1,5 +1,5 @@
 import Player from '../models/Player.js';
-import Gang from '../models/Gang.js';
+
 import Faction from '../models/Faction.js';
 import ChatMessage from '../models/ChatMessage.js';
 import Attack from '../models/Attack.js';
@@ -13,7 +13,7 @@ export async function resetAllData(req, res) {
     }
 
     await Player.deleteMany({});
-    await Gang.deleteMany({});
+    
     await Faction.deleteMany({});
     await ChatMessage.deleteMany({});
     await Attack.deleteMany({});

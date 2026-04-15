@@ -1014,3 +1014,77 @@ export async function getBattleHistory(req, res) {
 export async function initiateAttack(req, res) {
   return startBattle(req, res);
 }
+
+// attackController.js
+
+export async function estimateBattle(req, res) {
+  try {
+    const attacker = req.player;
+    const {
+      targetId,
+      attackerGangMembers = [],
+      attackerGangStats = null,
+      attackerCTLevel = 1,
+    } = req.body || {};
+
+    if (!targetId) {
+      return res.status(400).json({ error: 'targetId é obrigatório' });
+    }
+
+    if (String(attacker._id) === String(targetId)) {
+      return res.status(400).json({ error: 'Não pode atacar a si mesmo' });
+    }
+
+    const defender = await Player.findById(targetId);
+    if (!defender) {
+      return res.status(404).json({ error: 'Jogador alvo não encontrado' });
+    }
+
+    // Verificação de mesma facção (opcional, mas mantém consistência)
+    if (
+      attacker.factionId &&
+      defender.factionId &&
+      String(attacker.factionId) === String(defender.factionId)
+    ) {
+      return res.status(403).json({ error: 'Você não pode atacar membros da mesma facção' });
+    }
+
+    // Carrega contextos (facção e gangue)
+    const attackerFaction = await getFactionCombatContext(attacker);
+    const defenderFaction = await getFactionCombatContext(defender);
+    const defenderGangContext = await getGangCombatContext(defender._id);
+
+    const normalizedAttackerGangMembers = normalizeGangMembers(attackerGangMembers);
+    const normalizedAttackerGangStats =
+      attackerGangStats && typeof attackerGangStats === 'object'
+        ? attackerGangStats
+        : buildGangBattleCompositionStats(normalizedAttackerGangMembers);
+
+    // Calcula a estimativa usando a mesma função do ataque real
+    const previewMath = resolveAttackMath(
+      attacker,
+      defender,
+      attackerFaction,
+      defenderFaction,
+      normalizedAttackerGangStats,
+      defenderGangContext.stats
+    );
+
+    // Retorna os dados da estimativa (mesmo formato do startBattle, mas sem battleId)
+    return res.json({
+      estimatedLoot: previewMath.loot,
+      estimatedChance: Number((previewMath.chance * 100).toFixed(2)),
+      attackerPower: previewMath.attackerPower,
+      defenderPower: previewMath.defenderPower,
+      correCost: ATTACK_CORRE_COST,
+      // Inclui detalhes adicionais para transparência (opcional)
+      attackerFactionBonuses: attackerFaction?.investmentBuffs || null,
+      defenderFactionBonuses: defenderFaction?.investmentBuffs || null,
+      attackerGangPower: normalizedAttackerGangStats.totalPower,
+      defenderGangPower: defenderGangContext.stats.totalPower,
+    });
+  } catch (error) {
+    console.error('Erro ao estimar batalha:', error);
+    return res.status(500).json({ error: 'Erro ao estimar batalha' });
+  }
+}

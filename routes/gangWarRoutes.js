@@ -6,6 +6,7 @@ import {
   handleCompleteTraining,
   handlePayMaintenance,
   handleRecruitMember,
+  handleSetFormation,
   handleStartTraining,
   handleUpgradeCT,
   serializeGang,
@@ -77,6 +78,18 @@ router.post('/gang-war/maintenance/pay', authMiddleware, async (req, res) => {
   } catch (error) {
     return res.status(400).json({
       error: error instanceof Error ? error.message : 'Erro ao pagar manutenção',
+    });
+  }
+});
+
+router.post('/gang-war/formation/set', authMiddleware, async (req, res) => {
+  try {
+    const { formation } = req.body || {};
+    const payload = await handleSetFormation(req.player, String(formation || ''));
+    return res.json(payload);
+  } catch (error) {
+    return res.status(400).json({
+      error: error instanceof Error ? error.message : 'Erro ao alterar formação',
     });
   }
 });

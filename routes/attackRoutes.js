@@ -10,6 +10,7 @@ import {
 
 const router = Router();
 
+router.post('/estimate', authMiddleware, estimateBattle);
 router.post('/start', authMiddleware, startBattle);
 router.post('/resolve/:battleId', authMiddleware, resolveBattle);
 router.get('/report/:battleId', authMiddleware, getBattleReport);

@@ -386,7 +386,7 @@ function buildBattleResponse(attack) {
         attack.defenderFactionHpBonusPercent,
         0
       ),
-      attackerGangLosses: attack.attackerGangLosses || null,
+attackerGangLosses: attack.attackerGangLosses || null,
       defenderGangLosses: attack.defenderGangLosses || null,
       attackerGangStats: attack.attackerGangStats || null,
       defenderGangStats: attack.defenderGangStats || null,
@@ -627,4 +627,359 @@ export async function startBattle(req, res) {
       attackerFactionIntelligenceBonusPercent:
         previewMath.attackerFactionIntelligenceBonusPercent,
       defenderFactionDefenseBonusPercent: previewMath.defenderFactionDefenseBonusPercent,
-      defenderFactionBaseDefenseBo
+      defenderFactionBaseDefenseBonusPercent:
+        previewMath.defenderFactionBaseDefenseBonusPercent,
+      defenderFactionHpBonusPercent: previewMath.defenderFactionHpBonusPercent,
+      attackerSnapshot: buildSnapshot(attacker),
+      defenderSnapshot: buildSnapshot(defender),
+      attackerGangMembers: normalizedAttackerGangMembers,
+      attackerGangStats: normalizedAttackerGangStats,
+      attackerCTLevel: attackerCTLevel,
+      defenderGangStats: defenderGangContext.stats,
+      message: 'Batalha iniciada.',
+    });
+
+    return res.json({
+      battleId: attack.id,
+      success: true,
+      message: 'Batalha iniciada.',
+      estimatedLoot: previewMath.loot,
+      estimatedChance: Number((previewMath.chance * 100).toFixed(2)),
+      attackerPower: previewMath.attackerPower,
+      defenderPower: previewMath.defenderPower,
+      attackerFaction: attackerFaction
+        ? {
+            factionId: attackerFaction.factionId,
+            factionName: attackerFaction.factionName,
+            factionTag: attackerFaction.factionTag,
+            investmentBuffs: attackerFaction.investmentBuffs,
+          }
+        : null,
+      defenderFaction: defenderFaction
+        ? {
+            factionId: defenderFaction.factionId,
+            factionName: defenderFaction.factionName,
+            factionTag: defenderFaction.factionTag,
+            investmentBuffs: defenderFaction.investmentBuffs,
+          }
+        : null,
+      route: {
+        fromTileX: attack.origin.tileX,
+        fromTileY: attack.origin.tileY,
+        toTileX: attack.target.tileX,
+        toTileY: attack.target.tileY,
+      },
+    });
+  } catch (error) {
+    console.error('Erro ao iniciar batalha:', error);
+    return res.status(500).json({ error: 'Erro ao iniciar batalha' });
+  }
+}
+
+export async function resolveBattle(req, res) {
+  try {
+    const requester = req.player;
+    const { battleId } = req.params;
+
+    const attack = await Attack.findOne({ id: battleId });
+    if (!attack) {
+      return res.status(404).json({ error: 'Batalha não encontrada' });
+    }
+
+    if (
+      String(attack.attackerId) !== String(requester._id) &&
+      String(attack.targetId) !== String(requester._id)
+    ) {
+      return res.status(403).json({ error: 'Você não tem acesso a esta batalha' });
+    }
+
+    if (attack.status === 'resolved' && attack.success !== null) {
+      return res.json(buildBattleResponse(attack));
+    }
+
+    const attacker = await Player.findById(attack.attackerId);
+    const defender = await Player.findById(attack.targetId);
+
+    if (!attacker || !defender) {
+      return res.status(404).json({ error: 'Atacante ou defensor não encontrado' });
+    }
+
+    if (
+      attacker.factionId &&
+      defender.factionId &&
+      String(attacker.factionId) === String(defender.factionId)
+    ) {
+      return res.status(403).json({
+        error: 'Você não pode atacar membros da mesma facção',
+      });
+    }
+
+    const now = Date.now();
+const attackerFaction = await getFactionCombatContext(attacker);
+    const defenderFaction = await getFactionCombatContext(defender);
+
+    const attackerGangContext = await getGangCombatContext(attacker._id);
+    const defenderGangContext = await getGangCombatContext(defender._id);
+
+    const attackerGangMembers = attackerGangContext.members;
+    const attackerGangStats = attackerGangContext.stats;
+    const attackerCTLevel = attackerGangContext.ctLevel;
+
+    // Use saved math from startBattle to avoid re-rolling RNG (would give different result than shown)
+    const math = {
+      success: attack.success !== undefined ? attack.success : resolveAttackMath(
+        attacker, defender, attackerFaction, defenderFaction,
+        attackerGangStats, defenderGangContext.stats
+      ).success,
+      critical: attack.critical || false,
+      loot: attack.loot || 0,
+      chance: (attack.chance || 0) / 100,
+      attackerPower: attack.attackerPower || 0,
+      defenderPower: attack.defenderPower || 0,
+      attackerDirtyMoneyDelta: attack.success ? (attack.loot || 0) : -Math.floor(safeNumber(attacker.balances?.dirtyMoney, 0) * 0.05),
+      defenderDirtyMoneyDelta: attack.success ? -(attack.loot || 0) : 0,
+      attackerCorreDelta: -ATTACK_CORRE_COST,
+      defenderCorreDelta: 0,
+      attackerFactionAttackBonusPercent: attack.attackerFactionAttackBonusPercent || 0,
+      attackerFactionAgilityBonusPercent: attack.attackerFactionAgilityBonusPercent || 0,
+      attackerFactionIntelligenceBonusPercent: attack.attackerFactionIntelligenceBonusPercent || 0,
+      defenderFactionDefenseBonusPercent: attack.defenderFactionDefenseBonusPercent || 0,
+      defenderFactionBaseDefenseBonusPercent: attack.defenderFactionBaseDefenseBonusPercent || 0,
+      defenderFactionHpBonusPercent: attack.defenderFactionHpBonusPercent || 0,
+      message: attack.success
+        ? (attack.critical ? 'Ataque crítico! Você dominou o território.' : 'Ataque bem-sucedido!')
+        : 'Seu ataque falhou. Você perdeu 5% do dinheiro sujo.',
+    };
+
+    // If attack was not yet resolved (status=started), re-roll only if no saved result
+    if (attack.status === 'started' && attack.success === undefined) {
+      const freshMath = resolveAttackMath(
+        attacker, defender, attackerFaction, defenderFaction,
+        attackerGangStats, defenderGangContext.stats
+      );
+      Object.assign(math, freshMath);
+    }
+
+
+    const attackerGangLosses = resolveOfficialGangCasualties({
+      members: attackerGangMembers,
+      ownStats: attackerGangStats,
+      enemyStats: defenderGangContext.stats,
+      ctLevel: attackerCTLevel,
+      side: 'attacker',
+      ownFormation: attackerGangContext.formation,
+    });
+
+    const defenderGangLosses = resolveOfficialGangCasualties({
+      members: defenderGangContext.members,
+      ownStats: defenderGangContext.stats,
+      enemyStats: attackerGangStats,
+      ctLevel: defenderGangContext.ctLevel,
+      side: 'defender',
+      ownFormation: defenderGangContext.formation,
+    });
+
+    attacker.balances.dirtyMoney = Math.max(
+      0,
+      safeNumber(attacker.balances?.dirtyMoney, 0) + math.attackerDirtyMoneyDelta
+    );
+    defender.balances.dirtyMoney = Math.max(
+      0,
+      safeNumber(defender.balances?.dirtyMoney, 0) + math.defenderDirtyMoneyDelta
+    );
+
+    attacker.balances.corre = Math.max(
+      0,
+      safeNumber(attacker.balances?.corre, 0) + math.attackerCorreDelta
+    );
+    defender.balances.corre = Math.max(
+      0,
+      safeNumber(defender.balances?.corre, 0) + math.defenderCorreDelta
+    );
+
+    attacker.lastAttackAt = now;
+
+    defender.punishments = defender.punishments || {};
+    defender.punishments.pvpProtectionUntil = new Date(
+      now + DEFENDER_PVP_PROTECTION_MS
+    ).toISOString();
+
+    if (attackerGangContext.doc) {
+      await applyLossesToGangDoc(attackerGangContext.doc, attackerGangLosses);
+    }
+
+    if (defenderGangContext.doc) {
+      await applyLossesToGangDoc(defenderGangContext.doc, defenderGangLosses);
+    }
+
+    attack.status = 'resolved';
+    attack.success = math.success;
+    attack.critical = math.critical;
+    attack.loot = math.loot;
+    attack.chance = Number((math.chance * 100).toFixed(2));
+    attack.attackerPower = math.attackerPower;
+    attack.defenderPower = math.defenderPower;
+    attack.attackerDirtyMoneyDelta = math.attackerDirtyMoneyDelta;
+    attack.defenderDirtyMoneyDelta = math.defenderDirtyMoneyDelta;
+    attack.attackerCorreDelta = math.attackerCorreDelta;
+    attack.defenderCorreDelta = math.defenderCorreDelta;
+    attack.attackerFactionAttackBonusPercent = math.attackerFactionAttackBonusPercent;
+    attack.attackerFactionAgilityBonusPercent = math.attackerFactionAgilityBonusPercent;
+    attack.attackerFactionIntelligenceBonusPercent =
+      math.attackerFactionIntelligenceBonusPercent;
+    attack.defenderFactionDefenseBonusPercent = math.defenderFactionDefenseBonusPercent;
+    attack.defenderFactionBaseDefenseBonusPercent =
+      math.defenderFactionBaseDefenseBonusPercent;
+    attack.defenderFactionHpBonusPercent = math.defenderFactionHpBonusPercent;
+    attack.attackerFactionId = attackerFaction?.factionId || null;
+    attack.attackerFactionName = attackerFaction?.factionName || '';
+    attack.attackerFactionTag = attackerFaction?.factionTag || '';
+    attack.defenderFactionId = defenderFaction?.factionId || null;
+    attack.defenderFactionName = defenderFaction?.factionName || '';
+    attack.defenderFactionTag = defenderFaction?.factionTag || '';
+    attack.attackerGangStats = attackerGangStats;
+    attack.defenderGangStats = defenderGangContext.stats;
+    attack.attackerGangLosses = attackerGangLosses;
+    attack.defenderGangLosses = defenderGangLosses;
+    attack.message = math.message;
+    attack.resolvedAtIso = new Date().toISOString();
+
+    const historyItem = buildHistoryItem(attack);
+    const attackerNotification = buildAttackerNotification(attack);
+    const defenderNotification = buildDefenderNotification(attack);
+
+    attacker.attackHistory = pushLimited(attacker.attackHistory, historyItem, MAX_HISTORY);
+    defender.attackHistory = pushLimited(defender.attackHistory, historyItem, MAX_HISTORY);
+
+    attacker.notifications = pushLimited(
+      attacker.notifications,
+      attackerNotification,
+      MAX_NOTIFICATIONS
+    );
+    defender.notifications = pushLimited(
+      defender.notifications,
+      defenderNotification,
+      MAX_NOTIFICATIONS
+    );
+
+    bumpVersion(attacker);
+    bumpVersion(defender);
+
+    await attacker.save();
+    await defender.save();
+    await attack.save();
+
+    return res.json(buildBattleResponse(attack));
+  } catch (error) {
+    console.error('Erro ao resolver batalha:', error);
+    return res.status(500).json({ error: 'Erro ao resolver batalha' });
+  }
+}
+
+export async function getBattleReport(req, res) {
+  try {
+    const requester = req.player;
+    const { battleId } = req.params;
+
+    const attack = await Attack.findOne({ id: battleId });
+    if (!attack) {
+      return res.status(404).json({ error: 'Relatório não encontrado' });
+    }
+
+    if (
+      String(attack.attackerId) !== String(requester._id) &&
+      String(attack.targetId) !== String(requester._id)
+    ) {
+      return res.status(403).json({ error: 'Você não tem acesso a este relatório' });
+    }
+
+    return res.json(buildBattleResponse(attack));
+  } catch (error) {
+    console.error('Erro ao buscar relatório:', error);
+    return res.status(500).json({ error: 'Erro ao buscar relatório' });
+  }
+}
+
+export async function getBattleHistory(req, res) {
+  try {
+    const requester = req.player;
+
+    const attacks = await Attack.find({
+      $or: [{ attackerId: String(requester._id) }, { targetId: String(requester._id) }],
+    })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    return res.json(attacks.map(buildBattleResponse));
+  } catch (error) {
+    console.error('Erro ao buscar histórico de batalhas:', error);
+    return res.status(500).json({ error: 'Erro ao buscar histórico de batalhas' });
+  }
+}
+
+export async function initiateAttack(req, res) {
+  return startBattle(req, res);
+}
+
+export async function estimateBattle(req, res) {
+  try {
+    const attacker = req.player;
+    const { targetId } = req.body || {};
+
+    if (!targetId) {
+      return res.status(400).json({ error: 'targetId é obrigatório' });
+    }
+
+    if (String(attacker._id) === String(targetId)) {
+      return res.status(400).json({ error: 'Não pode atacar a si mesmo' });
+    }
+
+    const defender = await Player.findById(targetId);
+    if (!defender) {
+      return res.status(404).json({ error: 'Jogador alvo não encontrado' });
+    }
+
+    if (
+      attacker.factionId &&
+      defender.factionId &&
+      String(attacker.factionId) === String(defender.factionId)
+    ) {
+      return res.status(403).json({
+        error: 'Você não pode atacar membros da mesma facção',
+      });
+    }
+
+    const attackerFaction = await getFactionCombatContext(attacker);
+    const defenderFaction = await getFactionCombatContext(defender);
+
+    const attackerGangContext = await getGangCombatContext(attacker._id);
+    const defenderGangContext = await getGangCombatContext(defender._id);
+
+    const normalizedAttackerGangStats = attackerGangContext.stats;
+
+    const previewMath = resolveAttackMath(
+      attacker,
+      defender,
+      attackerFaction,
+      defenderFaction,
+      normalizedAttackerGangStats,
+      defenderGangContext.stats
+    );
+
+    return res.json({
+      estimatedLoot: previewMath.loot,
+      estimatedChance: Number((previewMath.chance * 100).toFixed(2)),
+      attackerPower: previewMath.attackerPower,
+      defenderPower: previewMath.defenderPower,
+      correCost: ATTACK_CORRE_COST,
+      attackerFactionBonuses: attackerFaction?.investmentBuffs || null,
+      defenderFactionBonuses: defenderFaction?.investmentBuffs || null,
+      attackerGangPower: normalizedAttackerGangStats.totalPower,
+      defenderGangPower: defenderGangContext.stats.totalPower,
+    });
+  } catch (error) {
+    console.error('Erro ao estimar batalha:', error);
+    return res.status(500).json({ error: 'Erro ao estimar batalha' });
+  }
+}

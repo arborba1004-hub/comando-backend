@@ -268,3 +268,33 @@ export async function handleApplyBattleLosses(player, losses) {
     await doc.save();
     return serializeGang(doc, player);
 }
+// Adicione isso ao final do seu services/gangWarService.js
+
+export async function handleCompleteTraining(player) {
+  const doc = await getOrCreateGangWar(player._id);
+  const now = Date.now();
+  let changed = false;
+
+  if (doc.trainingJobs && doc.trainingJobs.length > 0) {
+    for (const job of doc.trainingJobs) {
+      if (!job.completed && new Date(job.endsAt).getTime() <= now) {
+        job.completed = true;
+
+        const member = doc.members.find((m) => m.id === job.memberId);
+        if (member) {
+          member.level = job.toLevel;
+          member.status = 'ativo';
+          member.trainingEndsAt = null;
+        }
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    await doc.save();
+  }
+
+  return serializeGang(doc, player);
+}
+

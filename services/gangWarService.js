@@ -29,65 +29,10 @@ const MEMBER_DEFS = {
   negociador: { recruit: 2600, train: 1350, upkeep: 280, hours: 3, casualtyWeight: 1.05, base: { rajada: 2, blindagem: 5, folego: 6, quebra: 2 }, special: { negotiationPower: 10 } },
 };
 
-const FORMATION_BONUSES = {
-  pressao_total: { rajadaPercent: 18, blindagemPercent: -8, folegoPercent: -4, quebraPercent: 14, lootPercent: 0, casualtyReductionPercent: -6, medicalEfficiencyPercent: 0, mobilityPercent: 6 },
-  linha_fechada: { rajadaPercent: -6, blindagemPercent: 20, folegoPercent: 10, quebraPercent: -4, lootPercent: 0, casualtyReductionPercent: 12, medicalEfficiencyPercent: 10, mobilityPercent: -4 },
-  bote_certo: { rajadaPercent: 10, blindagemPercent: 0, folegoPercent: 0, quebraPercent: 10, lootPercent: 8, casualtyReductionPercent: 0, medicalEfficiencyPercent: 0, mobilityPercent: 8 },
-  cerco: { rajadaPercent: 6, blindagemPercent: 8, folegoPercent: 6, quebraPercent: 6, lootPercent: 0, casualtyReductionPercent: 6, medicalEfficiencyPercent: 6, mobilityPercent: 0 },
-  saque_rapido: { rajadaPercent: 0, blindagemPercent: -6, folegoPercent: -2, quebraPercent: 4, lootPercent: 22, casualtyReductionPercent: -4, medicalEfficiencyPercent: 0, mobilityPercent: 10 },
-};
-
-// Funções Utilitárias
 function round(value) { return Math.round(Number(value || 0) * 100) / 100; }
 function levelMultiplier(level) { return 1 + (Math.max(1, Number(level || 1)) - 1) * 0.18; }
-function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
-function todayKey() { return new Date().toISOString().slice(0, 10); }
 function generateMemberId(type) { return `gang_${type}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`; }
-function applyPercent(value, percent) { return Number((Number(value || 0) * (1 + Number(percent || 0) / 100)).toFixed(2)); }
-function getFormationBonus(formation) { return FORMATION_BONUSES[formation] || FORMATION_BONUSES.pressao_total; }
-
-async function reconcileGangState(doc) {
-  if (!doc) return false;
-  const now = Date.now();
-  let changed = false;
-
-  // Processar treinamentos concluídos
-  if (doc.trainingJobs && doc.trainingJobs.length > 0) {
-    for (const job of doc.trainingJobs) {
-      if (!job.completed && new Date(job.endsAt).getTime() <= now) {
-        job.completed = true;
-        const member = doc.members.find((m) => m.id === job.memberId);
-        if (member) {
-          member.level = job.toLevel;
-          member.status = 'ativo';
-          member.trainingEndsAt = null;
-        }
-        changed = true;
-      }
-    }
-  }
-
-  // Processar ferimentos e travas de status
-  for (const member of doc.members) {
-    if (member.status === 'ferido' && member.injuryEndsAt && new Date(member.injuryEndsAt).getTime() <= now) {
-      member.status = 'ativo';
-      member.injuryEndsAt = null;
-      changed = true;
-    }
-    if (member.status === 'treinando' && (!member.trainingEndsAt || new Date(member.trainingEndsAt).getTime() <= now)) {
-      // Fallback para caso o job tenha sido concluído mas o status do membro não
-      const activeJob = doc.trainingJobs.find(j => j.memberId === member.id && !j.completed);
-      if (!activeJob) {
-        member.status = 'ativo';
-        member.trainingEndsAt = null;
-        changed = true;
-      }
-    }
-  }
-
-  if (changed) await doc.save();
-  return changed;
-}
+function todayKey() { return new Date().toISOString().slice(0, 10); }
 
 export function getCTStateFromLevel(level) {
   const safeLevel = Math.max(1, Math.min(GANG_CT_MAX_LEVEL, Number(level || 1)));
@@ -107,8 +52,20 @@ export function getGangMaxMembers(ctLevel, barracoLevel = 1) {
   return GANG_BASE_CAPACITY + ct.gangCapacityBonus + barracoBonus;
 }
 
+export function getGangDailyUpkeep(members) {
+  let totalDirtyMoneyCost = 0;
+  const byType = {};
+  for (const member of members) {
+    if (member.status === 'morto') continue;
+    const def = MEMBER_DEFS[member.type];
+    const cost = Math.round(def.upkeep * levelMultiplier(member.level));
+    byType[member.type] = (byType[member.type] || 0) + cost;
+    totalDirtyMoneyCost += cost;
+  }
+  return { totalDirtyMoneyCost, byType };
+}
+
 export function serializeGang(doc, player) {
-  // CRÍTICO: Garante que o retorno bata com o que o Frontend espera no gangStore.ts
   return {
     gang: {
       id: doc._id,
@@ -128,33 +85,38 @@ export function serializeGang(doc, player) {
   };
 }
 
-export function getMemberBattleStats(member) {
-  const def = MEMBER_DEFS[member.type];
-  const mult = levelMultiplier(member.level);
-  return {
-    rajada: round(def.base.rajada * mult),
-    blindagem: round(def.base.blindagem * mult),
-    folego: round(def.base.folego * mult),
-    quebra: round(def.base.quebra * mult),
-  };
-}
+async function reconcileGangState(doc) {
+  if (!doc) return false;
+  const now = Date.now();
+  let changed = false;
 
-export function getGangDailyUpkeep(members) {
-  let totalDirtyMoneyCost = 0;
-  const byType = {};
-  Object.keys(MEMBER_DEFS).forEach(t => byType[t] = 0);
-
-  for (const member of members) {
-    if (member.status === 'morto') continue;
-    const def = MEMBER_DEFS[member.type];
-    const cost = Math.round(def.upkeep * levelMultiplier(member.level));
-    byType[member.type] += cost;
-    totalDirtyMoneyCost += cost;
+  if (doc.trainingJobs) {
+    for (const job of doc.trainingJobs) {
+      if (!job.completed && new Date(job.endsAt).getTime() <= now) {
+        job.completed = true;
+        const member = doc.members.find((m) => m.id === job.memberId);
+        if (member) {
+          member.level = job.toLevel;
+          member.status = 'ativo';
+          member.trainingEndsAt = null;
+        }
+        changed = true;
+      }
+    }
   }
-  return { totalDirtyMoneyCost, byType };
+
+  for (const member of doc.members) {
+    if (member.status === 'ferido' && member.injuryEndsAt && new Date(member.injuryEndsAt).getTime() <= now) {
+      member.status = 'ativo';
+      member.injuryEndsAt = null;
+      changed = true;
+    }
+  }
+
+  if (changed) await doc.save();
+  return changed;
 }
 
-// Handlers Principais
 export async function getOrCreateGangWar(playerId) {
   let doc = await GangWar.findOne({ playerId });
   if (!doc) {
@@ -204,17 +166,15 @@ export async function handleRecruitMember(player, type) {
 export async function handleStartTraining(player, memberId) {
   const doc = await getOrCreateGangWar(player._id);
   const member = doc.members.find(m => m.id === memberId);
-
   if (!member) throw new Error('Membro não encontrado');
-  if (member.status !== 'ativo') throw new Error('Membro indisponível para treino');
-  
+  if (member.status !== 'ativo') throw new Error('Membro indisponível');
+
   const activeJobs = doc.trainingJobs.filter(j => !j.completed).length;
-  if (activeJobs >= doc.ct.trainingSlots) throw new Error('CT sem slots livres');
+  if (activeJobs >= doc.ct.trainingSlots) throw new Error('Sem slots no CT');
 
   const def = MEMBER_DEFS[member.type];
   const cost = Math.round(def.train * levelMultiplier(member.level));
-
-  if (Number(player.balances?.dirtyMoney || 0) < cost) throw new Error('Dinheiro sujo insuficiente');
+  if (Number(player.balances?.dirtyMoney || 0) < cost) throw new Error('Dinheiro insuficiente');
 
   const hours = Math.max(1, Math.ceil(def.hours * (1 - doc.ct.trainingSpeedBonusPercent / 100)));
   const endsAt = new Date(Date.now() + hours * 3600000);
@@ -236,12 +196,16 @@ export async function handleStartTraining(player, memberId) {
   return serializeGang(doc, player);
 }
 
-// Exportações Adicionais (Upgrade, Manutenção, etc seguem a mesma lógica de serialize)
+export async function handleCompleteTraining(player) {
+  const doc = await getOrCreateGangWar(player._id);
+  await reconcileGangState(doc);
+  return serializeGang(doc, player);
+}
+
 export async function handleUpgradeCT(player) {
   const doc = await getOrCreateGangWar(player._id);
   const cost = Math.round(4000 * Math.pow(1.5, doc.ct.level - 1));
   if (player.balances.dirtyMoney < cost) throw new Error('Dinheiro insuficiente');
-  
   player.balances.dirtyMoney -= cost;
   doc.ct = getCTStateFromLevel(doc.ct.level + 1);
   await player.save();
@@ -253,7 +217,6 @@ export async function handlePayMaintenance(player) {
   const doc = await getOrCreateGangWar(player._id);
   const upkeep = getGangDailyUpkeep(doc.members);
   if (player.balances.dirtyMoney < upkeep.totalDirtyMoneyCost) throw new Error('Dinheiro insuficiente');
-  
   player.balances.dirtyMoney -= upkeep.totalDirtyMoneyCost;
   doc.lastMaintenanceDate = todayKey();
   await player.save();
@@ -262,39 +225,52 @@ export async function handlePayMaintenance(player) {
 }
 
 export async function handleApplyBattleLosses(player, losses) {
-    const doc = await getOrCreateGangWar(player._id);
-    // Lógica de aplicação de perdas mantida, mas retornando serializeGang atualizado
-    // ... (mesmo loop de killOne/injureOne do seu original)
-    await doc.save();
-    return serializeGang(doc, player);
-}
-// Adicione isso ao final do seu services/gangWarService.js
-
-export async function handleCompleteTraining(player) {
   const doc = await getOrCreateGangWar(player._id);
-  const now = Date.now();
-  let changed = false;
+  const nowIso = new Date().toISOString();
 
-  if (doc.trainingJobs && doc.trainingJobs.length > 0) {
-    for (const job of doc.trainingJobs) {
-      if (!job.completed && new Date(job.endsAt).getTime() <= now) {
-        job.completed = true;
+  function killOne(type) {
+    const member = doc.members.find(
+      (m) => m.type === type && m.status === 'ativo'
+    );
+    if (!member) return;
 
-        const member = doc.members.find((m) => m.id === job.memberId);
-        if (member) {
-          member.level = job.toLevel;
-          member.status = 'ativo';
-          member.trainingEndsAt = null;
-        }
-        changed = true;
-      }
+    member.status = 'morto';
+    member.trainingEndsAt = null;
+    member.injuryEndsAt = null;
+    member.lastBattleAt = nowIso;
+  }
+
+  function injureOne(type) {
+    const member = doc.members.find(
+      (m) => m.type === type && m.status === 'ativo'
+    );
+    if (!member) return;
+
+    const recoveryHours = Math.max(
+      2,
+      8 + member.level * 2 - Math.floor(doc.ct.recoveryBonusPercent / 10)
+    );
+
+    member.status = 'ferido';
+    member.trainingEndsAt = null;
+    member.injuryEndsAt = new Date(
+      Date.now() + recoveryHours * 60 * 60 * 1000
+    ).toISOString();
+    member.lastBattleAt = nowIso;
+  }
+
+  for (const [type, qty] of Object.entries(losses?.mortos || {})) {
+    for (let i = 0; i < Number(qty || 0); i += 1) {
+      killOne(type);
     }
   }
 
-  if (changed) {
-    await doc.save();
+  for (const [type, qty] of Object.entries(losses?.feridos || {})) {
+    for (let i = 0; i < Number(qty || 0); i += 1) {
+      injureOne(type);
+    }
   }
 
+  await doc.save();
   return serializeGang(doc, player);
 }
-

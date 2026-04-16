@@ -35,8 +35,8 @@ const attackSchema = new mongoose.Schema(
       tileY: { type: Number, default: 0 },
     },
 
-    success: { type: Boolean, default: false },
-    critical: { type: Boolean, default: false },
+    success: { type: Boolean, default: null },
+    critical: { type: Boolean, default: null },
     loot: { type: Number, default: 0, min: 0 },
     chance: { type: Number, default: 0 },
 

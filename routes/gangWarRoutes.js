@@ -14,7 +14,8 @@ import {
 
 const router = express.Router();
 
-router.get('/gang-war/me', authMiddleware, async (req, res) => {
+// GET /gang-war/me
+router.get('/me', authMiddleware, async (req, res) => {
   try {
     const doc = await getOrCreateGangWar(req.player._id);
     return res.json(serializeGang(doc, req.player));
@@ -25,7 +26,8 @@ router.get('/gang-war/me', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/gang-war/recruit', authMiddleware, async (req, res) => {
+// POST /gang-war/recruit
+router.post('/recruit', authMiddleware, async (req, res) => {
   try {
     const { type } = req.body || {};
     const payload = await handleRecruitMember(req.player, String(type || ''));
@@ -37,7 +39,8 @@ router.post('/gang-war/recruit', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/gang-war/train/start', authMiddleware, async (req, res) => {
+// POST /gang-war/train/start
+router.post('/train/start', authMiddleware, async (req, res) => {
   try {
     const { memberId } = req.body || {};
     const payload = await handleStartTraining(req.player, String(memberId || ''));
@@ -49,7 +52,8 @@ router.post('/gang-war/train/start', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/gang-war/train/complete', authMiddleware, async (req, res) => {
+// POST /gang-war/train/complete
+router.post('/train/complete', authMiddleware, async (req, res) => {
   try {
     const payload = await handleCompleteTraining(req.player);
     return res.json(payload);
@@ -60,7 +64,8 @@ router.post('/gang-war/train/complete', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/gang-war/ct/upgrade', authMiddleware, async (req, res) => {
+// POST /gang-war/ct/upgrade
+router.post('/ct/upgrade', authMiddleware, async (req, res) => {
   try {
     const payload = await handleUpgradeCT(req.player);
     return res.json(payload);
@@ -71,7 +76,8 @@ router.post('/gang-war/ct/upgrade', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/gang-war/maintenance/pay', authMiddleware, async (req, res) => {
+// POST /gang-war/maintenance/pay
+router.post('/maintenance/pay', authMiddleware, async (req, res) => {
   try {
     const payload = await handlePayMaintenance(req.player);
     return res.json(payload);
@@ -82,7 +88,8 @@ router.post('/gang-war/maintenance/pay', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/gang-war/formation/set', authMiddleware, async (req, res) => {
+// POST /gang-war/formation/set
+router.post('/formation/set', authMiddleware, async (req, res) => {
   try {
     const { formation } = req.body || {};
     const payload = await handleSetFormation(req.player, String(formation || ''));
@@ -94,7 +101,8 @@ router.post('/gang-war/formation/set', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/gang-war/apply-battle-losses', authMiddleware, async (req, res) => {
+// POST /gang-war/apply-battle-losses
+router.post('/apply-battle-losses', authMiddleware, async (req, res) => {
   try {
     const { losses } = req.body || {};
     const payload = await handleApplyBattleLosses(req.player, losses || {});

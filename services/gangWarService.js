@@ -232,7 +232,7 @@ async function reconcileGangState(doc) {
         job.completed = true;
         const member = doc.members.find((m) => m.id === job.memberId);
         if (member) {
-          member.level = job.toLevel;
+          member.level = Math.min(10, job.toLevel);
           member.status = 'ativo';
           member.trainingEndsAt = null;
         }
@@ -302,17 +302,27 @@ export async function handleRecruitMember(player, type) {
 export async function handleStartTraining(player, memberId) {
   const doc = await getOrCreateGangWar(player._id);
   const member = doc.members.find(m => m.id === memberId);
+
   if (!member) throw new Error('Membro não encontrado');
-  if (member.status !== 'ativo') throw new Error('Membro indisponível');
+  if (member.status !== 'ativo') throw new Error('Somente membros ativos podem treinar');
+  if (member.level >= 10) throw new Error('Este membro já está no nível máximo (10)');
 
   const activeJobs = doc.trainingJobs.filter(j => !j.completed).length;
-  if (activeJobs >= doc.ct.trainingSlots) throw new Error('Sem slots no CT');
+  if (activeJobs >= doc.ct.trainingSlots) {
+    throw new Error(
+      `CT sem slots disponíveis. Slots usados: ${activeJobs}/${doc.ct.trainingSlots}. Evolua o CT para liberar mais slots.`
+    );
+  }
 
   const def = MEMBER_DEFS[member.type];
-  const cost = Math.round(def.train * levelMultiplier(member.level));
-  if (Number(player.balances?.dirtyMoney || 0) < cost) throw new Error('Dinheiro insuficiente');
+  const cost = Math.round(def.train * (1 + (member.level - 1) * 0.25));
+  if (Number(player.balances?.dirtyMoney || 0) < cost) {
+    throw new Error(`Dinheiro sujo insuficiente. Custo: ${cost.toLocaleString('pt-BR')}`);
+  }
 
-  const hours = Math.max(1, Math.ceil(def.hours * (1 - doc.ct.trainingSpeedBonusPercent / 100)));
+  const ctSpeedBonus = doc.ct.trainingSpeedBonusPercent || 0;
+  const rawHours = def.hours * (1 + (member.level - 1) * 0.15);
+  const hours = Math.max(1, Math.ceil(rawHours * (1 - ctSpeedBonus / 100)));
   const endsAt = new Date(Date.now() + hours * 3600000);
 
   player.balances.dirtyMoney -= cost;
@@ -322,9 +332,13 @@ export async function handleStartTraining(player, memberId) {
   doc.trainingJobs.push({
     id: `train_${member.id}_${Date.now()}`,
     memberId: member.id,
-    toLevel: member.level + 1,
+    memberType: member.type,
+    fromLevel: member.level,
+    toLevel: Math.min(10, member.level + 1),
+    costDirtyMoney: cost,
+    startedAt: new Date().toISOString(),
     endsAt: endsAt.toISOString(),
-    completed: false
+    completed: false,
   });
 
   await player.save();

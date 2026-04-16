@@ -29,10 +29,25 @@ const MEMBER_DEFS = {
   negociador: { recruit: 2600, train: 1350, upkeep: 280, hours: 3, casualtyWeight: 1.05, base: { rajada: 2, blindagem: 5, folego: 6, quebra: 2 }, special: { negotiationPower: 10 } },
 };
 
+const FORMATION_BONUSES = {
+  pressao_total: { rajadaPercent: 18, blindagemPercent: -8, folegoPercent: -4, quebraPercent: 14, lootPercent: 0, casualtyReductionPercent: -6, medicalEfficiencyPercent: 0, mobilityPercent: 6 },
+  linha_fechada: { rajadaPercent: -6, blindagemPercent: 20, folegoPercent: 10, quebraPercent: -4, lootPercent: 0, casualtyReductionPercent: 12, medicalEfficiencyPercent: 10, mobilityPercent: -4 },
+  bote_certo: { rajadaPercent: 10, blindagemPercent: 0, folegoPercent: 0, quebraPercent: 10, lootPercent: 8, casualtyReductionPercent: 0, medicalEfficiencyPercent: 0, mobilityPercent: 8 },
+  cerco: { rajadaPercent: 6, blindagemPercent: 8, folegoPercent: 6, quebraPercent: 6, lootPercent: 0, casualtyReductionPercent: 6, medicalEfficiencyPercent: 6, mobilityPercent: 0 },
+  saque_rapido: { rajadaPercent: 0, blindagemPercent: -6, folegoPercent: -2, quebraPercent: 4, lootPercent: 22, casualtyReductionPercent: -4, medicalEfficiencyPercent: 0, mobilityPercent: 10 },
+};
+
 function round(value) { return Math.round(Number(value || 0) * 100) / 100; }
 function levelMultiplier(level) { return 1 + (Math.max(1, Number(level || 1)) - 1) * 0.18; }
-function generateMemberId(type) { return `gang_${type}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`; }
+function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
 function todayKey() { return new Date().toISOString().slice(0, 10); }
+function generateMemberId(type) { return `gang_${type}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`; }
+function applyPercent(value, percent) { return Number((Number(value || 0) * (1 + Number(percent || 0) / 100)).toFixed(2)); }
+function getFormationBonus(formation) { return FORMATION_BONUSES[formation] || FORMATION_BONUSES.pressao_total; }
+
+function emptyLossRecord() {
+  return { capanga: 0, frente: 0, executor: 0, assassino: 0, muralha: 0, certeiro: 0, motorista: 0, nitro: 0, armeiro: 0, informante: 0, wifi: 0, medico: 0, lavador: 0, ladrao: 0, negociador: 0 };
+}
 
 export function getCTStateFromLevel(level) {
   const safeLevel = Math.max(1, Math.min(GANG_CT_MAX_LEVEL, Number(level || 1)));
@@ -46,24 +61,145 @@ export function getCTStateFromLevel(level) {
   };
 }
 
-export function getGangMaxMembers(ctLevel, barracoLevel = 1) {
+export function getGangMaxMembers(ctLevel, barracoLevel = 1, factionBonus = 0) {
   const ct = getCTStateFromLevel(ctLevel);
   const barracoBonus = Math.floor(Math.max(1, Number(barracoLevel)) / 10);
-  return GANG_BASE_CAPACITY + ct.gangCapacityBonus + barracoBonus;
+  return GANG_BASE_CAPACITY + ct.gangCapacityBonus + barracoBonus + factionBonus;
+}
+
+export function getMemberBattleStats(member) {
+  const def = MEMBER_DEFS[member.type];
+  const mult = levelMultiplier(member.level);
+  return {
+    rajada: round(def.base.rajada * mult),
+    blindagem: round(def.base.blindagem * mult),
+    folego: round(def.base.folego * mult),
+    quebra: round(def.base.quebra * mult),
+  };
 }
 
 export function getGangDailyUpkeep(members) {
   let totalDirtyMoneyCost = 0;
-  const byType = {};
+  const byType = emptyLossRecord();
   for (const member of members) {
     if (member.status === 'morto') continue;
     const def = MEMBER_DEFS[member.type];
     const cost = Math.round(def.upkeep * levelMultiplier(member.level));
-    byType[member.type] = (byType[member.type] || 0) + cost;
+    byType[member.type] += cost;
     totalDirtyMoneyCost += cost;
   }
   return { totalDirtyMoneyCost, byType };
 }
+
+// --- FUNÇÕES DE BATALHA RESTAURADAS ---
+export function buildGangBattleCompositionStats(members) {
+  const activeMembers = members.filter((m) => m.status === 'ativo');
+  const feridos = members.filter((m) => m.status === 'ferido').length;
+  const mortos = members.filter((m) => m.status === 'morto').length;
+
+  let rajada = 0, blindagem = 0, folego = 0, quebra = 0;
+  let medicalPower = 0, economyPower = 0, lootPower = 0, intelPower = 0;
+  let mobilityPower = 0, weaponPower = 0, coordinationPower = 0, negotiationPower = 0;
+
+  for (const member of activeMembers) {
+    const stats = getMemberBattleStats(member);
+    const def = MEMBER_DEFS[member.type];
+    const mult = levelMultiplier(member.level);
+
+    rajada += stats.rajada;
+    blindagem += stats.blindagem;
+    folego += stats.folego;
+    quebra += stats.quebra;
+
+    medicalPower += (def.special.medicalPower || 0) * mult;
+    economyPower += (def.special.economyPower || 0) * mult;
+    lootPower += (def.special.lootPower || 0) * mult;
+    intelPower += (def.special.intelPower || 0) * mult;
+    mobilityPower += (def.special.mobilityPower || 0) * mult;
+    weaponPower += (def.special.weaponPower || 0) * mult;
+    coordinationPower += (def.special.coordinationPower || 0) * mult;
+    negotiationPower += (def.special.negotiationPower || 0) * mult;
+  }
+
+  const totalPower = rajada * 1.15 + blindagem * 1.05 + folego * 0.95 + quebra * 1.2 + intelPower * 0.35 + mobilityPower * 0.3 + weaponPower * 0.4 + coordinationPower * 0.25;
+
+  return {
+    totalMembers: members.length, ativos: activeMembers.length, feridos, mortos,
+    rajada: round(rajada), blindagem: round(blindagem), folego: round(folego), quebra: round(quebra),
+    medicalPower: round(medicalPower), economyPower: round(economyPower), lootPower: round(lootPower), intelPower: round(intelPower),
+    mobilityPower: round(mobilityPower), weaponPower: round(weaponPower), coordinationPower: round(coordinationPower), negotiationPower: round(negotiationPower),
+    totalPower: round(totalPower),
+  };
+}
+
+export function applyFormationToGangStats(stats, formation) {
+  const bonus = getFormationBonus(formation);
+  const next = {
+    ...stats,
+    rajada: applyPercent(stats.rajada, bonus.rajadaPercent),
+    blindagem: applyPercent(stats.blindagem, bonus.blindagemPercent),
+    folego: applyPercent(stats.folego, bonus.folegoPercent),
+    quebra: applyPercent(stats.quebra, bonus.quebraPercent),
+    lootPower: applyPercent(stats.lootPower, bonus.lootPercent),
+    mobilityPower: applyPercent(stats.mobilityPower, bonus.mobilityPercent),
+    medicalPower: applyPercent(stats.medicalPower, bonus.medicalEfficiencyPercent),
+    totalPower: stats.totalPower,
+  };
+
+  next.totalPower = round(
+    next.rajada * 1.15 + next.blindagem * 1.05 + next.folego * 0.95 + next.quebra * 1.2 +
+    next.intelPower * 0.35 + next.mobilityPower * 0.3 + next.weaponPower * 0.4 + next.coordinationPower * 0.25
+  );
+  return next;
+}
+
+export function buildGangBattleStatsWithFormation(members, formation) {
+  const baseStats = buildGangBattleCompositionStats(members);
+  return applyFormationToGangStats(baseStats, formation);
+}
+
+export function resolveGangCasualties({ members, ownStats, enemyStats, ctLevel, side, ownFormation = 'pressao_total' }) {
+  const ativos = members.filter((m) => m.status === 'ativo');
+  const mortos = emptyLossRecord();
+  const feridos = emptyLossRecord();
+
+  if (!ativos.length) return { mortos, feridos, preservadosPeloMedico: 0 };
+
+  const ct = getCTStateFromLevel(ctLevel);
+  const formationBonus = getFormationBonus(ownFormation);
+
+  const enemyPressure = enemyStats.rajada * 1.05 + enemyStats.quebra * 1.1;
+  const ownProtection = ownStats.blindagem * 0.9 + ownStats.folego * 0.85;
+
+  const rawLossRateBeforeFormation = clamp((enemyPressure - ownProtection * 0.55) / Math.max(ownStats.totalPower, 1), 0.04, 0.65);
+  const rawLossRate = clamp(rawLossRateBeforeFormation * (1 - formationBonus.casualtyReductionPercent / 100), 0.04, 0.65);
+
+  const sideModifier = side === 'attacker' ? 1.08 : 0.94;
+  const casualtyCount = Math.min(ativos.length, Math.max(1, Math.round(ativos.length * rawLossRate * sideModifier)));
+
+  const sortedTargets = [...ativos].sort((a, b) => MEMBER_DEFS[b.type].casualtyWeight - MEMBER_DEFS[a.type].casualtyWeight);
+
+  const medicalSaveChance = clamp(0.18 + ownStats.medicalPower * 0.0025 + ct.recoveryBonusPercent * 0.003, 0.18, 0.9);
+  let preservadosPeloMedico = 0;
+
+  for (let i = 0; i < casualtyCount; i += 1) {
+    const target = sortedTargets[i % sortedTargets.length];
+    const saved = Math.random() < medicalSaveChance;
+
+    if (saved) {
+      feridos[target.type] += 1;
+      preservadosPeloMedico += 1;
+    } else {
+      const deathChanceBase = 0.52 - ownStats.folego * 0.0009 - ownStats.blindagem * 0.0007 - ownStats.medicalPower * 0.0012;
+      const finalDeathChance = clamp(deathChanceBase, 0.12, 0.72);
+      if (Math.random() < finalDeathChance) mortos[target.type] += 1;
+      else feridos[target.type] += 1;
+    }
+  }
+
+  return { mortos, feridos, preservadosPeloMedico };
+}
+// ----------------------------------------
 
 export function serializeGang(doc, player) {
   return {
@@ -73,7 +209,7 @@ export function serializeGang(doc, player) {
       ct: doc.ct || getCTStateFromLevel(1),
       trainingJobs: doc.trainingJobs || [],
       formation: doc.formation || 'pressao_total',
-      maxMembers: getGangMaxMembers(doc.ct?.level || 1, player?.niveis?.barracoLevel || 1),
+      maxMembers: getGangMaxMembers(doc.ct?.level || 1, player?.niveis?.barracoLevel || 1, 0),
       dailyUpkeep: getGangDailyUpkeep(doc.members || []),
       lastMaintenanceDate: doc.lastMaintenanceDate
     },
@@ -229,11 +365,8 @@ export async function handleApplyBattleLosses(player, losses) {
   const nowIso = new Date().toISOString();
 
   function killOne(type) {
-    const member = doc.members.find(
-      (m) => m.type === type && m.status === 'ativo'
-    );
+    const member = doc.members.find((m) => m.type === type && m.status === 'ativo');
     if (!member) return;
-
     member.status = 'morto';
     member.trainingEndsAt = null;
     member.injuryEndsAt = null;
@@ -241,34 +374,21 @@ export async function handleApplyBattleLosses(player, losses) {
   }
 
   function injureOne(type) {
-    const member = doc.members.find(
-      (m) => m.type === type && m.status === 'ativo'
-    );
+    const member = doc.members.find((m) => m.type === type && m.status === 'ativo');
     if (!member) return;
-
-    const recoveryHours = Math.max(
-      2,
-      8 + member.level * 2 - Math.floor(doc.ct.recoveryBonusPercent / 10)
-    );
-
+    const recoveryHours = Math.max(2, 8 + member.level * 2 - Math.floor(doc.ct.recoveryBonusPercent / 10));
     member.status = 'ferido';
     member.trainingEndsAt = null;
-    member.injuryEndsAt = new Date(
-      Date.now() + recoveryHours * 60 * 60 * 1000
-    ).toISOString();
+    member.injuryEndsAt = new Date(Date.now() + recoveryHours * 60 * 60 * 1000).toISOString();
     member.lastBattleAt = nowIso;
   }
 
   for (const [type, qty] of Object.entries(losses?.mortos || {})) {
-    for (let i = 0; i < Number(qty || 0); i += 1) {
-      killOne(type);
-    }
+    for (let i = 0; i < Number(qty || 0); i += 1) killOne(type);
   }
 
   for (const [type, qty] of Object.entries(losses?.feridos || {})) {
-    for (let i = 0; i < Number(qty || 0); i += 1) {
-      injureOne(type);
-    }
+    for (let i = 0; i < Number(qty || 0); i += 1) injureOne(type);
   }
 
   await doc.save();

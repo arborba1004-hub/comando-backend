@@ -54,7 +54,7 @@ app.use('/chat', chatRoutes);
 app.use('/faction-help', factionHelpRoutes);
 app.use('/laundry', laundryRoutes);
 app.use('/game', gameRoutes);
-app.use(gangWarRoutes);
+app.use('/gang-war', gangWarRoutes);;
 
 // rota nova esperada pelo front
 app.use('/battle', attackRoutes);

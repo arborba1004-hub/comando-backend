@@ -4,6 +4,7 @@ import cors from 'cors';
 import { env } from './config/env.js';
 import { connectDB } from './config/db.js';
 
+// Import das rotas
 import authRoutes from './routes/authRoutes.js';
 import playerRoutes from './routes/playerRoutes.js';
 import playersRoutes from './routes/playersRoutes.js';
@@ -25,6 +26,7 @@ import factionInviteRoutes from './routes/factionInviteRoutes.js';
 
 const app = express();
 
+// Configuração de CORS
 app.use(
   cors({
     origin: env.FRONTEND_URL === '*' ? true : env.FRONTEND_URL,
@@ -32,8 +34,10 @@ app.use(
   })
 );
 
+// Parser de JSON
 app.use(express.json({ limit: '2mb' }));
 
+// Rotas básicas
 app.get('/', (req, res) => {
   res.send('Servidor rodando 🚀');
 });
@@ -47,6 +51,7 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Rotas principais
 app.use('/auth', authRoutes);
 app.use('/player', playerRoutes);
 app.use('/players', playersRoutes);
@@ -54,14 +59,15 @@ app.use('/chat', chatRoutes);
 app.use('/faction-help', factionHelpRoutes);
 app.use('/laundry', laundryRoutes);
 app.use('/game', gameRoutes);
-app.use('/gang-war', gangWarRoutes);;
 
-// rota nova esperada pelo front
-app.use('/battle', attackRoutes);
+// Corrigido: prefixo explícito para gang-war
+app.use('/gang-war', gangWarRoutes);
 
-// compatibilidade com rota antiga
-app.use('/attack', attackRoutes);
+// Rotas de batalha/ataque
+app.use('/battle', attackRoutes);   // nova rota esperada pelo front
+app.use('/attack', attackRoutes);   // compatibilidade com rota antiga
 
+// Outras rotas
 app.use('/notifications', notificationRoutes);
 app.use('/faction', factionRoutes);
 app.use('/shop', shopRoutes);
@@ -72,10 +78,12 @@ app.use('/', paymentRoutes);
 app.use('/admin', adminRoutes);
 app.use('/faction-invite', factionInviteRoutes);
 
+// Tratamento de rota não encontrada
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota não encontrada' });
 });
 
+// Tratamento de erro interno
 app.use((error, req, res, next) => {
   console.error('Erro não tratado:', error);
   res.status(500).json({
@@ -83,6 +91,7 @@ app.use((error, req, res, next) => {
   });
 });
 
+// Inicialização do servidor
 async function startServer() {
   try {
     await connectDB();

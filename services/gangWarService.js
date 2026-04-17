@@ -125,6 +125,7 @@ export function buildGangBattleCompositionStats(members) {
 
   return {
     totalMembers: members.length, ativos: activeMembers.length, feridos, mortos,
+    bondeAtivos: activeMembers.length,
     rajada: round(rajada), blindagem: round(blindagem), folego: round(folego), quebra: round(quebra),
     medicalPower: round(medicalPower), economyPower: round(economyPower), lootPower: round(lootPower), intelPower: round(intelPower),
     mobilityPower: round(mobilityPower), weaponPower: round(weaponPower), coordinationPower: round(coordinationPower), negotiationPower: round(negotiationPower),
@@ -368,7 +369,7 @@ export async function handlePayMaintenance(player) {
   const upkeep = getGangDailyUpkeep(doc.members);
   if (player.balances.dirtyMoney < upkeep.totalDirtyMoneyCost) throw new Error('Dinheiro insuficiente');
   player.balances.dirtyMoney -= upkeep.totalDirtyMoneyCost;
-  doc.lastMaintenanceDate = todayKey();
+  doc.lastMaintenanceDate = new Date();
   await player.save();
   await doc.save();
   return serializeGang(doc, player);

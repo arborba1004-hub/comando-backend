@@ -56,6 +56,7 @@ function emptyGangStats() {
     ativos: 0,
     feridos: 0,
     mortos: 0,
+    bondeAtivos: 0,
     rajada: 0,
     blindagem: 0,
     folego: 0,
@@ -509,7 +510,7 @@ function resolveAttackMath(
     defenderPower: effectiveDefenderPower,
     attackerDirtyMoneyDelta,
     defenderDirtyMoneyDelta,
-    attackerCorreDelta: -ATTACK_CORRE_COST,
+    attackerCorreDelta: 0,
     defenderCorreDelta: 0,
     attackerFactionAttackBonusPercent: attackerAttackPercent,
     attackerFactionAgilityBonusPercent: attackerAgilityPercent,
@@ -578,6 +579,15 @@ export async function startBattle(req, res) {
       return res.status(400).json({ error: 'Corre insuficiente para atacar' });
     }
 
+    attacker.balances = attacker.balances || {};
+    attacker.balances.corre = Math.max(
+      0,
+      safeNumber(attacker.balances?.corre, 0) - ATTACK_CORRE_COST
+    );
+    attacker.lastAttackAt = now;
+    bumpVersion(attacker);
+    await attacker.save();
+
     const attackerFaction = await getFactionCombatContext(attacker);
     const defenderFaction = await getFactionCombatContext(defender);
 
@@ -636,6 +646,8 @@ export async function startBattle(req, res) {
       attackerGangStats: normalizedAttackerGangStats,
       attackerCTLevel: attackerCTLevel,
       defenderGangStats: defenderGangContext.stats,
+      attackerCorreDelta: -ATTACK_CORRE_COST,
+      defenderCorreDelta: 0,
       message: 'Batalha iniciada.',
     });
 
@@ -693,7 +705,7 @@ export async function resolveBattle(req, res) {
       return res.status(403).json({ error: 'Você não tem acesso a esta batalha' });
     }
 
-    if (attack.status === 'resolved' && attack.success !== null) {
+    if (attack.status === 'resolved' && attack.success != null) {
       return res.json(buildBattleResponse(attack));
     }
 
@@ -715,7 +727,7 @@ export async function resolveBattle(req, res) {
     }
 
     const now = Date.now();
-const attackerFaction = await getFactionCombatContext(attacker);
+    const attackerFaction = await getFactionCombatContext(attacker);
     const defenderFaction = await getFactionCombatContext(defender);
 
     const attackerGangContext = await getGangCombatContext(attacker._id);
@@ -726,19 +738,31 @@ const attackerFaction = await getFactionCombatContext(attacker);
     const attackerCTLevel = attackerGangContext.ctLevel;
 
     // Use saved math from startBattle to avoid re-rolling RNG (would give different result than shown)
+    const hasSavedResult = attack.success != null;
+
     const math = {
-      success: attack.success !== undefined ? attack.success : resolveAttackMath(
-        attacker, defender, attackerFaction, defenderFaction,
-        attackerGangStats, defenderGangContext.stats
-      ).success,
+      success: hasSavedResult
+        ? attack.success
+        : resolveAttackMath(
+            attacker,
+            defender,
+            attackerFaction,
+            defenderFaction,
+            attackerGangStats,
+            defenderGangContext.stats
+          ).success,
       critical: attack.critical || false,
       loot: attack.loot || 0,
       chance: (attack.chance || 0) / 100,
       attackerPower: attack.attackerPower || 0,
       defenderPower: attack.defenderPower || 0,
-      attackerDirtyMoneyDelta: attack.success ? (attack.loot || 0) : -Math.floor(safeNumber(attacker.balances?.dirtyMoney, 0) * 0.05),
-      defenderDirtyMoneyDelta: attack.success ? -(attack.loot || 0) : 0,
-      attackerCorreDelta: -ATTACK_CORRE_COST,
+      attackerDirtyMoneyDelta: hasSavedResult
+        ? attack.success
+          ? attack.loot || 0
+          : -Math.floor(safeNumber(attacker.balances?.dirtyMoney, 0) * 0.05)
+        : 0,
+      defenderDirtyMoneyDelta: hasSavedResult ? (attack.success ? -(attack.loot || 0) : 0) : 0,
+      attackerCorreDelta: 0,
       defenderCorreDelta: 0,
       attackerFactionAttackBonusPercent: attack.attackerFactionAttackBonusPercent || 0,
       attackerFactionAgilityBonusPercent: attack.attackerFactionAgilityBonusPercent || 0,
@@ -746,16 +770,24 @@ const attackerFaction = await getFactionCombatContext(attacker);
       defenderFactionDefenseBonusPercent: attack.defenderFactionDefenseBonusPercent || 0,
       defenderFactionBaseDefenseBonusPercent: attack.defenderFactionBaseDefenseBonusPercent || 0,
       defenderFactionHpBonusPercent: attack.defenderFactionHpBonusPercent || 0,
-      message: attack.success
-        ? (attack.critical ? 'Ataque crítico! Você dominou o território.' : 'Ataque bem-sucedido!')
-        : 'Seu ataque falhou. Você perdeu 5% do dinheiro sujo.',
+      message: hasSavedResult
+        ? attack.success
+          ? attack.critical
+            ? 'Ataque crítico! Você dominou o território.'
+            : 'Ataque bem-sucedido!'
+          : 'Seu ataque falhou. Você perdeu 5% do dinheiro sujo.'
+        : 'Batalha iniciada.',
     };
 
-    // If attack was not yet resolved (status=started), re-roll only if no saved result
-    if (attack.status === 'started' && attack.success === undefined) {
+    // If attack was not yet resolved (status=started), resolve with the saved preview values
+    if (attack.status === 'started' && !hasSavedResult) {
       const freshMath = resolveAttackMath(
-        attacker, defender, attackerFaction, defenderFaction,
-        attackerGangStats, defenderGangContext.stats
+        attacker,
+        defender,
+        attackerFaction,
+        defenderFaction,
+        attackerGangStats,
+        defenderGangContext.stats
       );
       Object.assign(math, freshMath);
     }
@@ -796,8 +828,6 @@ const attackerFaction = await getFactionCombatContext(attacker);
       0,
       safeNumber(defender.balances?.corre, 0) + math.defenderCorreDelta
     );
-
-    attacker.lastAttackAt = now;
 
     defender.punishments = defender.punishments || {};
     defender.punishments.pvpProtectionUntil = new Date(

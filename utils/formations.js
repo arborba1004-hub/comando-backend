@@ -3,7 +3,7 @@
  * Define as 5 formações com seus modificadores de stat
  */
 
-exports.FORMATIONS = {
+export const FORMATIONS = {
   pressao_total: {
     name: 'Pressão Total',
     description: 'Ataque agressivo máximo — máximo dano',
@@ -74,12 +74,12 @@ exports.FORMATIONS = {
   },
 };
 
-exports.getFormation = function(formationKey) {
-  return exports.FORMATIONS[formationKey] || exports.FORMATIONS.bote_certo;
-};
+export function getFormation(formationKey) {
+  return FORMATIONS[formationKey] || FORMATIONS.bote_certo;
+}
 
-exports.applyFormationBonus = function(memberStats, formationKey) {
-  const formation = exports.getFormation(formationKey);
+export function applyFormationBonus(memberStats, formationKey) {
+  const formation = getFormation(formationKey);
   if (!formation) return memberStats;
 
   return {
@@ -89,15 +89,15 @@ exports.applyFormationBonus = function(memberStats, formationKey) {
     folego: Math.floor(memberStats.folego * (1 + formation.modifiers.folego)),
     quebra: memberStats.quebra * (1 + formation.modifiers.quebra),
   };
-};
+}
 
-exports.getAllFormations = function() {
-  return Object.entries(exports.FORMATIONS).map(([key, formation]) => ({
+export function getAllFormations() {
+  return Object.entries(FORMATIONS).map(([key, formation]) => ({
     key,
     ...formation,
   }));
-};
+}
 
-exports.isValidFormation = function(formationKey) {
-  return formationKey in exports.FORMATIONS;
-};
+export function isValidFormation(formationKey) {
+  return formationKey in FORMATIONS;
+}

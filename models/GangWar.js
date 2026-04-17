@@ -19,13 +19,13 @@ const VALID_MEMBER_TYPES = [
 const gangUnitSchema = new mongoose.Schema(
   {
     id: { type: String, required: true },
-    type: { type: String, enum: VALID_MEMBER_TYPES, required: true },
+    type: { type: String, enum: VALID_MEMBER_TYPES, required: true, Index: true },
     level: { type: Number, default: 1, min: 1, max: 10 },
     status: {
       type: String,
       enum: ['ativo', 'ferido', 'morto', 'treinando'],
       default: 'ativo',
-      index: true,
+      
     },
     recruitedAt: { type: Date, required: true, default: Date.now },
     trainingEndsAt: { type: Date, default: null },

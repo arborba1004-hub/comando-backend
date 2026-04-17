@@ -1,9 +1,9 @@
 /**
  * COMMANDIA — Power System
- * Cálculo de poder do jogador e da gangue com todos os bônus
+ * Cálculo de poder do jogador e da gangue
  */
 
-exports.SKILL_POWER_MULTIPLIERS = {
+export const SKILL_POWER_MULTIPLIERS = {
   attack: 1.4,
   defense: 1.2,
   vigor: 1.25,
@@ -12,7 +12,7 @@ exports.SKILL_POWER_MULTIPLIERS = {
   respect: 0.9,
 };
 
-exports.GANG_POWER_MULTIPLIERS = {
+export const GANG_POWER_MULTIPLIERS = {
   rajada: 1.15,
   blindagem: 1.05,
   folego: 0.95,
@@ -23,28 +23,36 @@ exports.GANG_POWER_MULTIPLIERS = {
   coordinationPower: 0.25,
 };
 
-exports.calculatePlayerPower = function(player) {
+function safeNumber(value, fallback = 0) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+export function calculatePlayerPower(player) {
   if (!player || !player.skills) return 0;
 
   const skills = player.skills;
-  const multipliers = exports.SKILL_POWER_MULTIPLIERS;
 
-  const attackPower = (skills.attack || 0) * multipliers.attack;
-  const defensePower = (skills.defense || 0) * multipliers.defense;
-  const intelligencePower = (skills.intelligence || 0) * multipliers.intelligence;
-  const agilityPower = (skills.agility || 0) * multipliers.agility;
-  const respectPower = (skills.respect || 0) * multipliers.respect;
-  const vigorPower = (skills.vigor || 0) * multipliers.vigor;
+  const attackPower = safeNumber(skills.attack) * SKILL_POWER_MULTIPLIERS.attack;
+  const defensePower = safeNumber(skills.defense) * SKILL_POWER_MULTIPLIERS.defense;
+  const intelligencePower =
+    safeNumber(skills.intelligence) * SKILL_POWER_MULTIPLIERS.intelligence;
+  const agilityPower = safeNumber(skills.agility) * SKILL_POWER_MULTIPLIERS.agility;
+  const respectPower = safeNumber(skills.respect) * SKILL_POWER_MULTIPLIERS.respect;
+  const vigorPower = safeNumber(skills.vigor) * SKILL_POWER_MULTIPLIERS.vigor;
 
   const basePower = Math.floor(
-    attackPower + defensePower + intelligencePower +
-    agilityPower + respectPower + vigorPower
+    attackPower +
+      defensePower +
+      intelligencePower +
+      agilityPower +
+      respectPower +
+      vigorPower
   );
 
   return Math.max(0, basePower);
-};
+}
 
-exports.calculateGangPower = function(members, formation = {}) {
+export function calculateGangPower(members) {
   if (!Array.isArray(members) || members.length === 0) {
     return {
       totalPower: 0,
@@ -62,21 +70,20 @@ exports.calculateGangPower = function(members, formation = {}) {
   let folegoPower = 0;
   let quebraPower = 0;
 
-  members.forEach(member => {
-    if (member.status === 'ativo') {
-      rajadaPower += member.rajada || 0;
-      blindagemPower += member.blindagem || 0;
-      folegoPower += member.folego || 0;
-      quebraPower += (member.quebra || 1) * 100;
-    }
-  });
+  for (const member of members) {
+    if (member?.status !== 'ativo') continue;
 
-  const multipliers = exports.GANG_POWER_MULTIPLIERS;
+    rajadaPower += safeNumber(member.rajada);
+    blindagemPower += safeNumber(member.blindagem);
+    folegoPower += safeNumber(member.folego);
+    quebraPower += safeNumber(member.quebra);
+  }
+
   const totalPower = Math.floor(
-    rajadaPower * multipliers.rajada +
-    blindagemPower * multipliers.blindagem +
-    folegoPower * multipliers.folego +
-    (quebraPower / 100) * multipliers.quebra
+    rajadaPower * GANG_POWER_MULTIPLIERS.rajada +
+      blindagemPower * GANG_POWER_MULTIPLIERS.blindagem +
+      folegoPower * GANG_POWER_MULTIPLIERS.folego +
+      quebraPower * GANG_POWER_MULTIPLIERS.quebra
   );
 
   return {
@@ -85,23 +92,43 @@ exports.calculateGangPower = function(members, formation = {}) {
       rajada: rajadaPower,
       blindagem: blindagemPower,
       folego: folegoPower,
-      quebra: quebraPower / 100,
+      quebra: quebraPower,
     },
   };
-};
+}
 
-exports.calculateWinChance = function(attackerPower, defenderPower) {
-  const totalPower = attackerPower + defenderPower;
+export function calculateWinChance(attackerPower, defenderPower) {
+  const attacker = Math.max(0, safeNumber(attackerPower));
+  const defender = Math.max(0, safeNumber(defenderPower));
+  const totalPower = attacker + defender;
+
   if (totalPower <= 0) return 0.5;
 
-  let chance = attackerPower / totalPower;
+  let chance = attacker / totalPower;
   chance = Math.max(0.3, Math.min(0.9, chance));
   return chance;
-};
+}
 
-exports.recalculatePlayerPower = function(player) {
+export function recalculatePlayerPower(player) {
   if (!player) return 0;
-  const newPower = exports.calculatePlayerPower(player);
+
+  const newPower = calculatePlayerPower(player);
   player.power = newPower;
   return newPower;
-};
+}
+
+export function getLootCapByLevel(level = 1) {
+  const safeLevel = Math.max(1, Math.floor(safeNumber(level, 1)));
+  return 1000 + (safeLevel - 1) * 250;
+}
+
+export function calculateLoot(defenderDirtyMoney = 0, defenderLevel = 1, critical = false) {
+  const dirtyMoney = Math.max(0, Math.floor(safeNumber(defenderDirtyMoney)));
+  if (dirtyMoney <= 0) return 0;
+
+  const basePercent = critical ? 0.18 : 0.12;
+  const rawLoot = Math.floor(dirtyMoney * basePercent);
+  const cap = getLootCapByLevel(defenderLevel);
+
+  return Math.max(0, Math.min(rawLoot, cap, dirtyMoney));
+}

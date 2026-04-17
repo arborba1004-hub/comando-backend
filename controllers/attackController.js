@@ -15,7 +15,7 @@ import {
 } from '../services/gangWarService.js';
 
 const ATTACK_COOLDOWN_MS = 30000;
-const ATTACK_CORRE_COST = 10;
+const attackerCorreDelta: 0,
 const DEFENDER_PVP_PROTECTION_MS = 30000;
 const MAX_HISTORY = 50;
 const MAX_NOTIFICATIONS = 20;

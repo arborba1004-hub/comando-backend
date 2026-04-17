@@ -2,22 +2,10 @@ import mongoose from 'mongoose';
 import { GRID_WIDTH, GRID_HEIGHT } from './playerDefaults.js';
 import Player from '../models/Player.js';
 
-// Re-exporta tudo do powerSystem como fonte única de verdade
 export {
-  calculateBasePower,
-  calculateEnhancedPower,
   calculatePlayerPower,
-  calculateWeaponBonus,
-  calculateAccessoryBonus,
-  calculateEffectiveAttackerPower,
-  calculateEffectiveDefenderPower,
   calculateWinChance,
   calculateLoot,
-  getLootCapByLevel,
-  buildPowerBreakdown,
-  SKILL_WEIGHTS,
-  GANG_STAT_WEIGHTS,
-  GANG_CONTRIBUTION_FACTOR,
 } from './powerSystem.js';
 
 export function generateId() {
@@ -29,7 +17,7 @@ export function bumpVersion(player) {
 }
 
 export function applyPassiveIncome(player) {
-  const now  = Date.now();
+  const now = Date.now();
   const last = player.lastPassiveIncomeAt || now;
   const minutesPassed = Math.floor((now - last) / 60000);
 
@@ -66,8 +54,8 @@ export async function generateFreeMapPosition(maxAttempts = 300) {
   }
 
   return {
-    tileX:  Math.floor(GRID_WIDTH / 2),
-    tileY:  Math.floor(GRID_HEIGHT / 2),
+    tileX: Math.floor(GRID_WIDTH / 2),
+    tileY: Math.floor(GRID_HEIGHT / 2),
     worldX: 0,
     worldY: 0,
   };

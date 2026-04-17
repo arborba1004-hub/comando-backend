@@ -14,8 +14,7 @@ import {
   resolveGangCasualties as resolveOfficialGangCasualties,
 } from '../services/gangWarService.js';
 
-const ATTACK_COOLDOWN_MS = 30000;
-const attackerCorreDelta: 0,
+const ATTACK_COOLDOWN_MS = 30000; attackerCorreDelta: 0,
 const DEFENDER_PVP_PROTECTION_MS = 30000;
 const MAX_HISTORY = 50;
 const MAX_NOTIFICATIONS = 20;

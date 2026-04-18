@@ -26,6 +26,10 @@ const ALLOWED_TOP_LEVEL_FIELDS = [
   'ownedVehicles',
   'purchasedAccessories',
   'accessories',
+  'notifications',
+  'attackHistory',
+  'factionId',
+  'gangId',
 ];
 
 function pickAllowedFields(payload) {

@@ -48,27 +48,27 @@ function safeNumber(value, fallback = 0) {
 }
 
 function calculateFactionInvestmentBuffs(investments = {}) {
-  const arsenal      = Math.max(0, safeNumber(investments.arsenalColetivo, 0));
-  const caixa        = Math.max(0, safeNumber(investments.caixaOperacional, 0));
-  const mobilidade   = Math.max(0, safeNumber(investments.mobilidade, 0));
-  const influencia   = Math.max(0, safeNumber(investments.influencia, 0));
+  const arsenal = Math.max(0, safeNumber(investments.arsenalColetivo, 0));
+  const caixa = Math.max(0, safeNumber(investments.caixaOperacional, 0));
+  const mobilidade = Math.max(0, safeNumber(investments.mobilidade, 0));
+  const influencia = Math.max(0, safeNumber(investments.influencia, 0));
   const inteligencia = Math.max(0, safeNumber(investments.inteligencia, 0));
   const fortificacao = Math.max(0, safeNumber(investments.fortificacao, 0));
-  const logistica    = Math.max(0, safeNumber(investments.logistica, 0));
-  const doutrina     = Math.max(0, safeNumber(investments.doutrina, 0));
+  const logistica = Math.max(0, safeNumber(investments.logistica, 0));
+  const doutrina = Math.max(0, safeNumber(investments.doutrina, 0));
 
   return {
-    attackPercent:               arsenal * 2    + doutrina * 0.5,
-    defensePercent:              arsenal * 1.5  + fortificacao * 2  + doutrina * 0.5,
-    hpPercent:                   arsenal * 1    + fortificacao * 1.5 + doutrina * 0.5,
-    dirtyMoneyGainPercent:       caixa * 2      + doutrina * 0.5,
-    cleanMoneyGainPercent:       caixa * 1.5    + doutrina * 0.5,
-    agilityPercent:              mobilidade * 2 + doutrina * 0.5,
-    intelligencePercent:         inteligencia * 2 + doutrina * 0.5,
-    respectPercent:              influencia * 2 + doutrina * 0.5,
-    baseDefensePercent:          fortificacao * 2 + doutrina * 0.5,
-    donationEfficiencyPercent:   logistica * 2  + doutrina * 0.5,
-    buffDurationPercent:         logistica * 1.5 + doutrina * 0.5,
+    attackPercent: arsenal * 2 + doutrina * 0.5,
+    defensePercent: arsenal * 1.5 + fortificacao * 2 + doutrina * 0.5,
+    hpPercent: arsenal * 1 + fortificacao * 1.5 + doutrina * 0.5,
+    dirtyMoneyGainPercent: caixa * 2 + doutrina * 0.5,
+    cleanMoneyGainPercent: caixa * 1.5 + doutrina * 0.5,
+    agilityPercent: mobilidade * 2 + doutrina * 0.5,
+    intelligencePercent: inteligencia * 2 + doutrina * 0.5,
+    respectPercent: influencia * 2 + doutrina * 0.5,
+    baseDefensePercent: fortificacao * 2 + doutrina * 0.5,
+    donationEfficiencyPercent: logistica * 2 + doutrina * 0.5,
+    buffDurationPercent: logistica * 1.5 + doutrina * 0.5,
   };
 }
 
@@ -79,9 +79,18 @@ async function getFactionContextForPlayer(player) {
     const faction = await Faction.findOne(
       { id: String(player.factionId) },
       {
-        id: 1, name: 1, tag: 1, level: 1, exp: 1, expToNext: 1,
-        investments: 1, investmentBuffs: 1, activeBuffs: 1,
-        totalInvestmentLevel: 1, investmentTierName: 1, treasury: 1,
+        id: 1,
+        name: 1,
+        tag: 1,
+        level: 1,
+        exp: 1,
+        expToNext: 1,
+        investments: 1,
+        investmentBuffs: 1,
+        activeBuffs: 1,
+        totalInvestmentLevel: 1,
+        investmentTierName: 1,
+        treasury: 1,
       }
     ).lean();
 
@@ -90,33 +99,68 @@ async function getFactionContextForPlayer(player) {
     const investmentBuffs =
       faction.investmentBuffs && typeof faction.investmentBuffs === 'object'
         ? {
-            attackPercent:             safeNumber(faction.investmentBuffs.attackPercent, 0),
-            defensePercent:            safeNumber(faction.investmentBuffs.defensePercent, 0),
-            hpPercent:                 safeNumber(faction.investmentBuffs.hpPercent, 0),
-            dirtyMoneyGainPercent:     safeNumber(faction.investmentBuffs.dirtyMoneyGainPercent, 0),
-            cleanMoneyGainPercent:     safeNumber(faction.investmentBuffs.cleanMoneyGainPercent, 0),
-            agilityPercent:            safeNumber(faction.investmentBuffs.agilityPercent, 0),
-            intelligencePercent:       safeNumber(faction.investmentBuffs.intelligencePercent, 0),
-            respectPercent:            safeNumber(faction.investmentBuffs.respectPercent, 0),
-            baseDefensePercent:        safeNumber(faction.investmentBuffs.baseDefensePercent, 0),
-            donationEfficiencyPercent: safeNumber(faction.investmentBuffs.donationEfficiencyPercent, 0),
-            buffDurationPercent:       safeNumber(faction.investmentBuffs.buffDurationPercent, 0),
+            attackPercent: safeNumber(
+              faction.investmentBuffs.attackPercent,
+              0
+            ),
+            defensePercent: safeNumber(
+              faction.investmentBuffs.defensePercent,
+              0
+            ),
+            hpPercent: safeNumber(faction.investmentBuffs.hpPercent, 0),
+            dirtyMoneyGainPercent: safeNumber(
+              faction.investmentBuffs.dirtyMoneyGainPercent,
+              0
+            ),
+            cleanMoneyGainPercent: safeNumber(
+              faction.investmentBuffs.cleanMoneyGainPercent,
+              0
+            ),
+            agilityPercent: safeNumber(
+              faction.investmentBuffs.agilityPercent,
+              0
+            ),
+            intelligencePercent: safeNumber(
+              faction.investmentBuffs.intelligencePercent,
+              0
+            ),
+            respectPercent: safeNumber(
+              faction.investmentBuffs.respectPercent,
+              0
+            ),
+            baseDefensePercent: safeNumber(
+              faction.investmentBuffs.baseDefensePercent,
+              0
+            ),
+            donationEfficiencyPercent: safeNumber(
+              faction.investmentBuffs.donationEfficiencyPercent,
+              0
+            ),
+            buffDurationPercent: safeNumber(
+              faction.investmentBuffs.buffDurationPercent,
+              0
+            ),
           }
         : calculateFactionInvestmentBuffs(faction.investments || {});
 
     return {
-      id:                   String(faction.id),
-      name:                 String(faction.name || ''),
-      tag:                  String(faction.tag || ''),
-      level:                Math.max(1, safeNumber(faction.level, 1)),
-      exp:                  Math.max(0, safeNumber(faction.exp, 0)),
-      expToNext:            Math.max(1, safeNumber(faction.expToNext, 100)),
-      totalInvestmentLevel: Math.max(0, safeNumber(faction.totalInvestmentLevel, 0)),
-      investmentTierName:   String(faction.investmentTierName || 'Turma de Esquina'),
+      id: String(faction.id),
+      name: String(faction.name || ''),
+      tag: String(faction.tag || ''),
+      level: Math.max(1, safeNumber(faction.level, 1)),
+      exp: Math.max(0, safeNumber(faction.exp, 0)),
+      expToNext: Math.max(1, safeNumber(faction.expToNext, 100)),
+      totalInvestmentLevel: Math.max(
+        0,
+        safeNumber(faction.totalInvestmentLevel, 0)
+      ),
+      investmentTierName: String(
+        faction.investmentTierName || 'Turma de Esquina'
+      ),
       treasury: {
         dirtyMoney: Math.max(0, safeNumber(faction.treasury?.dirtyMoney, 0)),
         cleanMoney: Math.max(0, safeNumber(faction.treasury?.cleanMoney, 0)),
-        corre:      Math.max(0, safeNumber(faction.treasury?.corre, 0)),
+        corre: Math.max(0, safeNumber(faction.treasury?.corre, 0)),
       },
       investmentBuffs,
       activeBuffs: Array.isArray(faction.activeBuffs) ? faction.activeBuffs : [],
@@ -129,23 +173,22 @@ async function getFactionContextForPlayer(player) {
 
 export async function getMe(req, res) {
   try {
-    import {
-  const player = req.player;
+    const player = req.player;
 
-applyPassiveIncome(player);
+    applyPassiveIncome(player);
 
-const recalculatedPower = calculatePlayerPower(player);
-if (player.power !== recalculatedPower) {
-  player.power = recalculatedPower;
-}
+    const recalculatedPower = calculatePlayerPower(player);
+    if (player.power !== recalculatedPower) {
+      player.power = recalculatedPower;
+    }
 
-bumpVersion(player);
-await player.save();
+    bumpVersion(player);
+    await player.save();
 
     const faction = await getFactionContextForPlayer(player);
 
     return res.json({
-      player:  mergePlayerState(player.toObject()),
+      player: mergePlayerState(player.toObject()),
       faction,
     });
   } catch (error) {
@@ -156,31 +199,29 @@ await player.save();
 
 export async function updateMe(req, res) {
   try {
-    const player   = req.player;
+    const player = req.player;
     const incoming = req.body || {};
 
     const allowedIncoming = pickAllowedFields(incoming);
 
-    // Monta o estado merged para cálculos
-    const mergedSkills    = { ...(player.toObject().skills || {}), ...(allowedIncoming.skills || {}) };
+    const mergedSkills = {
+      ...(player.toObject().skills || {}),
+      ...(allowedIncoming.skills || {}),
+    };
+
     const mergedInventory = {
       ...(player.toObject().inventory || {}),
       ...(allowedIncoming.inventory || {}),
       items: allowedIncoming.inventory?.items ?? player.inventory?.items ?? [],
     };
-    const mergedAccessories = allowedIncoming.purchasedAccessories ?? player.purchasedAccessories ?? [];
-    const mergedNiveis      = { ...(player.toObject().niveis || {}), ...(allowedIncoming.niveis || {}) };
 
-    // ─── RECALCULA O POWER AUTORITATIVAMENTE ────────────────────────────────
-    // O cliente NÃO pode enviar power diretamente — calculamos aqui com todas as fontes.
-    const playerForCalc = {
-      skills:               mergedSkills,
-      inventory:            mergedInventory,
-      purchasedAccessories: mergedAccessories,
-      niveis:               mergedNiveis,
+    const mergedAccessories =
+      allowedIncoming.purchasedAccessories ?? player.purchasedAccessories ?? [];
+
+    const mergedNiveis = {
+      ...(player.toObject().niveis || {}),
+      ...(allowedIncoming.niveis || {}),
     };
-    allowedIncoming.power = calculatePlayerPower(playerForCalc);
-    // ─────────────────────────────────────────────────────────────────────────
 
     const merged = mergePlayerState({
       ...player.toObject(),
@@ -189,9 +230,9 @@ export async function updateMe(req, res) {
         ...(player.toObject().balances || {}),
         ...(allowedIncoming.balances || {}),
       },
-      niveis:           mergedNiveis,
-      skills:           mergedSkills,
-      inventory:        mergedInventory,
+      niveis: mergedNiveis,
+      skills: mergedSkills,
+      inventory: mergedInventory,
       pageLevels: {
         ...(player.toObject().pageLevels || {}),
         ...(allowedIncoming.pageLevels || {}),
@@ -226,9 +267,13 @@ export async function updateMe(req, res) {
       },
     });
 
-merged.power = calculatePlayerPower(merged);
+    merged.power = calculatePlayerPower({
+      ...merged,
+      purchasedAccessories: mergedAccessories,
+    });
 
     const sanitized = sanitizePlayerState(merged);
+
     Object.assign(player, sanitized);
     bumpVersion(player);
     await player.save();
@@ -236,7 +281,7 @@ merged.power = calculatePlayerPower(merged);
     const faction = await getFactionContextForPlayer(player);
 
     return res.json({
-      player:  mergePlayerState(player.toObject()),
+      player: mergePlayerState(player.toObject()),
       faction,
     });
   } catch (error) {

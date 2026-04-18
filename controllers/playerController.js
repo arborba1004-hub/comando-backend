@@ -26,8 +26,6 @@ const ALLOWED_TOP_LEVEL_FIELDS = [
   'ownedVehicles',
   'purchasedAccessories',
   'accessories',
-  'notifications',
-  'attackHistory',
 ];
 
 function pickAllowedFields(payload) {
@@ -211,10 +209,10 @@ export async function updateMe(req, res) {
       ...(player.toObject().inventory || {}),
       ...(allowedIncoming.inventory || {}),
       items: allowedIncoming.inventory?.items ?? player.inventory?.items ?? [],
+      gifts: allowedIncoming.inventory?.gifts ?? player.inventory?.gifts ?? [],
+      rewards:
+        allowedIncoming.inventory?.rewards ?? player.inventory?.rewards ?? [],
     };
-
-    const mergedAccessories =
-      allowedIncoming.purchasedAccessories ?? player.purchasedAccessories ?? [];
 
     const mergedNiveis = {
       ...(player.toObject().niveis || {}),
@@ -265,10 +263,7 @@ export async function updateMe(req, res) {
       },
     });
 
-    merged.power = calculatePlayerPower({
-      ...merged,
-      purchasedAccessories: mergedAccessories,
-    });
+    merged.power = calculatePlayerPower(merged);
 
     const sanitized = sanitizePlayerState(merged);
 

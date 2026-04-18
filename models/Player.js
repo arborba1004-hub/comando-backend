@@ -190,11 +190,11 @@ const playerSchema = new mongoose.Schema(
     },
 
     mapPosition: {
-      tileX: { type: Number, default: 20 },
-      tileY: { type: Number, default: 10 },
-      worldX: { type: Number, default: 0 },
-      worldY: { type: Number, default: 0 },
-    },
+  tileX: { type: Number, default: 60 },
+  tileY: { type: Number, default: 60 },
+  worldX: { type: Number, default: 0 },
+  worldY: { type: Number, default: 0 },
+},
 
     laundryProgress: {
       activeOperations: { type: [activeOperationSchema], default: [] },

@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { env } from '../config/env.js';
 import Player from '../models/Player.js';
+import { generateFreeMapPosition } from '../utils/gameHelpers.js';
 
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
 
@@ -39,11 +40,14 @@ export async function googleAuth(req, res) {
     let player = await Player.findOne({ googleId: payload.sub });
 
     if (!player) {
+      const freeMapPosition = await generateFreeMapPosition();
+
       player = await Player.create({
         googleId: payload.sub,
         email: payload.email,
         name: payload.name || 'Jogador',
         avatar: payload.picture || '',
+        mapPosition: freeMapPosition,
       });
     } else {
       player.name = payload.name || player.name;
@@ -69,4 +73,3 @@ export async function googleAuth(req, res) {
     });
   }
 }
-

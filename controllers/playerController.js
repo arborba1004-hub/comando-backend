@@ -1,6 +1,10 @@
 import Faction from '../models/Faction.js';
 import { mergePlayerState, sanitizePlayerState } from '../utils/playerMapper.js';
-import { applyPassiveIncome, bumpVersion, calculatePlayerPower } from '../utils/gameHelpers.js';
+import {
+  applyPassiveIncome,
+  bumpVersion,
+  calculatePlayerPower,
+} from '../utils/gameHelpers.js';
 
 const ALLOWED_TOP_LEVEL_FIELDS = [
   'hp',
@@ -9,7 +13,6 @@ const ALLOWED_TOP_LEVEL_FIELDS = [
   'inventory',
   'pageLevels',
   'skills',
-  // 'power' — NÃO está na lista; poder é calculado autoritativamente no backend
   'vip',
   'lastSkillTrainAt',
   'lastAttackAt',
@@ -126,18 +129,18 @@ async function getFactionContextForPlayer(player) {
 
 export async function getMe(req, res) {
   try {
-    const player = req.player;
+    import {
+  const player = req.player;
 
-    applyPassiveIncome(player);
+applyPassiveIncome(player);
 
-    // Garante que o power está sempre correto ao servir o jogador
-    const recalcPower = calculatePlayerPower(player);
-    if (player.power !== recalcPower) {
-      player.power = recalcPower;
-    }
+const recalculatedPower = calculatePlayerPower(player);
+if (player.power !== recalculatedPower) {
+  player.power = recalculatedPower;
+}
 
-    bumpVersion(player);
-    await player.save();
+bumpVersion(player);
+await player.save();
 
     const faction = await getFactionContextForPlayer(player);
 
@@ -222,6 +225,8 @@ export async function updateMe(req, res) {
         ...(allowedIncoming.accessories || {}),
       },
     });
+
+merged.power = calculatePlayerPower(merged);
 
     const sanitized = sanitizePlayerState(merged);
     Object.assign(player, sanitized);

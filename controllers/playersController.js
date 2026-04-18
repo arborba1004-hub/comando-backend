@@ -7,6 +7,7 @@ export async function getAllPlayers(req, res) {
       {
         _id: 1,
         name: 1,
+        factionId: 1,
         mapPosition: 1,
         power: 1,
         balances: 1,
@@ -17,6 +18,7 @@ export async function getAllPlayers(req, res) {
     const formatted = players.map((p) => ({
       id: String(p._id),
       name: p.name,
+      factionId: p.factionId || null,
       tileX: p.mapPosition?.tileX || 0,
       tileY: p.mapPosition?.tileY || 0,
       worldX: p.mapPosition?.worldX || 0,

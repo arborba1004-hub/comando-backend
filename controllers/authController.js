@@ -59,11 +59,12 @@ export async function googleAuth(req, res) {
     }
 
     const appToken = signToken(player._id);
+    const normalizedPlayer = mergePlayerState(player.toObject());
 
     return res.status(200).json({
       ok: true,
       token: appToken,
-      player,
+      player: normalizedPlayer,
     });
   } catch (error) {
     console.error('Erro em /auth/google:', error);

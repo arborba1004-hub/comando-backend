@@ -3,6 +3,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { env } from '../config/env.js';
 import Player from '../models/Player.js';
 import { generateFreeMapPosition } from '../utils/gameHelpers.js';
+import { mergePlayerState } from '../utils/playerMapper.js';
 
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
 

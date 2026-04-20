@@ -170,25 +170,21 @@ async function getFactionContextForPlayer(player) {
     return null;
   }
 }
-
 export async function getMe(req, res) {
   try {
     const player = req.player;
 
-    applyPassiveIncome(player);
+    const playerView = player.toObject();
 
-    const recalculatedPower = calculatePlayerPower(player);
-    if (player.power !== recalculatedPower) {
-      player.power = recalculatedPower;
-    }
+    applyPassiveIncome(playerView);
 
-    bumpVersion(player);
-    await player.save();
+    const recalculatedPower = calculatePlayerPower(playerView);
+    playerView.power = recalculatedPower;
 
     const faction = await getFactionContextForPlayer(player);
 
     return res.json({
-      player: mergePlayerState(player.toObject()),
+      player: mergePlayerState(playerView),
       faction,
     });
   } catch (error) {

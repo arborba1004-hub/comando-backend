@@ -4,6 +4,8 @@ const DEFAULT_RADIUS = 12;
 const MAX_RADIUS = 18;
 const DEFAULT_LIMIT = 18;
 const MAX_LIMIT = 24;
+const DEFAULT_SNAPSHOT_LIMIT = 1000;
+const MAX_SNAPSHOT_LIMIT = 1000;
 const MIN_TILE = 0;
 const MAX_TILE = 119;
 
@@ -14,6 +16,21 @@ function toInt(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function projectPlayerForMap(player) {
+  const tileX = player.mapPosition?.tileX ?? 0;
+  const tileY = player.mapPosition?.tileY ?? 0;
+
+  return {
+    id: String(player._id),
+    name: player.name,
+    factionId: player.factionId || null,
+    tileX,
+    tileY,
+    barracoLevel: player.niveis?.barracoLevel || 1,
+    power: player.power || 0,
+  };
 }
 
 export async function getAllPlayers(req, res) {
@@ -65,19 +82,12 @@ export async function getAllPlayers(req, res) {
 
     const formatted = players
       .map((p) => {
-        const tileX = p.mapPosition?.tileX ?? 0;
-        const tileY = p.mapPosition?.tileY ?? 0;
-
+        const projected = projectPlayerForMap(p);
         return {
-          id: String(p._id),
-          name: p.name,
-          factionId: p.factionId || null,
-          tileX,
-          tileY,
-          barracoLevel: p.niveis?.barracoLevel || 1,
-          power: p.power || 0,
+          ...projected,
           distance:
-            Math.abs(tileX - centerTileX) + Math.abs(tileY - centerTileY),
+            Math.abs(projected.tileX - centerTileX) +
+            Math.abs(projected.tileY - centerTileY),
         };
       })
       .sort((a, b) => a.distance - b.distance)
@@ -88,5 +98,39 @@ export async function getAllPlayers(req, res) {
   } catch (error) {
     console.error('Erro ao buscar players do mapa:', error);
     return res.status(500).json({ error: 'Erro ao buscar players do mapa' });
+  }
+}
+
+export async function getMapPlayersSnapshot(req, res) {
+  try {
+    const limit = clamp(
+      toInt(req.query.limit, DEFAULT_SNAPSHOT_LIMIT),
+      1,
+      MAX_SNAPSHOT_LIMIT
+    );
+
+    const players = await Player.find(
+      {
+        _id: { $ne: req.user.id },
+      },
+      {
+        _id: 1,
+        name: 1,
+        factionId: 1,
+        mapPosition: 1,
+        power: 1,
+        'niveis.barracoLevel': 1,
+      }
+    )
+      .sort({ 'mapPosition.tileY': 1, 'mapPosition.tileX': 1, _id: 1 })
+      .limit(limit)
+      .lean();
+
+    return res.json(players.map(projectPlayerForMap));
+  } catch (error) {
+    console.error('Erro ao buscar snapshot global do mapa:', error);
+    return res
+      .status(500)
+      .json({ error: 'Erro ao buscar snapshot global do mapa' });
   }
 }

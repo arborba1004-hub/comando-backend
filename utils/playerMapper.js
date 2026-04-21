@@ -1,7 +1,15 @@
-import { getDefaultPlayerState } from './playerDefaults.js';
+import { getDefaultPlayerState, GRID_WIDTH, GRID_HEIGHT } from './playerDefaults.js';
+
+const LOT_SIZE = 8;
 
 function ensureObject(value, fallback = {}) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
+}
+
+function snapTileToLotOrigin(tile, maxTiles) {
+  const numericTile = Number.isFinite(Number(tile)) ? Math.floor(Number(tile)) : 0;
+  const snapped = Math.floor(numericTile / LOT_SIZE) * LOT_SIZE;
+  return Math.max(0, Math.min(maxTiles - LOT_SIZE, snapped));
 }
 
 export function mergePlayerState(incoming = {}) {
@@ -24,9 +32,15 @@ export function mergePlayerState(incoming = {}) {
     inventory: {
       ...defaults.inventory,
       ...ensureObject(incoming.inventory),
-      items: Array.isArray(incoming.inventory?.items) ? incoming.inventory.items : defaults.inventory.items,
-      gifts: Array.isArray(incoming.inventory?.gifts) ? incoming.inventory.gifts : defaults.inventory.gifts,
-      rewards: Array.isArray(incoming.inventory?.rewards) ? incoming.inventory.rewards : defaults.inventory.rewards,
+      items: Array.isArray(incoming.inventory?.items)
+        ? incoming.inventory.items
+        : defaults.inventory.items,
+      gifts: Array.isArray(incoming.inventory?.gifts)
+        ? incoming.inventory.gifts
+        : defaults.inventory.gifts,
+      rewards: Array.isArray(incoming.inventory?.rewards)
+        ? incoming.inventory.rewards
+        : defaults.inventory.rewards,
     },
 
     pageLevels: {
@@ -82,9 +96,18 @@ export function mergePlayerState(incoming = {}) {
       ...ensureObject(incoming.accessories),
     },
 
-    notifications: Array.isArray(incoming.notifications) ? incoming.notifications : defaults.notifications,
-    attackHistory: Array.isArray(incoming.attackHistory) ? incoming.attackHistory : defaults.attackHistory,
-    ownedVehicles: Array.isArray(incoming.ownedVehicles) ? incoming.ownedVehicles : defaults.ownedVehicles,
+    notifications: Array.isArray(incoming.notifications)
+      ? incoming.notifications
+      : defaults.notifications,
+
+    attackHistory: Array.isArray(incoming.attackHistory)
+      ? incoming.attackHistory
+      : defaults.attackHistory,
+
+    ownedVehicles: Array.isArray(incoming.ownedVehicles)
+      ? incoming.ownedVehicles
+      : defaults.ownedVehicles,
+
     purchasedAccessories: Array.isArray(incoming.purchasedAccessories)
       ? incoming.purchasedAccessories
       : defaults.purchasedAccessories,
@@ -119,10 +142,12 @@ export function sanitizePlayerState(incoming = {}) {
     merged.skills[key] = Math.max(0, Number(merged.skills[key] || 0));
   }
 
-  merged.mapPosition.tileX = Number(merged.mapPosition.tileX || 0);
-  merged.mapPosition.tileY = Number(merged.mapPosition.tileY || 0);
-  merged.mapPosition.worldX = Number(merged.mapPosition.worldX || 0);
-  merged.mapPosition.worldY = Number(merged.mapPosition.worldY || 0);
+  merged.mapPosition.tileX = snapTileToLotOrigin(merged.mapPosition.tileX, GRID_WIDTH);
+  merged.mapPosition.tileY = snapTileToLotOrigin(merged.mapPosition.tileY, GRID_HEIGHT);
+  merged.mapPosition.worldX =
+    merged.mapPosition.tileX - Math.floor(GRID_WIDTH / 2) + LOT_SIZE / 2;
+  merged.mapPosition.worldY =
+    merged.mapPosition.tileY - Math.floor(GRID_HEIGHT / 2) + LOT_SIZE / 2;
 
   merged.barracoPosition.x = Number(merged.barracoPosition.x || 0);
   merged.barracoPosition.y = Number(merged.barracoPosition.y || 0);

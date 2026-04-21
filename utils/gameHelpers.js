@@ -67,8 +67,8 @@ export async function generateFreeMapPosition(maxAttempts = 300) {
     }
   }
 
-  const fallbackTileX = Math.floor((Math.floor(GRID_WIDTH / 2)) / LOT_SIZE) * LOT_SIZE;
-  const fallbackTileY = Math.floor((Math.floor(GRID_HEIGHT / 2)) / LOT_SIZE) * LOT_SIZE;
+  const fallbackTileX = Math.floor(Math.floor(GRID_WIDTH / 2) / LOT_SIZE) * LOT_SIZE;
+  const fallbackTileY = Math.floor(Math.floor(GRID_HEIGHT / 2) / LOT_SIZE) * LOT_SIZE;
   const { worldX, worldY } = tileToWorld(fallbackTileX, fallbackTileY);
 
   return {

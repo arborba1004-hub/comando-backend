@@ -1,6 +1,26 @@
 export const GRID_WIDTH = 120;
 export const GRID_HEIGHT = 120;
 
+export function createEmptyGangStats() {
+  return {
+    totalMembers: 0,
+    activeMembers: 0,
+    injuredMembers: 0,
+    deadMembers: 0,
+    trainingMembers: 0,
+    totalPower: 0,
+    averageLevel: 0,
+  };
+}
+
+export function createEmptyGangState() {
+  return {
+    members: [],
+    stats: createEmptyGangStats(),
+    updatedAtIso: null,
+  };
+}
+
 export function getDefaultPlayerState() {
   return {
     hp: 100,
@@ -112,6 +132,8 @@ export function getDefaultPlayerState() {
 
     notifications: [],
     attackHistory: [],
+
+    gang: createEmptyGangState(),
 
     version: 0,
     lastPassiveIncomeAt: Date.now(),

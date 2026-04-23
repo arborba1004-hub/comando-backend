@@ -8,13 +8,56 @@ const selectedTroopSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const reportSideSchema = new mongoose.Schema(
+  {
+    playerId: { type: String, default: '' },
+    name: { type: String, default: '' },
+    factionTag: { type: String, default: null },
+    coordinates: {
+      x: { type: Number, default: 0 },
+      y: { type: Number, default: 0 },
+    },
+    barracoLevel: { type: Number, default: 1, min: 1 },
+    tropasEliminadas: { type: Number, default: 0, min: 0 },
+    perdas: { type: Number, default: 0, min: 0 },
+    machucados: { type: Number, default: 0, min: 0 },
+    vivos: { type: Number, default: 0, min: 0 },
+    danoTotalCausado: { type: Number, default: 0, min: 0 },
+    danoTotalRecebido: { type: Number, default: 0, min: 0 },
+    composicaoInicial: { type: Object, default: {} },
+    composicaoFinal: { type: Object, default: {} },
+  },
+  { _id: false }
+);
+
+const reportSchema = new mongoose.Schema(
+  {
+    winner: {
+      type: String,
+      enum: ['atacante', 'defensor', 'empate'],
+      default: 'empate',
+    },
+    rounds: { type: Number, default: 0, min: 0 },
+    lootDirtyMoney: { type: Number, default: 0, min: 0 },
+    barracoLevelPerdedor: { type: Number, default: 0, min: 0 },
+    attacker: { type: reportSideSchema, default: {} },
+    defender: { type: reportSideSchema, default: {} },
+    attackerSubject: { type: String, default: '' },
+    attackerBody: { type: String, default: '' },
+    defenderSubject: { type: String, default: '' },
+    defenderBody: { type: String, default: '' },
+  },
+  { _id: false }
+);
+
 const attackSchema = new mongoose.Schema(
   {
     id: { type: String, required: true, unique: true, index: true },
+
     status: {
       type: String,
-      enum: ['started', 'resolved'],
-      default: 'started',
+      enum: ['travelling', 'resolved', 'cancelled'],
+      default: 'travelling',
       index: true,
     },
 
@@ -34,36 +77,28 @@ const attackSchema = new mongoose.Schema(
       tileX: { type: Number, default: 0 },
       tileY: { type: Number, default: 0 },
     },
+
     target: {
       tileX: { type: Number, default: 0 },
       tileY: { type: Number, default: 0 },
     },
 
-    success: { type: Boolean, default: null },
-    critical: { type: Boolean, default: null },
-    loot: { type: Number, default: 0, min: 0 },
-    chance: { type: Number, default: 0 },
+    routeDistanceTiles: { type: Number, default: 0, min: 0 },
+    timePerTileMs: { type: Number, default: 0, min: 0 },
+    totalDurationMs: { type: Number, default: 0, min: 0 },
 
-    attackerPower: { type: Number, default: 0 },
-    defenderPower: { type: Number, default: 0 },
-
-    attackerSnapshot: { type: Object, default: {} },
-    defenderSnapshot: { type: Object, default: {} },
-
-    attackerDirtyMoneyDelta: { type: Number, default: 0 },
-    defenderDirtyMoneyDelta: { type: Number, default: 0 },
-
-    attackerGangStats: { type: Object, default: null },
-    defenderGangStats: { type: Object, default: null },
-    attackerGangLosses: { type: Object, default: null },
-    defenderGangLosses: { type: Object, default: null },
+    launchedAtIso: { type: String, default: () => new Date().toISOString() },
+    arriveAtIso: { type: String, default: null },
+    resolvedAtIso: { type: String, default: null },
 
     selectedTroops: { type: [selectedTroopSchema], default: [] },
     selectedMemberIds: { type: [String], default: [] },
 
-    message: { type: String, default: '' },
-    createdAtIso: { type: String, default: () => new Date().toISOString() },
-    resolvedAtIso: { type: String, default: null },
+    success: { type: Boolean, default: null },
+    critical: { type: Boolean, default: null },
+    loot: { type: Number, default: 0, min: 0 },
+
+    report: { type: reportSchema, default: {} },
   },
   {
     timestamps: true,

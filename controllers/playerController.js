@@ -30,6 +30,7 @@ const ALLOWED_TOP_LEVEL_FIELDS = [
   'attackHistory',
   'factionId',
   'gangId',
+  'gang',
 ];
 
 function pickAllowedFields(payload) {
@@ -99,47 +100,17 @@ async function getFactionContextForPlayer(player) {
     const investmentBuffs =
       faction.investmentBuffs && typeof faction.investmentBuffs === 'object'
         ? {
-            attackPercent: safeNumber(
-              faction.investmentBuffs.attackPercent,
-              0
-            ),
-            defensePercent: safeNumber(
-              faction.investmentBuffs.defensePercent,
-              0
-            ),
+            attackPercent: safeNumber(faction.investmentBuffs.attackPercent, 0),
+            defensePercent: safeNumber(faction.investmentBuffs.defensePercent, 0),
             hpPercent: safeNumber(faction.investmentBuffs.hpPercent, 0),
-            dirtyMoneyGainPercent: safeNumber(
-              faction.investmentBuffs.dirtyMoneyGainPercent,
-              0
-            ),
-            cleanMoneyGainPercent: safeNumber(
-              faction.investmentBuffs.cleanMoneyGainPercent,
-              0
-            ),
-            agilityPercent: safeNumber(
-              faction.investmentBuffs.agilityPercent,
-              0
-            ),
-            intelligencePercent: safeNumber(
-              faction.investmentBuffs.intelligencePercent,
-              0
-            ),
-            respectPercent: safeNumber(
-              faction.investmentBuffs.respectPercent,
-              0
-            ),
-            baseDefensePercent: safeNumber(
-              faction.investmentBuffs.baseDefensePercent,
-              0
-            ),
-            donationEfficiencyPercent: safeNumber(
-              faction.investmentBuffs.donationEfficiencyPercent,
-              0
-            ),
-            buffDurationPercent: safeNumber(
-              faction.investmentBuffs.buffDurationPercent,
-              0
-            ),
+            dirtyMoneyGainPercent: safeNumber(faction.investmentBuffs.dirtyMoneyGainPercent, 0),
+            cleanMoneyGainPercent: safeNumber(faction.investmentBuffs.cleanMoneyGainPercent, 0),
+            agilityPercent: safeNumber(faction.investmentBuffs.agilityPercent, 0),
+            intelligencePercent: safeNumber(faction.investmentBuffs.intelligencePercent, 0),
+            respectPercent: safeNumber(faction.investmentBuffs.respectPercent, 0),
+            baseDefensePercent: safeNumber(faction.investmentBuffs.baseDefensePercent, 0),
+            donationEfficiencyPercent: safeNumber(faction.investmentBuffs.donationEfficiencyPercent, 0),
+            buffDurationPercent: safeNumber(faction.investmentBuffs.buffDurationPercent, 0),
           }
         : calculateFactionInvestmentBuffs(faction.investments || {});
 
@@ -150,13 +121,8 @@ async function getFactionContextForPlayer(player) {
       level: Math.max(1, safeNumber(faction.level, 1)),
       exp: Math.max(0, safeNumber(faction.exp, 0)),
       expToNext: Math.max(1, safeNumber(faction.expToNext, 100)),
-      totalInvestmentLevel: Math.max(
-        0,
-        safeNumber(faction.totalInvestmentLevel, 0)
-      ),
-      investmentTierName: String(
-        faction.investmentTierName || 'Turma de Esquina'
-      ),
+      totalInvestmentLevel: Math.max(0, safeNumber(faction.totalInvestmentLevel, 0)),
+      investmentTierName: String(faction.investmentTierName || 'Turma de Esquina'),
       treasury: {
         dirtyMoney: Math.max(0, safeNumber(faction.treasury?.dirtyMoney, 0)),
         cleanMoney: Math.max(0, safeNumber(faction.treasury?.cleanMoney, 0)),
@@ -170,10 +136,10 @@ async function getFactionContextForPlayer(player) {
     return null;
   }
 }
+
 export async function getMe(req, res) {
   try {
     const player = req.player;
-
     const playerView = player.toObject();
 
     applyPassiveIncome(playerView);
@@ -210,8 +176,7 @@ export async function updateMe(req, res) {
       ...(allowedIncoming.inventory || {}),
       items: allowedIncoming.inventory?.items ?? player.inventory?.items ?? [],
       gifts: allowedIncoming.inventory?.gifts ?? player.inventory?.gifts ?? [],
-      rewards:
-        allowedIncoming.inventory?.rewards ?? player.inventory?.rewards ?? [],
+      rewards: allowedIncoming.inventory?.rewards ?? player.inventory?.rewards ?? [],
     };
 
     const mergedNiveis = {
@@ -260,6 +225,13 @@ export async function updateMe(req, res) {
       accessories: {
         ...(player.toObject().accessories || {}),
         ...(allowedIncoming.accessories || {}),
+      },
+      gang: {
+        ...(player.toObject().gang || {}),
+        ...(allowedIncoming.gang || {}),
+        members: Array.isArray(allowedIncoming.gang?.members)
+          ? allowedIncoming.gang.members
+          : player.toObject().gang?.members || [],
       },
     });
 

@@ -1,5 +1,9 @@
 import mongoose from 'mongoose';
-import { getDefaultPlayerState } from '../utils/playerDefaults.js';
+import {
+  getDefaultPlayerState,
+  createEmptyGangState,
+  createEmptyGangStats,
+} from '../utils/playerDefaults.js';
 
 const activeOperationSchema = new mongoose.Schema(
   {
@@ -66,6 +70,49 @@ const attackHistorySchema = new mongoose.Schema(
     success: { type: Boolean, default: false },
     loot: { type: Number, default: 0 },
     createdAt: { type: String, required: true },
+  },
+  { _id: false }
+);
+
+const gangMemberSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    type: {
+      type: String,
+      enum: ['capanga', 'frente', 'executor', 'assassino', 'muralha', 'certeiro', 'motorista', 'nitro'],
+      required: true,
+    },
+    level: { type: Number, default: 1, min: 1, max: 10 },
+    status: {
+      type: String,
+      enum: ['ativo', 'ferido', 'morto', 'treinando'],
+      default: 'ativo',
+    },
+    recruitedAt: { type: String, default: () => new Date().toISOString() },
+    trainingEndsAt: { type: String, default: null },
+    injuryEndsAt: { type: String, default: null },
+  },
+  { _id: false }
+);
+
+const gangStatsSchema = new mongoose.Schema(
+  {
+    totalMembers: { type: Number, default: createEmptyGangStats().totalMembers, min: 0 },
+    activeMembers: { type: Number, default: createEmptyGangStats().activeMembers, min: 0 },
+    injuredMembers: { type: Number, default: createEmptyGangStats().injuredMembers, min: 0 },
+    deadMembers: { type: Number, default: createEmptyGangStats().deadMembers, min: 0 },
+    trainingMembers: { type: Number, default: createEmptyGangStats().trainingMembers, min: 0 },
+    totalPower: { type: Number, default: createEmptyGangStats().totalPower, min: 0 },
+    averageLevel: { type: Number, default: createEmptyGangStats().averageLevel, min: 0 },
+  },
+  { _id: false }
+);
+
+const gangStateSchema = new mongoose.Schema(
+  {
+    members: { type: [gangMemberSchema], default: createEmptyGangState().members },
+    stats: { type: gangStatsSchema, default: createEmptyGangState().stats },
+    updatedAtIso: { type: String, default: null },
   },
   { _id: false }
 );
@@ -190,11 +237,11 @@ const playerSchema = new mongoose.Schema(
     },
 
     mapPosition: {
-  tileX: { type: Number, default: 60 },
-  tileY: { type: Number, default: 60 },
-  worldX: { type: Number, default: 0 },
-  worldY: { type: Number, default: 0 },
-},
+      tileX: { type: Number, default: 60 },
+      tileY: { type: Number, default: 60 },
+      worldX: { type: Number, default: 0 },
+      worldY: { type: Number, default: 0 },
+    },
 
     laundryProgress: {
       activeOperations: { type: [activeOperationSchema], default: [] },
@@ -265,6 +312,11 @@ const playerSchema = new mongoose.Schema(
     attackHistory: {
       type: [attackHistorySchema],
       default: [],
+    },
+
+    gang: {
+      type: gangStateSchema,
+      default: createEmptyGangState(),
     },
 
     version: {

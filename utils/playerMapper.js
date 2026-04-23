@@ -1,6 +1,22 @@
-import { getDefaultPlayerState, GRID_WIDTH, GRID_HEIGHT } from './playerDefaults.js';
+import {
+  getDefaultPlayerState,
+  GRID_WIDTH,
+  GRID_HEIGHT,
+  createEmptyGangState,
+  createEmptyGangStats,
+} from './playerDefaults.js';
 
 const LOT_SIZE = 8;
+const GANG_MEMBER_TYPES = [
+  'capanga',
+  'frente',
+  'executor',
+  'assassino',
+  'muralha',
+  'certeiro',
+  'motorista',
+  'nitro',
+];
 
 function ensureObject(value, fallback = {}) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
@@ -10,6 +26,77 @@ function snapTileToLotOrigin(tile, maxTiles) {
   const numericTile = Number.isFinite(Number(tile)) ? Math.floor(Number(tile)) : 0;
   const snapped = Math.floor(numericTile / LOT_SIZE) * LOT_SIZE;
   return Math.max(0, Math.min(maxTiles - LOT_SIZE, snapped));
+}
+
+function toNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function toPositiveInt(value, fallback = 1) {
+  const numeric = Math.floor(toNumber(value, fallback));
+  return numeric > 0 ? numeric : fallback;
+}
+
+export function recalculateGangStats(gangMembers = []) {
+  const totalMembers = gangMembers.length;
+  const activeMembers = gangMembers.filter((item) => item.status === 'ativo').length;
+  const injuredMembers = gangMembers.filter((item) => item.status === 'ferido').length;
+  const deadMembers = gangMembers.filter((item) => item.status === 'morto').length;
+  const trainingMembers = gangMembers.filter((item) => item.status === 'treinando').length;
+
+  const totalLevels = gangMembers.reduce(
+    (sum, item) => sum + toPositiveInt(item.level, 1),
+    0
+  );
+
+  const totalPower = gangMembers.reduce((sum, item) => {
+    return sum + toPositiveInt(item.level, 1) * 10;
+  }, 0);
+
+  return {
+    totalMembers,
+    activeMembers,
+    injuredMembers,
+    deadMembers,
+    trainingMembers,
+    totalPower,
+    averageLevel: totalMembers > 0 ? Number((totalLevels / totalMembers).toFixed(2)) : 0,
+  };
+}
+
+function sanitizeGangMember(member, index = 0) {
+  const safeType = GANG_MEMBER_TYPES.includes(String(member?.type))
+    ? String(member.type)
+    : 'capanga';
+
+  const safeStatus = ['ativo', 'ferido', 'morto', 'treinando'].includes(String(member?.status))
+    ? String(member.status)
+    : 'ativo';
+
+  return {
+    id: String(member?.id || `gang_member_${index}_${Date.now()}`),
+    type: safeType,
+    level: Math.max(1, Math.min(10, toPositiveInt(member?.level, 1))),
+    status: safeStatus,
+    recruitedAt: String(member?.recruitedAt || new Date().toISOString()),
+    trainingEndsAt: member?.trainingEndsAt ? String(member.trainingEndsAt) : null,
+    injuryEndsAt: member?.injuryEndsAt ? String(member.injuryEndsAt) : null,
+  };
+}
+
+function sanitizeGangState(input) {
+  const defaults = createEmptyGangState();
+  const raw = ensureObject(input);
+  const members = Array.isArray(raw.members)
+    ? raw.members.map((item, index) => sanitizeGangMember(item, index))
+    : defaults.members;
+
+  return {
+    members,
+    stats: recalculateGangStats(members),
+    updatedAtIso: raw.updatedAtIso ? String(raw.updatedAtIso) : null,
+  };
 }
 
 export function mergePlayerState(incoming = {}) {
@@ -111,6 +198,8 @@ export function mergePlayerState(incoming = {}) {
     purchasedAccessories: Array.isArray(incoming.purchasedAccessories)
       ? incoming.purchasedAccessories
       : defaults.purchasedAccessories,
+
+    gang: sanitizeGangState(incoming.gang),
   };
 }
 
@@ -152,6 +241,9 @@ export function sanitizePlayerState(incoming = {}) {
   merged.barracoPosition.x = Number(merged.barracoPosition.x || 0);
   merged.barracoPosition.y = Number(merged.barracoPosition.y || 0);
   merged.barracoPosition.z = Number(merged.barracoPosition.z || 0);
+
+  merged.gang = sanitizeGangState(merged.gang);
+  merged.gang.updatedAtIso = new Date().toISOString();
 
   return merged;
 }

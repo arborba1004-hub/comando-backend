@@ -534,6 +534,10 @@ export function resolveAttackResult({
       updatedAtIso: new Date().toISOString(),
     },
     nextDefenderGang: {
-      members: nextDefenderMembers,
-      stats: recalculateGangStats(nextDefenderMembers),
-      updatedAtIso: new Date().toISOString(),
+  members: nextDefenderMembers,
+  stats: recalculateGangStats(nextDefenderMembers),
+  updatedAtIso: new Date().toISOString(),
+},
+selectedMemberIds: resolvedSelectedMemberIds,
+  };
+}

@@ -1,4 +1,6 @@
 import express from 'express';
+import { createServer } from 'http';
+import { initSocket } from './services/socket.js';
 import cors from 'cors';
 
 import { env } from './config/env.js';
@@ -26,6 +28,8 @@ import factionHelpRoutes from './routes/factionHelpRoutes.js';
 import factionInviteRoutes from './routes/factionInviteRoutes.js';
 
 const app = express();
+const server = createServer(app);
+initSocket(server);
 
 // Configuração de CORS
 app.use(
@@ -98,9 +102,9 @@ async function startServer() {
   try {
     await connectDB();
 
-    app.listen(env.PORT, () => {
-      console.log(`🚀 Backend rodando na porta ${env.PORT}`);
-    });
+    server.listen(env.PORT, () => {
+  console.log('Servidor rodando com WebSocket');
+});
   } catch (error) {
     console.error('❌ Não foi possível iniciar o servidor:', error);
     process.exit(1);

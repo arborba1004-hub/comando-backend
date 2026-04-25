@@ -33,10 +33,11 @@ function projectPlayerForMap(player) {
   };
 }
 
+// 🔹 Busca players próximos (usado pra mapa com raio)
 export async function getAllPlayers(req, res) {
   try {
-    const fallbackTileX = req.player?.mapPosition?.tileX ?? 60;
-    const fallbackTileY = req.player?.mapPosition?.tileY ?? 60;
+    const fallbackTileX = 60;
+    const fallbackTileY = 60;
 
     const centerTileX = clamp(
       toInt(req.query.centerTileX, fallbackTileX),
@@ -66,7 +67,6 @@ export async function getAllPlayers(req, res) {
 
     const players = await Player.find(
       {
-        _id: { $ne: req.user.id },
         'mapPosition.tileX': { $gte: minTileX, $lte: maxTileX },
         'mapPosition.tileY': { $gte: minTileY, $lte: maxTileY },
       },
@@ -101,6 +101,7 @@ export async function getAllPlayers(req, res) {
   }
 }
 
+// 🔥 SNAPSHOT GLOBAL (SEM AUTH / SEM FILTRO)
 export async function getMapPlayersSnapshot(req, res) {
   try {
     const limit = clamp(
@@ -110,9 +111,7 @@ export async function getMapPlayersSnapshot(req, res) {
     );
 
     const players = await Player.find(
-      {
-        _id: { $ne: req.user.id },
-      },
+      {}, // 🔥 SEM FILTRO (ESSENCIAL)
       {
         _id: 1,
         name: 1,
@@ -129,8 +128,8 @@ export async function getMapPlayersSnapshot(req, res) {
     return res.json(players.map(projectPlayerForMap));
   } catch (error) {
     console.error('Erro ao buscar snapshot global do mapa:', error);
-    return res
-      .status(500)
-      .json({ error: 'Erro ao buscar snapshot global do mapa' });
+    return res.status(500).json({
+      error: 'Erro ao buscar snapshot global do mapa',
+    });
   }
 }

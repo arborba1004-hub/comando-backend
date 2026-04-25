@@ -1,7 +1,7 @@
+import { emitToPlayer } from '../services/socketEmitter.js';
 import Faction from '../models/Faction.js';
 import { mergePlayerState, sanitizePlayerState } from '../utils/playerMapper.js';
 import {
-import { emitToPlayer } from '../services/socketEmitter.js';
   applyPassiveIncome,
   bumpVersion,
   calculatePlayerPower,

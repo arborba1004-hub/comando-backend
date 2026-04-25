@@ -4,16 +4,20 @@
  * Hub central de tempo real do jogo.
  *
  * Eventos emitidos pelo servidor:
- *   playerInit    → estado completo do PRÓPRIO jogador (só para ele)
- *   mapSnapshot   → posições de todos os jogadores (só para o novo conectado)
- *   playerJoined  → broadcast quando alguém entra
- *   playerMoved   → broadcast quando alguém se move
- *   playerLeft    → broadcast quando alguém sai
- *   playerUpdate  → estado atualizado do PRÓPRIO jogador após qualquer mutação
- *                   (emitido pelos controllers via socketEmitter.js)
+ *   playerInit       → estado completo do PRÓPRIO jogador (só para ele)
+ *   mapSnapshot      → posições de todos os jogadores (só para o novo conectado)
+ *   playerJoined     → broadcast quando alguém entra
+ *   playerMoved      → broadcast quando alguém se move
+ *   playerTeleported → broadcast quando alguém se teleporta
+ *   playerLeft       → broadcast quando alguém sai
+ *   barracoInfo      → dados do barraco de um jogador (sob demanda)
+ *   playerUpdate     → estado atualizado do PRÓPRIO jogador após qualquer mutação
+ *                      (emitido pelos controllers via socketEmitter.js)
  *
  * Eventos recebidos do cliente:
- *   move          → { tileX, tileY } — salva posição + broadcast
+ *   move             → { tileX, tileY } — salva posição + broadcast
+ *   teleport         → { tileX, tileY, teleportType } — salva posição + broadcast com animação
+ *   requestBarracoInfo → { targetPlayerId } — retorna dados do barraco
  */
 
 import { Server }          from 'socket.io';
@@ -30,6 +34,16 @@ const socketToPlayer = new Map();
 
 /** playerId → socketId  (para emitToPlayer) */
 const playerToSocket = new Map();
+
+/** playerId → timestamp (para rate limiting de movimento) */
+const playerMoveTimestamps = new Map();
+
+/** playerId → timestamp (para rate limiting de teleporte) */
+const playerTeleportTimestamps = new Map();
+
+// ─── Configurações de Rate Limiting ──────────────────────────────────────────
+const MOVE_COOLDOWN_MS = 1000;       // 1 movimento por segundo
+const TELEPORT_COOLDOWN_MS = 30000;  // 1 teleporte a cada 30 segundos
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
@@ -61,6 +75,10 @@ async function fetchMapSnapshot(limit = 1000) {
     .limit(limit)
     .lean();
   return players.map(projectForMap);
+}
+
+function clampTile(value) {
+  return Math.max(0, Math.min(119, Math.trunc(Number(value))));
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -144,25 +162,39 @@ export function initSocket(server) {
 
     // ── 3. Anuncia chegada para os outros ─────────────────────────────────
     socket.broadcast.emit('playerJoined', {
-      id:          playerId,
-      name:        playerName,
-      tileX:       socket.data.tileX,
-      tileY:       socket.data.tileY,
+      id:           playerId,
+      name:         playerName,
+      tileX:        socket.data.tileX,
+      tileY:        socket.data.tileY,
       barracoLevel: socket.data.barracoLevel,
-      power:       socket.data.power,
-      factionId:   socket.data.factionId,
+      power:        socket.data.power,
+      factionId:    socket.data.factionId,
     });
 
     // ── 4. Movimento ──────────────────────────────────────────────────────
     // Salva posição no MongoDB (fire-and-forget) e faz broadcast imediato.
     // NÃO espera o save para emitir — latência ~0ms para outros jogadores.
+    // Rate limiting: máximo 1 movimento por segundo por jogador.
     socket.on('move', (data) => {
       const tileX = Number(data?.tileX);
       const tileY = Number(data?.tileY);
       if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) return;
 
-      const clampedX = Math.max(0, Math.min(119, Math.trunc(tileX)));
-      const clampedY = Math.max(0, Math.min(119, Math.trunc(tileY)));
+      const now = Date.now();
+      const lastMove = playerMoveTimestamps.get(playerId) || 0;
+
+      if (now - lastMove < MOVE_COOLDOWN_MS) {
+        socket.emit('error', {
+          code: 'COOLDOWN_ACTIVE',
+          message: 'Aguarde 1 segundo entre movimentos',
+        });
+        return;
+      }
+
+      playerMoveTimestamps.set(playerId, now);
+
+      const clampedX = clampTile(tileX);
+      const clampedY = clampTile(tileY);
 
       socket.data.tileX = clampedX;
       socket.data.tileY = clampedY;
@@ -184,14 +216,161 @@ export function initSocket(server) {
       });
     });
 
-    // ── 5. Desconexão ─────────────────────────────────────────────────────
+    // ── 5. Teleporte ──────────────────────────────────────────────────────
+    // Rate limiting: máximo 1 teleporte a cada 30 segundos por jogador.
+    socket.on('teleport', (data) => {
+      const tileX = Number(data?.tileX);
+      const tileY = Number(data?.tileY);
+      if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) return;
+
+      const now = Date.now();
+      const lastTeleport = playerTeleportTimestamps.get(playerId) || 0;
+
+      if (now - lastTeleport < TELEPORT_COOLDOWN_MS) {
+        const remainingSeconds = Math.ceil((TELEPORT_COOLDOWN_MS - (now - lastTeleport)) / 1000);
+        socket.emit('error', {
+          code: 'COOLDOWN_ACTIVE',
+          message: `Aguarde ${remainingSeconds}s para teleportar novamente`,
+        });
+        return;
+      }
+
+      playerTeleportTimestamps.set(playerId, now);
+
+      const clampedX = clampTile(tileX);
+      const clampedY = clampTile(tileY);
+
+      const oldPosition = {
+        tileX: socket.data.tileX,
+        tileY: socket.data.tileY,
+      };
+
+      const newPosition = {
+        tileX: clampedX,
+        tileY: clampedY,
+      };
+
+      socket.data.tileX = clampedX;
+      socket.data.tileY = clampedY;
+
+      // Salva no DB sem bloquear o broadcast
+      Player.findByIdAndUpdate(playerId, {
+        $set: {
+          'mapPosition.tileX': clampedX,
+          'mapPosition.tileY': clampedY,
+        },
+      }).catch((err) => console.error('❌ Erro ao salvar posição (teleporte):', err.message));
+
+      // Broadcast com animação de teleporte
+      io.emit('playerTeleported', {
+        playerId,
+        name: playerName,
+        oldPosition,
+        newPosition,
+        teleportType: data?.teleportType || 'manual',
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    // ── 6. Informações do barraco de outro jogador ────────────────────────
+    socket.on('requestBarracoInfo', async (data) => {
+      try {
+        const targetPlayerId = String(data?.targetPlayerId || '');
+
+        if (!targetPlayerId) {
+          socket.emit('error', {
+            code: 'INVALID_PLAYER',
+            message: 'ID do jogador não informado',
+          });
+          return;
+        }
+
+        const target = await Player.findById(targetPlayerId)
+          .select('_id name avatar niveis mapPosition power factionId hierarchyBadge attackHistory')
+          .lean();
+
+        if (!target) {
+          socket.emit('error', {
+            code: 'PLAYER_NOT_FOUND',
+            message: 'Jogador não encontrado',
+          });
+          return;
+        }
+
+        // Buscar facção do jogador para exibir nome e tag
+        let factionName = null;
+        let factionTag = null;
+
+        if (target.factionId) {
+          try {
+            const Faction = (await import('../models/Faction.js')).default;
+            const faction = await Faction.findOne({ id: String(target.factionId) })
+              .select('name tag')
+              .lean();
+            if (faction) {
+              factionName = faction.name;
+              factionTag = faction.tag;
+            }
+          } catch {
+            // Facção não encontrada — segue sem
+          }
+        }
+
+        socket.emit('barracoInfo', {
+          playerId: String(target._id),
+          playerName: target.name || 'Jogador',
+          avatarUrl: target.avatar || null,
+          barracoLevel: target.niveis?.barracoLevel || 1,
+          barracoName: getBarracoName(target.niveis?.barracoLevel || 1),
+          tileX: target.mapPosition?.tileX || 0,
+          tileY: target.mapPosition?.tileY || 0,
+          factionId: target.factionId || null,
+          factionName,
+          factionTag,
+          level: target.niveis?.playerLevel || 1,
+          power: target.power || 0,
+          hierarchyBadge: target.hierarchyBadge || 'Antena',
+          attackHistory: Array.isArray(target.attackHistory)
+            ? target.attackHistory.slice(-5)
+            : [],
+        });
+      } catch (err) {
+        console.error('❌ Erro ao buscar barraco:', err.message);
+        socket.emit('error', {
+          code: 'SERVER_ERROR',
+          message: 'Erro ao buscar informações do barraco',
+        });
+      }
+    });
+
+    // ── 7. Desconexão ─────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
       socketToPlayer.delete(socket.id);
       if (playerToSocket.get(playerId) === socket.id) {
         playerToSocket.delete(playerId);
       }
+      // Limpa rate limiting ao desconectar
+      playerMoveTimestamps.delete(playerId);
+      playerTeleportTimestamps.delete(playerId);
+
       console.log(`🔴 ${playerName} (${playerId}) desconectou [${reason}]`);
       io.emit('playerLeft', { playerId });
     });
   });
+}
+
+// ─── Helper: nome do barraco por nível ───────────────────────────────────────
+
+function getBarracoName(level) {
+  const lv = Math.max(1, Number(level || 1));
+  if (lv >= 90) return 'Mansão com Heliporto';
+  if (lv >= 80) return 'Mansão Blindada';
+  if (lv >= 70) return 'Mansão do Complexo';
+  if (lv >= 60) return 'Triplex com Piscina';
+  if (lv >= 50) return 'Triplex Alto Padrão';
+  if (lv >= 40) return 'Sobrado de Luxo';
+  if (lv >= 30) return 'Sobrado com Piscina';
+  if (lv >= 20) return 'Sobrado';
+  if (lv >= 10) return 'Casa de Alvenaria';
+  return 'Barraco Inicial';
 }

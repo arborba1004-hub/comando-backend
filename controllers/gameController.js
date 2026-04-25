@@ -1,6 +1,7 @@
 import Faction from '../models/Faction.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { applyPassiveIncome, bumpVersion } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 const ALLOWED_MULTIPLIERS = [1, 2, 5, 10, 25, 50];
 
@@ -248,6 +249,7 @@ export async function gameAction(req, res) {
 
       bumpVersion(player);
       await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
       return res.json({
         result: {

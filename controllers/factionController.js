@@ -1,6 +1,7 @@
 import Faction from '../models/Faction.js';
 import Player from '../models/Player.js';
 import { generateId, bumpVersion } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 const MAX_FACTION_MEMBERS = 30;
 const MAX_BRANCH_LEVEL = 20;
@@ -486,6 +487,7 @@ const faction = await Faction.create({
     player.factionId = faction.id;
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.status(201).json({
       faction: normalizeFactionDocument(faction),
@@ -510,6 +512,7 @@ export async function getMyFaction(req, res) {
       player.factionId = null;
       bumpVersion(player);
       await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
       return res.status(404).json({ error: 'Facção não encontrada' });
     }
 
@@ -588,6 +591,7 @@ export async function joinFaction(req, res) {
       player.factionId = faction.id;
       bumpVersion(player);
       await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
       return res.json({
         faction: normalizeFactionDocument(faction),
@@ -627,6 +631,7 @@ export async function joinFaction(req, res) {
     player.factionId = faction.id;
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({
       faction: normalizeFactionDocument(faction),
@@ -651,6 +656,7 @@ if (!faction) {
       player.factionId = null;
       bumpVersion(player);
       await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
       return res.json({ success: true, factionDeleted: false, faction: null });
     }

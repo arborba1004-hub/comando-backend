@@ -1,5 +1,6 @@
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 function addHours(hours) {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
@@ -25,6 +26,7 @@ export async function bribe(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({
       player: mergePlayerState(player.toObject()),
@@ -60,6 +62,7 @@ export async function delacao(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({
       player: mergePlayerState(player.toObject()),

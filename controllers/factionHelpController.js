@@ -3,6 +3,7 @@ import Faction from '../models/Faction.js';
 import Player from '../models/Player.js';
 import ChatMessage from '../models/ChatMessage.js';
 import { generateId, bumpVersion } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
@@ -180,6 +181,7 @@ export async function helpFactionRequest(req, res) {
       request.status = 'completed';
       request.completedAtIso = new Date().toISOString();
       await request.save();
+    emitToPlayer(String(request._id), 'playerUpdate', { player: mergePlayerState(request.toObject()) });
       return res.status(400).json({ error: 'Esse pedido já atingiu o limite de ajudas' });
     }
 

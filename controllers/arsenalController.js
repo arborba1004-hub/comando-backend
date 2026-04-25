@@ -1,5 +1,6 @@
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { bumpVersion, generateId } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 function ensureInventory(player) {
   if (!player.inventory) {
@@ -57,6 +58,7 @@ export async function buyWeapon(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({
       player: mergePlayerState(player.toObject()),
@@ -101,6 +103,7 @@ export async function upgradeWeapon(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({
       player: mergePlayerState(player.toObject()),

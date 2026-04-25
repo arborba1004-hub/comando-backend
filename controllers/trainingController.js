@@ -1,6 +1,7 @@
 import Player from '../models/Player.js';
 import { randomUUID } from 'crypto';
 import { bumpVersion } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 // ===== SALVAR ESTADO DE TREINAMENTO =====
 export async function persistTrainingState(req, res) {
@@ -51,6 +52,7 @@ export async function persistTrainingState(req, res) {
     bumpVersion(player);
 
     await player.save();
+    emitToPlayer(String(player._id), 'gangUpdate', { gang: player.gang });
 
     return res.json({
       success: true,
@@ -108,6 +110,7 @@ export async function collectTraining(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'gangUpdate', { gang: player.gang });
 
     return res.json({
       success: true,

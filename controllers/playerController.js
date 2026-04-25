@@ -1,6 +1,7 @@
 import Faction from '../models/Faction.js';
 import { mergePlayerState, sanitizePlayerState } from '../utils/playerMapper.js';
 import {
+import { emitToPlayer } from '../services/socketEmitter.js';
   applyPassiveIncome,
   bumpVersion,
   calculatePlayerPower,
@@ -244,6 +245,7 @@ export async function updateMe(req, res) {
     await player.save();
 
     const faction = await getFactionContextForPlayer(player);
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()), faction });
 
     return res.json({
       player: mergePlayerState(player.toObject()),

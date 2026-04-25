@@ -1,5 +1,6 @@
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 export async function buyFugaVehicle(req, res) {
   try {
@@ -49,6 +50,7 @@ export async function buyFugaVehicle(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({
       player: mergePlayerState(player.toObject()),

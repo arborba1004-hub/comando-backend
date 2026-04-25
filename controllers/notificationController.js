@@ -1,3 +1,5 @@
+import { emitToPlayer } from '../services/socketEmitter.js';
+import { mergePlayerState } from '../utils/playerMapper.js';
 export async function getNotifications(req, res) {
   try {
     const player = req.player;
@@ -39,6 +41,7 @@ export async function markNotificationAsRead(req, res) {
 
     notification.read = true;
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({ success: true });
   } catch (error) {

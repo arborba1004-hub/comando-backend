@@ -1,6 +1,7 @@
 import Faction from '../models/Faction.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
@@ -245,6 +246,7 @@ export async function startLaundry(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.status(201).json({
       operationId,
@@ -307,6 +309,7 @@ export async function completeLaundry(req, res) {
 
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     return res.json({
       completedOperation: {

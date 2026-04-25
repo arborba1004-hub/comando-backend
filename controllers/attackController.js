@@ -9,6 +9,7 @@ import {
   resolveSelectedMemberIdsForAttack,
 } from '../services/attack/resolveAttack.js';
 import { buildAttackReport } from '../services/attack/buildAttackReport.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -516,6 +517,8 @@ export async function resolveBattle(req, res) {
 
     console.log(`[RESOLVE] Salvando batalha resolvida...`);
     await Promise.all([attacker.save(), defender.save(), attack.save()]);
+    emitToPlayer(String(attacker._id), 'playerUpdate', { player: mergePlayerState(attacker.toObject()) });
+    emitToPlayer(String(defender._id), 'playerUpdate', { player: mergePlayerState(defender.toObject()) });
     console.log(`[RESOLVE] Batalha salva: ${battleId}`);
 
     // =========================================================================

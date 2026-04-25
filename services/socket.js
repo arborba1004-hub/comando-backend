@@ -8,16 +8,17 @@
  *   mapSnapshot      → posições de todos os jogadores (só para o novo conectado)
  *   playerJoined     → broadcast quando alguém entra
  *   playerMoved      → broadcast quando alguém se move
- *   playerTeleported → broadcast quando alguém se teleporta
+ *   playerTeleported → broadcast quando alguém se teleporta (com animação)
  *   playerLeft       → broadcast quando alguém sai
  *   barracoInfo      → dados do barraco de um jogador (sob demanda)
  *   playerUpdate     → estado atualizado do PRÓPRIO jogador após qualquer mutação
  *                      (emitido pelos controllers via socketEmitter.js)
  *
  * Eventos recebidos do cliente:
- *   move             → { tileX, tileY } — salva posição + broadcast
- *   teleport         → { tileX, tileY, teleportType } — salva posição + broadcast com animação
+ *   move              → { tileX, tileY } — salva posição + broadcast
+ *   teleport          → { tileX, tileY, teleportType } — salva posição + broadcast com animação
  *   requestBarracoInfo → { targetPlayerId } — retorna dados do barraco
+ *   requestMapSnapshot → solicita reenvio do mapSnapshot (para cliente já conectado)
  */
 
 import { Server }          from 'socket.io';
@@ -46,7 +47,6 @@ const MOVE_COOLDOWN_MS = 1000;       // 1 movimento por segundo
 const TELEPORT_COOLDOWN_MS = 30000;  // 1 teleporte a cada 30 segundos
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
-
 export function getIO() { return io; }
 
 export function getPlayerSocketId(playerId) {
@@ -54,7 +54,6 @@ export function getPlayerSocketId(playerId) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
 function projectForMap(player) {
   return {
     id:           String(player._id),
@@ -81,8 +80,22 @@ function clampTile(value) {
   return Math.max(0, Math.min(119, Math.trunc(Number(value))));
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+// ─── Helper: nome do barraco por nível ───────────────────────────────────────
+function getBarracoName(level) {
+  const lv = Math.max(1, Number(level || 1));
+  if (lv >= 90) return 'Mansão com Heliporto';
+  if (lv >= 80) return 'Mansão Blindada';
+  if (lv >= 70) return 'Mansão do Complexo';
+  if (lv >= 60) return 'Triplex com Piscina';
+  if (lv >= 50) return 'Triplex Alto Padrão';
+  if (lv >= 40) return 'Sobrado de Luxo';
+  if (lv >= 30) return 'Sobrado com Piscina';
+  if (lv >= 20) return 'Sobrado';
+  if (lv >= 10) return 'Casa de Alvenaria';
+  return 'Barraco Inicial';
+}
 
+// ─── Init ─────────────────────────────────────────────────────────────────────
 export function initSocket(server) {
   io = new Server(server, {
     cors: {
@@ -124,7 +137,6 @@ export function initSocket(server) {
       next(new Error('TOKEN_INVALID'));
     }
   });
-
   // ── Conexão ───────────────────────────────────────────────────────────────
   io.on('connection', async (socket) => {
     const { playerId, playerName } = socket.data;
@@ -152,7 +164,7 @@ export function initSocket(server) {
       console.error('❌ Erro ao emitir playerInit:', err.message);
     }
 
-    // ── 2. mapSnapshot: posições de todos no mapa ─────────────────────────
+    // ── 2. mapSnapshot: posições de todos no mapa (enviado automaticamente ao conectar) ─
     try {
       const snapshot = await fetchMapSnapshot();
       socket.emit('mapSnapshot', snapshot);
@@ -172,9 +184,6 @@ export function initSocket(server) {
     });
 
     // ── 4. Movimento ──────────────────────────────────────────────────────
-    // Salva posição no MongoDB (fire-and-forget) e faz broadcast imediato.
-    // NÃO espera o save para emitir — latência ~0ms para outros jogadores.
-    // Rate limiting: máximo 1 movimento por segundo por jogador.
     socket.on('move', (data) => {
       const tileX = Number(data?.tileX);
       const tileY = Number(data?.tileY);
@@ -182,7 +191,6 @@ export function initSocket(server) {
 
       const now = Date.now();
       const lastMove = playerMoveTimestamps.get(playerId) || 0;
-
       if (now - lastMove < MOVE_COOLDOWN_MS) {
         socket.emit('error', {
           code: 'COOLDOWN_ACTIVE',
@@ -190,12 +198,10 @@ export function initSocket(server) {
         });
         return;
       }
-
       playerMoveTimestamps.set(playerId, now);
 
       const clampedX = clampTile(tileX);
       const clampedY = clampTile(tileY);
-
       socket.data.tileX = clampedX;
       socket.data.tileY = clampedY;
 
@@ -207,7 +213,7 @@ export function initSocket(server) {
         },
       }).catch((err) => console.error('❌ Erro ao salvar posição:', err.message));
 
-      // Broadcast imediato para TODOS (inclusive quem enviou)
+      // Broadcast imediato para TODOS
       io.emit('playerMoved', {
         playerId,
         name:  playerName,
@@ -217,7 +223,6 @@ export function initSocket(server) {
     });
 
     // ── 5. Teleporte ──────────────────────────────────────────────────────
-    // Rate limiting: máximo 1 teleporte a cada 30 segundos por jogador.
     socket.on('teleport', (data) => {
       const tileX = Number(data?.tileX);
       const tileY = Number(data?.tileY);
@@ -225,7 +230,6 @@ export function initSocket(server) {
 
       const now = Date.now();
       const lastTeleport = playerTeleportTimestamps.get(playerId) || 0;
-
       if (now - lastTeleport < TELEPORT_COOLDOWN_MS) {
         const remainingSeconds = Math.ceil((TELEPORT_COOLDOWN_MS - (now - lastTeleport)) / 1000);
         socket.emit('error', {
@@ -234,7 +238,6 @@ export function initSocket(server) {
         });
         return;
       }
-
       playerTeleportTimestamps.set(playerId, now);
 
       const clampedX = clampTile(tileX);
@@ -244,7 +247,6 @@ export function initSocket(server) {
         tileX: socket.data.tileX,
         tileY: socket.data.tileY,
       };
-
       const newPosition = {
         tileX: clampedX,
         tileY: clampedY,
@@ -253,7 +255,7 @@ export function initSocket(server) {
       socket.data.tileX = clampedX;
       socket.data.tileY = clampedY;
 
-      // Salva no DB sem bloquear o broadcast
+      // Salva no DB
       Player.findByIdAndUpdate(playerId, {
         $set: {
           'mapPosition.tileX': clampedX,
@@ -276,12 +278,8 @@ export function initSocket(server) {
     socket.on('requestBarracoInfo', async (data) => {
       try {
         const targetPlayerId = String(data?.targetPlayerId || '');
-
         if (!targetPlayerId) {
-          socket.emit('error', {
-            code: 'INVALID_PLAYER',
-            message: 'ID do jogador não informado',
-          });
+          socket.emit('error', { code: 'INVALID_PLAYER', message: 'ID do jogador não informado' });
           return;
         }
 
@@ -290,17 +288,12 @@ export function initSocket(server) {
           .lean();
 
         if (!target) {
-          socket.emit('error', {
-            code: 'PLAYER_NOT_FOUND',
-            message: 'Jogador não encontrado',
-          });
+          socket.emit('error', { code: 'PLAYER_NOT_FOUND', message: 'Jogador não encontrado' });
           return;
         }
 
-        // Buscar facção do jogador para exibir nome e tag
         let factionName = null;
         let factionTag = null;
-
         if (target.factionId) {
           try {
             const Faction = (await import('../models/Faction.js')).default;
@@ -311,9 +304,7 @@ export function initSocket(server) {
               factionName = faction.name;
               factionTag = faction.tag;
             }
-          } catch {
-            // Facção não encontrada — segue sem
-          }
+          } catch { /* silencioso */ }
         }
 
         socket.emit('barracoInfo', {
@@ -336,14 +327,21 @@ export function initSocket(server) {
         });
       } catch (err) {
         console.error('❌ Erro ao buscar barraco:', err.message);
-        socket.emit('error', {
-          code: 'SERVER_ERROR',
-          message: 'Erro ao buscar informações do barraco',
-        });
+        socket.emit('error', { code: 'SERVER_ERROR', message: 'Erro ao buscar informações do barraco' });
       }
     });
 
-    // ── 7. Desconexão ─────────────────────────────────────────────────────
+    // ── 7. requestMapSnapshot: reenvia o snapshot quando solicitado ──────
+    socket.on('requestMapSnapshot', async () => {
+      try {
+        const snapshot = await fetchMapSnapshot();
+        socket.emit('mapSnapshot', snapshot);
+      } catch (err) {
+        console.error('❌ Erro ao reenviar mapSnapshot:', err.message);
+      }
+    });
+
+    // ── 8. Desconexão ─────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
       socketToPlayer.delete(socket.id);
       if (playerToSocket.get(playerId) === socket.id) {
@@ -357,20 +355,4 @@ export function initSocket(server) {
       io.emit('playerLeft', { playerId });
     });
   });
-}
-
-// ─── Helper: nome do barraco por nível ───────────────────────────────────────
-
-function getBarracoName(level) {
-  const lv = Math.max(1, Number(level || 1));
-  if (lv >= 90) return 'Mansão com Heliporto';
-  if (lv >= 80) return 'Mansão Blindada';
-  if (lv >= 70) return 'Mansão do Complexo';
-  if (lv >= 60) return 'Triplex com Piscina';
-  if (lv >= 50) return 'Triplex Alto Padrão';
-  if (lv >= 40) return 'Sobrado de Luxo';
-  if (lv >= 30) return 'Sobrado com Piscina';
-  if (lv >= 20) return 'Sobrado';
-  if (lv >= 10) return 'Casa de Alvenaria';
-  return 'Barraco Inicial';
 }

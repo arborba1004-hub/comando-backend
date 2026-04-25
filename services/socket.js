@@ -10,15 +10,20 @@ export function initSocket(server) {
   });
 
   io.on('connection', (socket) => {
-  console.log('🟢 conectou');
+    console.log('🟢 conectou');
 
-  socket.on('move', (data) => {
-    console.log('📡 chegou no backend:', data);
+    socket.on('move', (data) => {
+      console.log('📡 chegou no backend:', data);
 
-    io.emit('playerMoved', {
-      playerId: data.playerId, // 🔥 IMPORTANTE
-      tileX: data.tileX,
-      tileY: data.tileY,
+      io.emit('playerMoved', {
+        playerId: data.playerId,
+        tileX: data.tileX,
+        tileY: data.tileY,
+      });
+    });
+
+    socket.on('disconnect', () => {
+      console.log('🔴 desconectou');
     });
   });
-});
+}

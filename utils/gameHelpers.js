@@ -1,12 +1,17 @@
 import mongoose from 'mongoose';
 import { GRID_WIDTH, GRID_HEIGHT } from './playerDefaults.js';
 import Player from '../models/Player.js';
+import {
+  calculatePlayerPower,
+  calculateWinChance,
+  calculateLoot,
+} from './powerSystem.js';
 
 export {
   calculatePlayerPower,
   calculateWinChance,
   calculateLoot,
-} from './powerSystem.js';
+};
 
 export const LOT_SIZE = 8;
 

@@ -1,44 +1,33 @@
-/**
- * services/socket.js
- *
- * Eventos emitidos pelo servidor:
- *   playerInit       → estado completo do PRÓPRIO jogador (só para ele)
- *   mapSnapshot      → posições de todos os jogadores EXCETO o próprio
- *   playerJoined     → broadcast quando alguém entra (exceto o próprio)
- *   playerMoved      → broadcast quando alguém se move (exceto o próprio)
- *   playerTeleported → broadcast quando alguém se teleporta (exceto o próprio)
- *   playerLeft       → broadcast quando alguém sai
- *   barracoInfo      → dados do barraco de um jogador (sob demanda)
- *   playerUpdate     → estado atualizado do PRÓPRIO jogador após qualquer mutação
- *
- * Eventos recebidos do cliente:
- *   move               → { tileX, tileY } — cooldown 1s
- *   teleport           → { tileX, tileY, teleportType } — cooldown 30s
- *   requestBarracoInfo → { targetPlayerId }
- *   requestMapSnapshot → solicita reenvio do mapSnapshot
- */
-
-import { Server }           from 'socket.io';
-import jwt                  from 'jsonwebtoken';
-import { env }              from '../config/env.js';
-import Player               from '../models/Player.js';
+import { WebSocketServer } from 'ws';
+import jwt                 from 'jsonwebtoken';
+import { env }             from '../config/env.js';
+import Player              from '../models/Player.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 
-/** @type {import('socket.io').Server | null} */
-let io = null;
+let wss = null;
 
-const socketToPlayer         = new Map();
-const playerToSocket         = new Map();
-const playerMoveTimestamps   = new Map();
-const playerTeleportTimestamps = new Map();
+const socketToPlayer = new Map(); // wsId → playerId
+const playerToSocket = new Map(); // playerId → ws
+const playerMoveTimestamps      = new Map();
+const playerTeleportTimestamps  = new Map();
 
-const MOVE_COOLDOWN_MS      = 1000;
-const TELEPORT_COOLDOWN_MS  = 30000;
+const MOVE_COOLDOWN_MS     = 1000;
+const TELEPORT_COOLDOWN_MS = 30000;
 
-export function getIO() { return io; }
+// ── Helpers ────────────────────────────────────────────────────────────────
+function send(ws, event, data) {
+  if (ws.readyState === 1) { // OPEN
+    ws.send(JSON.stringify({ event, data }));
+  }
+}
 
-export function getPlayerSocketId(playerId) {
-  return playerToSocket.get(String(playerId)) ?? null;
+function broadcast(event, data, excludeWs = null) {
+  if (!wss) return;
+  for (const client of wss.clients) {
+    if (client.readyState === 1 && client !== excludeWs) {
+      client.send(JSON.stringify({ event, data }));
+    }
+  }
 }
 
 function projectForMap(player) {
@@ -79,224 +68,213 @@ function getBarracoName(level) {
   return 'Barraco Inicial';
 }
 
-export function initSocket(server) {
-  io = new Server(server, {
-    cors: {
-      origin:      env.FRONTEND_URL === '*' ? true : env.FRONTEND_URL,
-      credentials: true,
-    },
-    transports:   ['websocket', 'polling'],
-    pingTimeout:  20000,
-    pingInterval: 10000,
-  });
+export function getIO() { return wss; }
 
-  io.use(async (socket, next) => {
+export function getPlayerSocketId(playerId) {
+  return playerToSocket.get(String(playerId)) ?? null;
+}
+
+// ── Emite para um jogador específico (usado pelos controllers) ─────────────
+export function emitToPlayer(playerId, event, data) {
+  const ws = playerToSocket.get(String(playerId));
+  if (ws) send(ws, event, data);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+export function initSocket(server) {
+  wss = new WebSocketServer({ server, path: '/socket' });
+
+  wss.on('connection', async (ws, req) => {
+    // ── Autenticação JWT via query string ──────────────────────────────────
+    let playerId, playerName, barracoLevel, power, factionId, tileX, tileY;
+
     try {
-      const raw =
-        socket.handshake.auth?.token ??
-        socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '');
-      if (!raw || typeof raw !== 'string') return next(new Error('TOKEN_MISSING'));
-      const decoded = jwt.verify(raw, env.JWT_SECRET);
-      const player = await Player.findById(decoded.id)
+      const url   = new URL(req.url, 'http://localhost');
+      const token = url.searchParams.get('token');
+      if (!token) { ws.close(1008, 'TOKEN_MISSING'); return; }
+
+      const decoded = jwt.verify(token, env.JWT_SECRET);
+      const player  = await Player.findById(decoded.id)
         .select('_id name mapPosition niveis power factionId')
         .lean();
-      if (!player) return next(new Error('PLAYER_NOT_FOUND'));
-      socket.data.playerId     = String(player._id);
-      socket.data.playerName   = player.name ?? 'Jogador';
-      socket.data.barracoLevel = player.niveis?.barracoLevel ?? 1;
-      socket.data.power        = player.power ?? 0;
-      socket.data.factionId    = player.factionId ?? null;
-      socket.data.tileX        = player.mapPosition?.tileX ?? 0;
-      socket.data.tileY        = player.mapPosition?.tileY ?? 0;
-      next();
-    } catch (err) {
-      next(new Error('TOKEN_INVALID'));
-    }
-  });
+      if (!player) { ws.close(1008, 'PLAYER_NOT_FOUND'); return; }
 
-  io.on('connection', async (socket) => {
-    const { playerId, playerName } = socket.data;
+      playerId     = String(player._id);
+      playerName   = player.name ?? 'Jogador';
+      barracoLevel = player.niveis?.barracoLevel ?? 1;
+      power        = player.power ?? 0;
+      factionId    = player.factionId ?? null;
+      tileX        = player.mapPosition?.tileX ?? 0;
+      tileY        = player.mapPosition?.tileY ?? 0;
+    } catch (err) {
+      ws.close(1008, 'TOKEN_INVALID');
+      return;
+    }
 
     // Desconecta socket antigo do mesmo player (multi-aba)
-    const oldSocketId = playerToSocket.get(playerId);
-    if (oldSocketId && oldSocketId !== socket.id) {
-      io.sockets.sockets.get(oldSocketId)?.disconnect(true);
-    }
-    socketToPlayer.set(socket.id, playerId);
-    playerToSocket.set(playerId, socket.id);
+    const oldWs = playerToSocket.get(playerId);
+    if (oldWs && oldWs !== ws) oldWs.close(1000, 'REPLACED');
+
+    playerToSocket.set(playerId, ws);
+    socketToPlayer.set(ws, playerId);
     console.log(`🟢 ${playerName} (${playerId}) conectou`);
 
-    // ── 1. playerInit ────────────────────────────────────────────────────
+    // ── 1. playerInit ──────────────────────────────────────────────────────
     try {
       const fullPlayer = await Player.findById(playerId).lean();
       if (fullPlayer) {
-        socket.emit('playerInit', { player: mergePlayerState(fullPlayer) });
+        send(ws, 'playerInit', { player: mergePlayerState(fullPlayer) });
       }
     } catch (err) {
-      console.error('❌ Erro ao emitir playerInit:', err.message);
+      console.error('❌ playerInit:', err.message);
     }
 
-    // ── 2. mapSnapshot — FIX: filtra o próprio jogador ───────────────────
-    // O cliente renderiza seu próprio barraco via mountPlayerMapSpace.
-    // Incluir o próprio jogador causaria duplicidade no mapa.
+    // ── 2. mapSnapshot — exclui o próprio jogador ──────────────────────────
     try {
       const snapshot = await fetchMapSnapshot();
-      const filteredSnapshot = snapshot.filter((p) => p.id !== playerId);
-      socket.emit('mapSnapshot', filteredSnapshot);
+      const filtered = snapshot.filter((p) => p.id !== playerId);
+      send(ws, 'mapSnapshot', filtered);
     } catch (err) {
-      console.error('❌ Erro ao emitir mapSnapshot:', err.message);
+      console.error('❌ mapSnapshot:', err.message);
     }
 
-    // ── 3. Anuncia chegada para os outros (broadcast já exclui o próprio) ─
-    socket.broadcast.emit('playerJoined', {
-      id:           playerId,
-      name:         playerName,
-      tileX:        socket.data.tileX,
-      tileY:        socket.data.tileY,
-      barracoLevel: socket.data.barracoLevel,
-      power:        socket.data.power,
-      factionId:    socket.data.factionId,
-    });
+    // ── 3. Anuncia chegada para os outros ──────────────────────────────────
+    broadcast('playerJoined', {
+      id: playerId, name: playerName,
+      tileX, tileY, barracoLevel, power, factionId,
+    }, ws);
 
-    // ── 4. Movimento (cooldown 1s) ────────────────────────────────────────
-    socket.on('move', (data) => {
-      const tileX = Number(data?.tileX);
-      const tileY = Number(data?.tileY);
-      if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) return;
+    // ── Mensagens do cliente ───────────────────────────────────────────────
+    ws.on('message', async (raw) => {
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { return; }
 
-      const now = Date.now();
-      const lastMove = playerMoveTimestamps.get(playerId) || 0;
-      if (now - lastMove < MOVE_COOLDOWN_MS) {
-        socket.emit('error', { code: 'COOLDOWN_ACTIVE', message: 'Aguarde 1 segundo entre movimentos' });
-        return;
-      }
-      playerMoveTimestamps.set(playerId, now);
+      const { event, data } = parsed;
 
-      const clampedX = clampTile(tileX);
-      const clampedY = clampTile(tileY);
-      socket.data.tileX = clampedX;
-      socket.data.tileY = clampedY;
+      // ── move ──────────────────────────────────────────────────────────────
+      if (event === 'move') {
+        const tx = Number(data?.tileX);
+        const ty = Number(data?.tileY);
+        if (!Number.isFinite(tx) || !Number.isFinite(ty)) return;
 
-      Player.findByIdAndUpdate(playerId, {
-        $set: { 'mapPosition.tileX': clampedX, 'mapPosition.tileY': clampedY },
-      }).catch((err) => console.error('❌ Erro ao salvar posição:', err.message));
-
-      // FIX: broadcast.emit exclui o próprio socket.
-      // io.emit enviaria para o próprio cliente, causando duplicidade.
-      socket.broadcast.emit('playerMoved', {
-        playerId,
-        name:  playerName,
-        tileX: clampedX,
-        tileY: clampedY,
-      });
-    });
-
-    // ── 5. Teleporte (cooldown 30s) ───────────────────────────────────────
-    socket.on('teleport', (data) => {
-      const tileX = Number(data?.tileX);
-      const tileY = Number(data?.tileY);
-      if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) return;
-
-      const now = Date.now();
-      const lastTeleport = playerTeleportTimestamps.get(playerId) || 0;
-      if (now - lastTeleport < TELEPORT_COOLDOWN_MS) {
-        const remainingSeconds = Math.ceil((TELEPORT_COOLDOWN_MS - (now - lastTeleport)) / 1000);
-        socket.emit('error', { code: 'COOLDOWN_ACTIVE', message: `Aguarde ${remainingSeconds}s para teleportar novamente` });
-        return;
-      }
-      playerTeleportTimestamps.set(playerId, now);
-
-      const clampedX = clampTile(tileX);
-      const clampedY = clampTile(tileY);
-      const oldPosition = { tileX: socket.data.tileX, tileY: socket.data.tileY };
-      const newPosition = { tileX: clampedX, tileY: clampedY };
-
-      socket.data.tileX = clampedX;
-      socket.data.tileY = clampedY;
-
-      Player.findByIdAndUpdate(playerId, {
-        $set: { 'mapPosition.tileX': clampedX, 'mapPosition.tileY': clampedY },
-      }).catch((err) => console.error('❌ Erro ao salvar posição (teleporte):', err.message));
-
-      // FIX: broadcast.emit exclui o próprio socket.
-      socket.broadcast.emit('playerTeleported', {
-        playerId,
-        name: playerName,
-        oldPosition,
-        newPosition,
-        teleportType: data?.teleportType || 'manual',
-        timestamp: new Date().toISOString(),
-      });
-    });
-
-    // ── 6. requestBarracoInfo ─────────────────────────────────────────────
-    socket.on('requestBarracoInfo', async (data) => {
-      try {
-        const targetPlayerId = String(data?.targetPlayerId || '');
-        if (!targetPlayerId) {
-          socket.emit('error', { code: 'INVALID_PLAYER', message: 'ID do jogador não informado' });
+        const now = Date.now();
+        if (now - (playerMoveTimestamps.get(playerId) || 0) < MOVE_COOLDOWN_MS) {
+          send(ws, 'error', { code: 'COOLDOWN_ACTIVE', message: 'Aguarde 1s entre movimentos' });
           return;
         }
-        const target = await Player.findById(targetPlayerId)
-          .select('_id name avatar niveis mapPosition power factionId hierarchyBadge attackHistory')
-          .lean();
-        if (!target) {
-          socket.emit('error', { code: 'PLAYER_NOT_FOUND', message: 'Jogador não encontrado' });
+        playerMoveTimestamps.set(playerId, now);
+
+        const cx = clampTile(tx); const cy = clampTile(ty);
+        tileX = cx; tileY = cy;
+
+        Player.findByIdAndUpdate(playerId, {
+          $set: { 'mapPosition.tileX': cx, 'mapPosition.tileY': cy },
+        }).catch((e) => console.error('❌ move save:', e.message));
+
+        broadcast('playerMoved', { playerId, name: playerName, tileX: cx, tileY: cy }, ws);
+      }
+
+      // ── teleport ──────────────────────────────────────────────────────────
+      else if (event === 'teleport') {
+        const tx = Number(data?.tileX);
+        const ty = Number(data?.tileY);
+        if (!Number.isFinite(tx) || !Number.isFinite(ty)) return;
+
+        const now = Date.now();
+        const last = playerTeleportTimestamps.get(playerId) || 0;
+        if (now - last < TELEPORT_COOLDOWN_MS) {
+          const remaining = Math.ceil((TELEPORT_COOLDOWN_MS - (now - last)) / 1000);
+          send(ws, 'error', { code: 'COOLDOWN_ACTIVE', message: `Aguarde ${remaining}s para teleportar` });
           return;
         }
-        let factionName = null;
-        let factionTag  = null;
-        if (target.factionId) {
-          try {
-            const Faction = (await import('../models/Faction.js')).default;
-            const faction = await Faction.findOne({ id: String(target.factionId) })
-              .select('name tag').lean();
-            if (faction) { factionName = faction.name; factionTag = faction.tag; }
-          } catch { /* silencioso */ }
+        playerTeleportTimestamps.set(playerId, now);
+
+        const cx = clampTile(tx); const cy = clampTile(ty);
+        const oldPosition = { tileX, tileY };
+        const newPosition = { tileX: cx, tileY: cy };
+        tileX = cx; tileY = cy;
+
+        Player.findByIdAndUpdate(playerId, {
+          $set: { 'mapPosition.tileX': cx, 'mapPosition.tileY': cy },
+        }).catch((e) => console.error('❌ teleport save:', e.message));
+
+        broadcast('playerTeleported', {
+          playerId, name: playerName,
+          oldPosition, newPosition,
+          teleportType: data?.teleportType || 'manual',
+          timestamp: new Date().toISOString(),
+        }, ws);
+      }
+
+      // ── requestBarracoInfo ────────────────────────────────────────────────
+      else if (event === 'requestBarracoInfo') {
+        try {
+          const targetId = String(data?.targetPlayerId || '');
+          if (!targetId) { send(ws, 'error', { code: 'INVALID_PLAYER' }); return; }
+
+          const target = await Player.findById(targetId)
+            .select('_id name avatar niveis mapPosition power factionId hierarchyBadge attackHistory')
+            .lean();
+          if (!target) { send(ws, 'error', { code: 'PLAYER_NOT_FOUND' }); return; }
+
+          let factionName = null, factionTag = null;
+          if (target.factionId) {
+            try {
+              const Faction = (await import('../models/Faction.js')).default;
+              const faction = await Faction.findOne({ id: String(target.factionId) })
+                .select('name tag').lean();
+              if (faction) { factionName = faction.name; factionTag = faction.tag; }
+            } catch { /* silencioso */ }
+          }
+
+          send(ws, 'barracoInfo', {
+            playerId:       String(target._id),
+            playerName:     target.name || 'Jogador',
+            avatarUrl:      target.avatar || null,
+            barracoLevel:   target.niveis?.barracoLevel || 1,
+            barracoName:    getBarracoName(target.niveis?.barracoLevel || 1),
+            tileX:          target.mapPosition?.tileX || 0,
+            tileY:          target.mapPosition?.tileY || 0,
+            factionId:      target.factionId || null,
+            factionName,    factionTag,
+            level:          target.niveis?.playerLevel || 1,
+            power:          target.power || 0,
+            hierarchyBadge: target.hierarchyBadge || 'Antena',
+            attackHistory:  Array.isArray(target.attackHistory)
+              ? target.attackHistory.slice(-5) : [],
+          });
+        } catch (err) {
+          console.error('❌ requestBarracoInfo:', err.message);
+          send(ws, 'error', { code: 'SERVER_ERROR' });
         }
-        socket.emit('barracoInfo', {
-          playerId:       String(target._id),
-          playerName:     target.name || 'Jogador',
-          avatarUrl:      target.avatar || null,
-          barracoLevel:   target.niveis?.barracoLevel || 1,
-          barracoName:    getBarracoName(target.niveis?.barracoLevel || 1),
-          tileX:          target.mapPosition?.tileX || 0,
-          tileY:          target.mapPosition?.tileY || 0,
-          factionId:      target.factionId || null,
-          factionName,
-          factionTag,
-          level:          target.niveis?.playerLevel || 1,
-          power:          target.power || 0,
-          hierarchyBadge: target.hierarchyBadge || 'Antena',
-          attackHistory:  Array.isArray(target.attackHistory) ? target.attackHistory.slice(-5) : [],
-        });
-      } catch (err) {
-        console.error('❌ Erro ao buscar barraco:', err.message);
-        socket.emit('error', { code: 'SERVER_ERROR', message: 'Erro ao buscar informações do barraco' });
+      }
+
+      // ── requestMapSnapshot ────────────────────────────────────────────────
+      else if (event === 'requestMapSnapshot') {
+        try {
+          const snapshot = await fetchMapSnapshot();
+          const filtered = snapshot.filter((p) => p.id !== playerId);
+          send(ws, 'mapSnapshot', filtered);
+        } catch (err) {
+          console.error('❌ requestMapSnapshot:', err.message);
+        }
       }
     });
 
-    // ── 7. requestMapSnapshot — FIX: filtra o próprio jogador ────────────
-    socket.on('requestMapSnapshot', async () => {
-      try {
-        const snapshot = await fetchMapSnapshot();
-        const filteredSnapshot = snapshot.filter((p) => p.id !== playerId);
-        socket.emit('mapSnapshot', filteredSnapshot);
-      } catch (err) {
-        console.error('❌ Erro ao reenviar mapSnapshot:', err.message);
-      }
-    });
-
-    // ── 8. Desconexão ─────────────────────────────────────────────────────
-    socket.on('disconnect', (reason) => {
-      socketToPlayer.delete(socket.id);
-      if (playerToSocket.get(playerId) === socket.id) {
+    // ── Desconexão ─────────────────────────────────────────────────────────
+    ws.on('close', () => {
+      socketToPlayer.delete(ws);
+      if (playerToSocket.get(playerId) === ws) {
         playerToSocket.delete(playerId);
       }
       playerMoveTimestamps.delete(playerId);
       playerTeleportTimestamps.delete(playerId);
-      console.log(`🔴 ${playerName} (${playerId}) desconectou [${reason}]`);
-      io.emit('playerLeft', { playerId });
+      console.log(`🔴 ${playerName} (${playerId}) desconectou`);
+      broadcast('playerLeft', { playerId });
+    });
+
+    ws.on('error', (err) => {
+      console.error(`⚠️ WebSocket error (${playerName}):`, err.message);
     });
   });
 }

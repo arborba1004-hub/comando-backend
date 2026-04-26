@@ -167,7 +167,11 @@ export function initSocket(server) {
     // ── 2. mapSnapshot: posições de todos no mapa (enviado automaticamente ao conectar) ─
     try {
       const snapshot = await fetchMapSnapshot();
-      socket.emit('mapSnapshot', snapshot);
+      // ── FIX: exclui o próprio jogador do snapshot ──────────────────────────
+      // O cliente renderiza seu próprio barraco via mountPlayerMapSpace.
+      // Incluir o próprio jogador no snapshot causaria duplicidade no mapa.
+      const filteredSnapshot = snapshot.filter((p) => p.id !== playerId);
+      socket.emit('mapSnapshot', filteredSnapshot);
     } catch (err) {
       console.error('❌ Erro ao emitir mapSnapshot:', err.message);
     }
@@ -213,8 +217,11 @@ export function initSocket(server) {
         },
       }).catch((err) => console.error('❌ Erro ao salvar posição:', err.message));
 
-      // Broadcast imediato para TODOS
-      io.emit('playerMoved', {
+      // Broadcast imediato para TODOS exceto o próprio jogador
+      // FIX: io.emit envia para todos incluindo o próprio, causando
+      // que o cliente tente mover seu próprio barraco via realtimeLayer.
+      // socket.broadcast.emit exclui o socket atual (comportamento correto).
+      socket.broadcast.emit('playerMoved', {
         playerId,
         name:  playerName,
         tileX: clampedX,
@@ -263,8 +270,9 @@ export function initSocket(server) {
         },
       }).catch((err) => console.error('❌ Erro ao salvar posição (teleporte):', err.message));
 
-      // Broadcast com animação de teleporte
-      io.emit('playerTeleported', {
+      // FIX: broadcast.emit exclui o socket atual — o cliente não deve
+      // receber o próprio teleporte via realtimeLayer.
+      socket.broadcast.emit('playerTeleported', {
         playerId,
         name: playerName,
         oldPosition,
@@ -335,7 +343,9 @@ export function initSocket(server) {
     socket.on('requestMapSnapshot', async () => {
       try {
         const snapshot = await fetchMapSnapshot();
-        socket.emit('mapSnapshot', snapshot);
+        // FIX: exclui o próprio jogador (mesmo critério do connect)
+        const filteredSnapshot = snapshot.filter((p) => p.id !== playerId);
+        socket.emit('mapSnapshot', filteredSnapshot);
       } catch (err) {
         console.error('❌ Erro ao reenviar mapSnapshot:', err.message);
       }

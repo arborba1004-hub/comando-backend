@@ -63,6 +63,7 @@ app.use('/auth', authRoutes);
 app.use('/player', playerRoutes);
 app.use('/players', playersRoutes);
 app.use('/chat', chatRoutes);
+app.use('/emojis', emojiSystemRoutes);
 app.use('/emoji', emojiRoutes);
 app.use('/faction-help', factionHelpRoutes);
 app.use('/laundry', laundryRoutes);

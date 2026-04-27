@@ -502,4 +502,64 @@ export async function getBattleReport(req, res) {
       ...buildResponse(attack),
       resolution: attack.report?.resolution || null,
       attacker: {
- 
+        playerId:    String(attack.attackerId),
+        playerName:  String(attack.attackerName),
+        factionId:   attack.attackerFactionId || null,
+        factionName: '',
+        factionTag:  '',
+      },
+      defender: {
+        playerId:    String(attack.targetId),
+        playerName:  String(attack.targetName),
+        factionId:   attack.defenderFactionId || null,
+        factionName: '',
+        factionTag:  '',
+      },
+    });
+  } catch (err) {
+    console.error('[REPORT]', err);
+    return res.status(500).json({ error: 'Erro ao buscar relatório' });
+  }
+}
+
+/**
+ * GET /battle/history
+ * Histórico de batalhas do jogador autenticado.
+ */
+export async function getBattleHistory(req, res) {
+  try {
+    const requesterId = String(req.user.id);
+
+    const attacks = await Attack.find({
+      $or: [{ attackerId: requesterId }, { targetId: requesterId }],
+    })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+
+    return res.json(
+      attacks.map((a) => ({
+        ...buildResponse(a),
+        resolution: a.report?.resolution || null,
+        attacker: {
+          playerId:   String(a.attackerId),
+          playerName: String(a.attackerName),
+          factionId:  a.attackerFactionId || null,
+        },
+        defender: {
+          playerId:   String(a.targetId),
+          playerName: String(a.targetName),
+          factionId:  a.defenderFactionId || null,
+        },
+      }))
+    );
+  } catch (err) {
+    console.error('[HISTORY]', err);
+    return res.status(500).json({ error: 'Erro ao buscar histórico' });
+  }
+}
+
+// Alias de compatibilidade
+export async function initiateAttack(req, res) {
+  return startBattle(req, res);
+}

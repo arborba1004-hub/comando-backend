@@ -498,4 +498,88 @@ export function resolveAttackResult({ attacker, defender, selectedMemberIds = []
   }
 
   const message = success
-    ? (critical ? 'ATAQUE CRÍTICO. O alvo foi esm
+      ? (critical ? 'ATAQUE CRÍTICO. O alvo foi esmagado.' : 'Ataque bem-sucedido. Território enfraquecido.')
+    : 'Sua investida falhou. A defesa resistiu.';
+
+  // ── Dados de composição para o relatório de e-mail ───────────────────────
+  const attackerReport = {
+    playerId:            String(attacker?._id || attacker?.id || ''),
+    name:                String(attacker?.name || 'Atacante'),
+    factionTag:          attacker?.factionId || null,
+    coordinates:         { x: toNumber(attacker?.mapPosition?.tileX, 0), y: toNumber(attacker?.mapPosition?.tileY, 0) },
+    barracoLevel:        Math.max(1, toPositiveInt(attacker?.niveis?.barracoLevel, 1)),
+    tropasEliminadas:    countByStatus(defenderUnits, 'morto'),
+    perdas:              countByStatus(attackerUnits, 'morto'),
+    machucados:          countByStatus(attackerUnits, 'ferido'),
+    vivos:               countByStatus(attackerUnits, 'ativo'),
+    danoTotalCausado:    atkDamage,
+    danoTotalRecebido:   defenderUnits.reduce((s, u) => s + u.damageDealt, 0),
+    composicaoInicial:   summarizeComposition(attackerMarch),
+    composicaoFinal:     summarizeFinalComposition(attackerUnits),
+  };
+
+  const defenderReport = {
+    playerId:            String(defender?._id || defender?.id || ''),
+    name:                String(defender?.name || 'Defensor'),
+    factionTag:          defender?.factionId || null,
+    coordinates:         { x: toNumber(defender?.mapPosition?.tileX, 0), y: toNumber(defender?.mapPosition?.tileY, 0) },
+    barracoLevel:        Math.max(1, toPositiveInt(defender?.niveis?.barracoLevel, 1)),
+    tropasEliminadas:    countByStatus(attackerUnits, 'morto'),
+    perdas:              countByStatus(defenderUnits, 'morto'),
+    machucados:          countByStatus(defenderUnits, 'ferido'),
+    vivos:               countByStatus(defenderUnits, 'ativo'),
+    danoTotalCausado:    defDamage,
+    danoTotalRecebido:   attackerUnits.reduce((s, u) => s + u.damageDealt, 0),
+    composicaoInicial:   summarizeComposition(defenderMarch),
+    composicaoFinal:     summarizeFinalComposition(defenderUnits),
+  };
+
+  return {
+    // ── Campos usados pelo controller (existentes) ─────────────────────────
+    winner,
+    rounds,
+    lootDirtyMoney,
+    barracoLevelPerdedor: Math.max(1, toPositiveInt(
+      winner === 'atacante' ? defender?.niveis?.barracoLevel : attacker?.niveis?.barracoLevel,
+      1
+    )),
+    nextDirtyMoneyAtacante,
+    nextDirtyMoneyDefensor,
+    attacker: attackerReport,
+    defender: defenderReport,
+    nextAttackerGang: {
+      members:  nextAttackerMembers,
+      stats:    recalcStats(nextAttackerMembers),
+      updatedAtIso: new Date().toISOString(),
+    },
+    nextDefenderGang: {
+      members:  nextDefenderMembers,
+      stats:    recalcStats(nextDefenderMembers),
+      updatedAtIso: new Date().toISOString(),
+    },
+    attackerDeadMemberIds,
+    defenderDeadMemberIds,
+    attackerInjuredMemberIds,
+    defenderInjuredMemberIds,
+    selectedMemberIds: resolvedIds,
+
+    // ── Campos NOVOS para o frontend (resolution shape) ────────────────────
+    success,
+    critical,
+    winChance,
+    message,
+    attackerGangStats,
+    defenderGangStats,
+    attackerGangLosses,
+    defenderGangLosses,
+    spoils: {
+      dirtyMoneyLoot:          lootDirtyMoney,
+      correLoot,
+      prestigeLoot,
+      brokenLuxuryItemId:      null,
+      brokenLuxuryItemName:    null,
+      brokenLuxuryItemValue:   null,
+      luxuryConvertedDirtyMoney: 0,
+    },
+  };
+}

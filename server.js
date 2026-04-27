@@ -12,6 +12,7 @@ import playerRoutes from './routes/playerRoutes.js';
 import playersRoutes from './routes/playersRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
 import emojiRoutes from './routes/emojiRoutes.js';
+import emojiSystemRoutes from './routes/emojiSystemRoutes.js';
 import laundryRoutes from './routes/laundryRoutes.js';
 import gameRoutes from './routes/gameRoutes.js';
 import briberyRoutes from './routes/briberyRoutes.js';

@@ -1,56 +1,53 @@
+// controllers/attackController.js
+
 import { randomUUID } from 'crypto';
-import Attack from '../models/Attack.js';
-import Player from '../models/Player.js';
+import Attack      from '../models/Attack.js';
+import Player      from '../models/Player.js';
 import ChatMessage from '../models/ChatMessage.js';
-import { bumpVersion } from '../utils/gameHelpers.js';
+import { bumpVersion }     from '../utils/gameHelpers.js';
+import { emitToPlayer }    from '../services/socketEmitter.js';
+import { mergePlayerState } from '../utils/playerMapper.js';
 import {
   buildTravelMetrics,
   resolveAttackResult,
   resolveSelectedMemberIdsForAttack,
 } from '../services/attack/resolveAttack.js';
 import { buildAttackReport } from '../services/attack/buildAttackReport.js';
-import { emitToPlayer } from '../services/socketEmitter.js';
 
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
+// ═════════════════════════════════════════════════════════════════════════════
+// UTILS
+// ═════════════════════════════════════════════════════════════════════════════
 
 function toNumber(value, fallback = 0) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function sanitizeSelection(selection = {}) {
-  return {
-    capanga: Math.max(0, Math.floor(toNumber(selection.capanga, 0))),
-    frente: Math.max(0, Math.floor(toNumber(selection.frente, 0))),
-    executor: Math.max(0, Math.floor(toNumber(selection.executor, 0))),
-    assassino: Math.max(0, Math.floor(toNumber(selection.assassino, 0))),
-    muralha: Math.max(0, Math.floor(toNumber(selection.muralha, 0))),
-    certeiro: Math.max(0, Math.floor(toNumber(selection.certeiro, 0))),
-    motorista: Math.max(0, Math.floor(toNumber(selection.motorista, 0))),
-    nitro: Math.max(0, Math.floor(toNumber(selection.nitro, 0))),
-  };
+  const TYPES = ['capanga','frente','executor','assassino','muralha','certeiro','motorista','nitro'];
+  return Object.fromEntries(
+    TYPES.map((t) => [t, Math.max(0, Math.floor(toNumber(selection[t], 0)))])
+  );
 }
 
 function hasAnySelection(selection) {
-  return Object.values(selection || {}).some((value) => Number(value || 0) > 0);
+  return Object.values(selection || {}).some((v) => Number(v || 0) > 0);
 }
 
 function buildResponse(attack) {
   return {
-    battleId: attack.id,
-    status: attack.status,
-    attackerId: attack.attackerId,
-    attackerName: attack.attackerName,
-    defenderId: attack.targetId,
-    defenderName: attack.targetName,
+    battleId:           attack.id,
+    status:             attack.status,
+    attackerId:         attack.attackerId,
+    attackerName:       attack.attackerName,
+    defenderId:         attack.targetId,
+    defenderName:       attack.targetName,
     routeDistanceTiles: attack.routeDistanceTiles,
-    timePerTileMs: attack.timePerTileMs,
-    totalDurationMs: attack.totalDurationMs,
-    launchedAtIso: attack.launchedAtIso,
-    arriveAtIso: attack.arriveAtIso,
-    report: attack.report || null,
+    timePerTileMs:      attack.timePerTileMs,
+    totalDurationMs:    attack.totalDurationMs,
+    launchedAtIso:      attack.launchedAtIso,
+    arriveAtIso:        attack.arriveAtIso,
+    report:             attack.report || null,
   };
 }
 
@@ -60,586 +57,435 @@ function appendAttackHistory(player, item, limit = 50) {
   player.attackHistory = next.slice(0, limit);
 }
 
-// ============================================================================
-// P7: MELHORADO - ENVIO DE EMAIL COM RETRY E TRATAMENTO DE ERRO
-// ============================================================================
+function updateMemberStatusAfterBattle(members = [], deadIds = new Set(), injuredIds = new Set()) {
+  if (!Array.isArray(members)) return members;
+  const now          = Date.now();
+  const recoveryMs   = 3_600_000; // 1h
 
-/**
- * Envia um email de ataque com retry automático em caso de falha
- * @param {Object} params - Parâmetros do email
- * @param {string} params.senderName - Nome do remetente
- * @param {string} params.recipientId - ID do destinatário
- * @param {string} params.recipientName - Nome do destinatário
- * @param {string} params.subject - Assunto do email
- * @param {string} params.body - Corpo do email
- * @param {Object} params.metadata - Metadados do email
- * @param {number} params.maxAttempts - Número máximo de tentativas (padrão: 3)
- * @returns {Promise<{success: boolean, attempt?: number, error?: string}>}
- */
-async function sendAttackMailWithRetry({
-  senderName,
-  recipientId,
-  recipientName,
-  subject,
-  body,
-  metadata,
-  maxAttempts = 3,
-}) {
+  for (const m of members) {
+    if (!m?.id) continue;
+    if (deadIds.has(String(m.id))) {
+      m.status      = 'morto';
+      m.injuryEndsAt = null;
+    } else if (injuredIds.has(String(m.id))) {
+      m.status      = 'ferido';
+      m.injuryEndsAt = new Date(now + recoveryMs).toISOString();
+    } else if (m.status === 'ferido') {
+      const end = m.injuryEndsAt ? new Date(m.injuryEndsAt).getTime() : 0;
+      if (end <= now) { m.status = 'ativo'; m.injuryEndsAt = null; }
+    }
+  }
+  return members;
+}
+
+// ─── Email com retry ─────────────────────────────────────────────────────────
+
+async function sendAttackMail({ senderName, recipientId, recipientName, subject, body, metadata, maxAttempts = 3 }) {
   let lastError = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       await ChatMessage.create({
-        channel: 'mail',
-        senderId: 'system',
+        channel:      'mail',
+        senderId:     'system',
         senderName,
-        recipientId: String(recipientId),
+        recipientId:  String(recipientId),
         recipientName: String(recipientName),
-        subject: String(subject || ''),
-        body: String(body || ''),
-        read: false,
-        system: true,
-        messageType: 'text',
-        metadata: metadata && typeof metadata === 'object' ? metadata : {},
+        subject:      String(subject || ''),
+        body:         String(body    || ''),
+        read:         false,
+        system:       true,
+        messageType:  'text',
+        metadata:     metadata && typeof metadata === 'object' ? metadata : {},
       });
-
-      console.log(
-        `[EMAIL] Enviado para ${recipientName} (${String(recipientId).slice(0, 8)}) ` +
-        `(tentativa ${attempt + 1}/${maxAttempts})`
-      );
       return { success: true, attempt: attempt + 1 };
-    } catch (error) {
-      lastError = error;
-      console.warn(
-        `[EMAIL] Erro ao enviar para ${recipientName} ` +
-        `(tentativa ${attempt + 1}/${maxAttempts}): ${error.message}`
-      );
-
+    } catch (err) {
+      lastError = err;
       if (attempt < maxAttempts - 1) {
-        // Aguardar progressivamente antes de tentar novamente
-        const delayMs = 1000 * (attempt + 1);
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
       }
     }
   }
 
-  console.error(
-    `[EMAIL] Falha ao enviar email para ${recipientName} após ${maxAttempts} tentativas: ` +
-    `${lastError?.message}`
-  );
-  return {
-    success: false,
-    error: lastError?.message || 'Erro desconhecido ao enviar email',
-  };
+  console.error(`[EMAIL] Falha após ${maxAttempts} tentativas para ${recipientName}:`, lastError?.message);
+  return { success: false, error: lastError?.message };
 }
 
-/**
- * Envia email de forma síncrona (compatibilidade com código existente)
- * Usa retry interno
- */
-async function sendAttackMail({
-  senderName,
-  recipientId,
-  recipientName,
-  subject,
-  body,
-  metadata,
-}) {
-  return sendAttackMailWithRetry({
-    senderName,
-    recipientId,
-    recipientName,
-    subject,
-    body,
-    metadata,
-    maxAttempts: 2, // Menos retries para compatibilidade
-  });
-}
-
-// ============================================================================
-// P6: SINCRONIZAR STATUS DE MEMBROS DANIFICADOS/MORTOS
-// ============================================================================
+// ═════════════════════════════════════════════════════════════════════════════
+// ENDPOINTS
+// ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Atualiza o status dos membros do gang baseado no resultado da batalha
- * @param {Array} members - Array de membros do gang
- * @param {Set} deadMemberIds - IDs dos membros mortos
- * @param {Set} injuredMemberIds - IDs dos membros feridos
- * @param {number} injuryDurationMs - Duração da lesão em milissegundos (padrão: 1 hora)
- */
-function updateMemberStatusAfterBattle(
-  members = [],
-  deadMemberIds = new Set(),
-  injuredMemberIds = new Set(),
-  injuryDurationMs = 3600000 // 1 hora
-) {
-  if (!Array.isArray(members)) {
-    return members;
-  }
-
-  for (const member of members) {
-    if (!member || !member.id) continue;
-
-    if (deadMemberIds.has(String(member.id))) {
-      member.status = 'morto';
-      member.injuryEndsAt = null;
-      console.log(`[BATTLE] Membro ${member.id} marcado como morto`);
-    } else if (injuredMemberIds.has(String(member.id))) {
-      member.status = 'ferido';
-      member.injuryEndsAt = new Date(Date.now() + injuryDurationMs).toISOString();
-      console.log(
-        `[BATTLE] Membro ${member.id} marcado como ferido (recupera em ${injuryDurationMs / 60000} minutos)`
-      );
-    } else if (member.status === 'ferido' && !injuredMemberIds.has(String(member.id))) {
-      // Se era ferido mas não está mais, retorna a ativo (recuperou)
-      const injuryEndTime = member.injuryEndsAt ? new Date(member.injuryEndsAt).getTime() : 0;
-      if (injuryEndTime <= Date.now()) {
-        member.status = 'ativo';
-        member.injuryEndsAt = null;
-        console.log(`[BATTLE] Membro ${member.id} recuperado de lesão`);
-      }
-    }
-  }
-
-  return members;
-}
-
-// ============================================================================
-// PUBLIC FUNCTIONS - ENDPOINTS
-// ============================================================================
-
-/**
- * Estima o resultado de uma batalha sem executá-la
- * Útil para o frontend mostrar probabilidades ao usuário
+ * POST /battle/estimate
+ * Estima o resultado sem criar batalha.
+ * Retorna os campos que o frontend espera: estimatedLoot, estimatedChance, attackerPower, defenderPower.
  */
 export async function estimateBattle(req, res) {
   try {
     const attacker = req.player;
-    const {
-      targetId,
-      selection = {},
-      selectedMemberIds = [],
-    } = req.body || {};
+    const { targetId, selection = {}, selectedMemberIds = [] } = req.body || {};
 
-    if (!targetId) {
-      return res.status(400).json({ error: 'targetId é obrigatório' });
-    }
+    if (!targetId) return res.status(400).json({ error: 'targetId é obrigatório' });
 
     const defender = await Player.findById(String(targetId));
-    if (!defender) {
-      return res.status(404).json({ error: 'Defensor não encontrado' });
-    }
+    if (!defender)  return res.status(404).json({ error: 'Defensor não encontrado' });
 
-    if (String(attacker._id) === String(defender._id)) {
-      return res.status(400).json({ error: 'Você não pode atacar a si mesma' });
-    }
+    if (String(attacker._id) === String(defender._id))
+      return res.status(400).json({ error: 'Você não pode atacar a si mesmo' });
 
     const safeSelection = sanitizeSelection(selection);
-    if (!hasAnySelection(safeSelection) && (!Array.isArray(selectedMemberIds) || !selectedMemberIds.length)) {
+    if (!hasAnySelection(safeSelection) && !selectedMemberIds.length)
       return res.status(400).json({ error: 'Seleção de ataque vazia' });
-    }
 
     const result = resolveAttackResult({
-      attacker: attacker.toObject(),
-      defender: defender.toObject(),
-      selection: safeSelection,
+      attacker:          attacker.toObject(),
+      defender:          defender.toObject(),
+      selection:         safeSelection,
       selectedMemberIds,
     });
 
+    // ── Resposta no shape que o frontend (attackApi.ts) espera ─────────────
     return res.json({
-      estimatedWinner: result.winner,
-      estimatedRounds: result.rounds,
-      estimatedLootDirtyMoney: result.lootDirtyMoney,
-      attacker: result.attacker,
-      defender: result.defender,
+      // Frontend shape (attackApi.ts EstimateBattleResponse)
+      estimatedLoot:       result.lootDirtyMoney,
+      estimatedChance:     Math.round(result.winChance * 100), // 0–100
+      attackerPower:       result.attackerGangStats.totalPower,
+      defenderPower:       result.defenderGangStats.totalPower,
+      correCost:           10,
+      attackerGangPower:   result.attackerGangStats.totalPower,
+      defenderGangPower:   result.defenderGangStats.totalPower,
+      // Campos extras para debug/display
+      estimatedWinner:     result.winner,
+      estimatedRounds:     result.rounds,
+      attacker:            result.attacker,
+      defender:            result.defender,
     });
-  } catch (error) {
-    console.error('[ESTIMATE] Erro em estimateBattle:', error);
+  } catch (err) {
+    console.error('[ESTIMATE]', err);
     return res.status(500).json({ error: 'Erro ao estimar batalha' });
   }
 }
 
 /**
- * Inicia uma batalha e cria o registro de ataque
- * Frontend vai animar a viagem enquanto isso processa
+ * POST /battle/start
+ * Inicia batalha, cria registro, emite 'attackReceived' ao defensor via socket.
  */
 export async function startBattle(req, res) {
   try {
     const attacker = req.player;
     const {
-      targetId,
-      targetName,
-      targetTileX,
-      targetTileY,
-      originTileX,
-      originTileY,
+      targetId, targetName,
+      targetTileX, targetTileY,
+      originTileX, originTileY,
       selection = {},
       selectedMemberIds = [],
     } = req.body || {};
 
-    if (!targetId) {
-      return res.status(400).json({ error: 'targetId é obrigatório' });
-    }
+    if (!targetId) return res.status(400).json({ error: 'targetId é obrigatório' });
 
     const defender = await Player.findById(String(targetId));
-    if (!defender) {
-      return res.status(404).json({ error: 'Defensor não encontrado' });
-    }
+    if (!defender)  return res.status(404).json({ error: 'Defensor não encontrado' });
 
-    if (String(attacker._id) === String(defender._id)) {
-      return res.status(400).json({ error: 'Você não pode atacar a si mesma' });
-    }
+    if (String(attacker._id) === String(defender._id))
+      return res.status(400).json({ error: 'Você não pode atacar a si mesmo' });
 
     const safeSelection = sanitizeSelection(selection);
-    if (!hasAnySelection(safeSelection) && (!Array.isArray(selectedMemberIds) || !selectedMemberIds.length)) {
+    if (!hasAnySelection(safeSelection) && !selectedMemberIds.length)
       return res.status(400).json({ error: 'Seleção de ataque vazia' });
-    }
 
-    const resolvedSelectedMemberIds = resolveSelectedMemberIdsForAttack({
-      attacker: attacker.toObject(),
-      selection: safeSelection,
+    const resolvedMemberIds = resolveSelectedMemberIdsForAttack({
+      attacker:          attacker.toObject(),
+      selection:         safeSelection,
       selectedMemberIds,
     });
 
-    if (!resolvedSelectedMemberIds.length) {
+    if (!resolvedMemberIds.length)
       return res.status(400).json({ error: 'Nenhum membro ativo disponível para o ataque' });
-    }
 
     const origin = {
-      tileX: Number.isFinite(Number(originTileX))
-        ? Number(originTileX)
-        : Number(attacker?.mapPosition?.tileX || 0),
-      tileY: Number.isFinite(Number(originTileY))
-        ? Number(originTileY)
-        : Number(attacker?.mapPosition?.tileY || 0),
+      tileX: Number.isFinite(Number(originTileX)) ? Number(originTileX) : Number(attacker?.mapPosition?.tileX || 0),
+      tileY: Number.isFinite(Number(originTileY)) ? Number(originTileY) : Number(attacker?.mapPosition?.tileY || 0),
     };
-
     const target = {
-      tileX: Number.isFinite(Number(targetTileX))
-        ? Number(targetTileX)
-        : Number(defender?.mapPosition?.tileX || 0),
-      tileY: Number.isFinite(Number(targetTileY))
-        ? Number(targetTileY)
-        : Number(defender?.mapPosition?.tileY || 0),
+      tileX: Number.isFinite(Number(targetTileX)) ? Number(targetTileX) : Number(defender?.mapPosition?.tileX || 0),
+      tileY: Number.isFinite(Number(targetTileY)) ? Number(targetTileY) : Number(defender?.mapPosition?.tileY || 0),
     };
 
-    const travel = buildTravelMetrics({
-      origin,
-      target,
-      barracoLevel: attacker?.niveis?.barracoLevel || 1,
-    });
-const launchedAt = new Date();
-    const arriveAt = new Date(launchedAt.getTime() + travel.totalDurationMs);
+    const travel     = buildTravelMetrics({ origin, target, barracoLevel: attacker?.niveis?.barracoLevel || 1 });
+    const launchedAt = new Date();
+    const arriveAt   = new Date(launchedAt.getTime() + travel.totalDurationMs);
 
     const attack = await Attack.create({
-      id: randomUUID(),
-      status: 'travelling',
-      attackerId: String(attacker._id),
-      attackerName: String(attacker.name || 'Atacante'),
-      targetId: String(defender._id),
-      targetName: String(targetName || defender.name || 'Defensor'),
-      attackerFactionId: attacker.factionId || null,
-      defenderFactionId: defender.factionId || null,
+      id:                randomUUID(),
+      status:            'travelling',
+      attackerId:        String(attacker._id),
+      attackerName:      String(attacker.name || 'Atacante'),
+      targetId:          String(defender._id),
+      targetName:        String(targetName || defender.name || 'Defensor'),
+      attackerFactionId: attacker.factionId  || null,
+      defenderFactionId: defender.factionId  || null,
       origin,
       target,
       routeDistanceTiles: travel.routeDistanceTiles,
-      timePerTileMs: travel.timePerTileMs,
-      totalDurationMs: travel.totalDurationMs,
-      launchedAtIso: launchedAt.toISOString(),
-      arriveAtIso: arriveAt.toISOString(),
-      selectedTroops: Object.entries(safeSelection)
-        .filter(([, quantity]) => Number(quantity) > 0)
+      timePerTileMs:      travel.timePerTileMs,
+      totalDurationMs:    travel.totalDurationMs,
+      launchedAtIso:      launchedAt.toISOString(),
+      arriveAtIso:        arriveAt.toISOString(),
+      selectedTroops:     Object.entries(safeSelection)
+        .filter(([, qty]) => Number(qty) > 0)
         .map(([type, quantity]) => ({ type, quantity })),
-      selectedMemberIds: resolvedSelectedMemberIds,
+      selectedMemberIds: resolvedMemberIds,
     });
 
-    console.log(
-      `[ATTACK] Iniciado: ${attack.attackerName} → ${attack.targetName} ` +
-      `(${resolvedSelectedMemberIds.length} membros)`
-    );
+    console.log(`[ATTACK] Iniciado: ${attack.attackerName} → ${attack.targetName} (${resolvedMemberIds.length} membros)`);
+
+    // ── Notifica defensor via socket (evento 'attackReceived') ─────────────
+    // Frontend: AttackIncomingToast.tsx escuta este evento.
+    emitToPlayer(String(defender._id), 'attackReceived', {
+      attackerName: String(attacker.name || 'Desconhecido'),
+      loot:         null,   // ainda não calculado — será no resolve
+      critical:     false,
+      message:      `${attacker.name} está marchando para o seu território`,
+    });
 
     return res.status(201).json({
       success: true,
       ...buildResponse(attack),
     });
-  } catch (error) {
-    console.error('[START_BATTLE] Erro em startBattle:', error);
+  } catch (err) {
+    console.error('[START_BATTLE]', err);
     return res.status(500).json({ error: 'Erro ao iniciar batalha' });
   }
 }
 
+/**
+ * POST /battle/resolve/:battleId
+ * Resolve a batalha, aplica resultados, salva, envia e-mails e emite updates via socket.
+ * Inclui campo 'resolution' com o shape exato que o frontend (attackApi.ts) normaliza.
+ */
 export async function resolveBattle(req, res) {
   try {
     const requesterId = String(req.user.id);
     const { battleId } = req.params;
 
     const attack = await Attack.findOne({ id: String(battleId) });
-    if (!attack) {
-      console.warn(`[RESOLVE] Ataque não encontrado: ${battleId}`);
-      return res.status(404).json({ error: 'Batalha não encontrada' });
-    }
+    if (!attack) return res.status(404).json({ error: 'Batalha não encontrada' });
 
-    if (String(attack.attackerId) !== requesterId) {
-      console.warn(
-        `[RESOLVE] Tentativa de resolver ataque de outro jogador: ${requesterId} vs ${attack.attackerId}`
-      );
-      return res.status(403).json({ error: 'Somente a atacante pode resolver esta batalha' });
-    }
+    if (String(attack.attackerId) !== requesterId)
+      return res.status(403).json({ error: 'Somente o atacante pode resolver esta batalha' });
 
     if (attack.status === 'resolved') {
-      console.log(`[RESOLVE] Ataque já resolvido: ${battleId}`);
-      return res.json(buildResponse(attack));
+      // Batalha já resolvida — reconstrói resolution a partir do report salvo
+      const savedReport = attack.report || {};
+      return res.json({
+        ...buildResponse(attack),
+        resolution: savedReport.resolution || null,
+        attacker: {
+          playerId:   String(attack.attackerId),
+          playerName: String(attack.attackerName),
+          factionId:  attack.attackerFactionId || null,
+        },
+        defender: {
+          playerId:   String(attack.targetId),
+          playerName: String(attack.targetName),
+          factionId:  attack.defenderFactionId || null,
+        },
+      });
     }
 
+    // Verifica se a marcha chegou
     if (attack.arriveAtIso && new Date(attack.arriveAtIso).getTime() > Date.now()) {
       const remainingMs = new Date(attack.arriveAtIso).getTime() - Date.now();
-      return res.status(409).json({
-        error: 'A marcha ainda não chegou ao destino',
-        remainingMs,
-      });
+      return res.status(409).json({ error: 'A marcha ainda não chegou ao destino', remainingMs });
     }
 
     const attacker = await Player.findById(String(attack.attackerId));
     const defender = await Player.findById(String(attack.targetId));
+    if (!attacker || !defender) return res.status(404).json({ error: 'Jogadores não encontrados' });
 
-    if (!attacker || !defender) {
-      console.error(`[RESOLVE] Jogadores não encontrados: atk=${attack.attackerId}, def=${attack.targetId}`);
-      return res.status(404).json({ error: 'Jogadores da batalha não encontrados' });
-    }
-
-    // =========================================================================
-    // CALCULAR RESULTADO DA BATALHA
-    // =========================================================================
-
+    // ── Calcular resultado ────────────────────────────────────────────────
     const result = resolveAttackResult({
       attacker: attacker.toObject(),
       defender: defender.toObject(),
       selection: Object.fromEntries(
-        (Array.isArray(attack.selectedTroops) ? attack.selectedTroops : []).map((item) => [
-          item.type,
-          item.quantity,
-        ])
+        (Array.isArray(attack.selectedTroops) ? attack.selectedTroops : [])
+          .map((item) => [item.type, item.quantity])
       ),
       selectedMemberIds: Array.isArray(attack.selectedMemberIds) ? attack.selectedMemberIds : [],
     });
 
-    // =========================================================================
-    // ATUALIZAR BALANCES
-    // =========================================================================
-
+    // ── Atualizar saldos ──────────────────────────────────────────────────
     attacker.balances.dirtyMoney = result.nextDirtyMoneyAtacante;
     defender.balances.dirtyMoney = result.nextDirtyMoneyDefensor;
 
-    // =========================================================================
-    // P6: SINCRONIZAR STATUS DE MEMBROS
-    // =========================================================================
-
-    // Extrair IDs de membros mortos e feridos do resultado
-    const attackerDeadMemberIds = new Set(result.attackerDeadMemberIds || []);
-    const defenderDeadMemberIds = new Set(result.defenderDeadMemberIds || []);
-    const attackerInjuredMemberIds = new Set(result.attackerInjuredMemberIds || []);
-    const defenderInjuredMemberIds = new Set(result.defenderInjuredMemberIds || []);
-
-    // Atualizar gang do atacante
+    // ── Atualizar gang do atacante ────────────────────────────────────────
     attacker.gang = result.nextAttackerGang;
     if (attacker.gang?.members) {
       attacker.gang.members = updateMemberStatusAfterBattle(
         attacker.gang.members,
-        attackerDeadMemberIds,
-        attackerInjuredMemberIds,
-        3600000 // 1 hora
+        new Set(result.attackerDeadMemberIds    || []),
+        new Set(result.attackerInjuredMemberIds || [])
       );
     }
 
-    // Atualizar gang do defensor
+    // ── Atualizar gang do defensor ────────────────────────────────────────
     defender.gang = result.nextDefenderGang;
     if (defender.gang?.members) {
       defender.gang.members = updateMemberStatusAfterBattle(
         defender.gang.members,
-        defenderDeadMemberIds,
-        defenderInjuredMemberIds,
-        3600000 // 1 hora
+        new Set(result.defenderDeadMemberIds    || []),
+        new Set(result.defenderInjuredMemberIds || [])
       );
     }
 
-    // Registrar atualização no gang
-    if (attacker.gang) {
-      attacker.gang.updatedAtIso = new Date().toISOString();
-    }
-    if (defender.gang) {
-      defender.gang.updatedAtIso = new Date().toISOString();
-    }
+    if (attacker.gang) attacker.gang.updatedAtIso = new Date().toISOString();
+    if (defender.gang) defender.gang.updatedAtIso = new Date().toISOString();
 
     bumpVersion(attacker);
     bumpVersion(defender);
 
-    // =========================================================================
-    // CONSTRUIR RELATÓRIO
-    // =========================================================================
-
-    const report = buildAttackReport(result);
-
-    attack.status = 'resolved';
-    attack.success = result.winner === 'atacante';
-    attack.critical = false;
-    attack.loot = result.lootDirtyMoney;
-    attack.resolvedAtIso = new Date().toISOString();
-    attack.report = {
-      winner: result.winner,
-      rounds: result.rounds,
-      lootDirtyMoney: result.lootDirtyMoney,
-      barracoLevelPerdedor: result.barracoLevelPerdedor,
-      attacker: result.attacker,
-      defender: result.defender,
-      attackerSubject: report.attackerSubject,
-      attackerBody: report.attackerBody,
-      defenderSubject: report.defenderSubject,
-      defenderBody: report.defenderBody,
-    };
-
+    // ── Histórico ─────────────────────────────────────────────────────────
     const historyItem = {
-      id: attack.id,
-      attackerId: attack.attackerId,
+      id:           attack.id,
+      attackerId:   attack.attackerId,
       attackerName: attack.attackerName,
-      targetId: attack.targetId,
-      targetName: attack.targetName,
-      success: attack.success,
-      loot: attack.loot,
-      createdAt: new Date().toISOString(),
+      targetId:     attack.targetId,
+      targetName:   attack.targetName,
+      success:      result.success,
+      loot:         result.lootDirtyMoney,
+      createdAt:    new Date().toISOString(),
     };
-
     appendAttackHistory(attacker, historyItem);
     appendAttackHistory(defender, historyItem);
 
-    // =========================================================================
-    // SALVAR NO BANCO DE DADOS
-    // =========================================================================
+    // ── Montar o objeto 'resolution' no shape que o frontend espera ────────
+    // Referência: attackApi.ts → normalizeResolution()
+    const resolution = {
+      success:       result.success,
+      loot:          result.lootDirtyMoney + (result.spoils?.luxuryConvertedDirtyMoney || 0),
+      chance:        Math.round(result.winChance * 100), // frontend divide por 100 se > 1
+      attackerPower: result.attackerGangStats.totalPower,
+      defenderPower: result.defenderGangStats.totalPower,
+      message:       result.message,
+      critical:      result.critical,
+      spoils:        result.spoils,
+      attackerGangLosses: result.attackerGangLosses,
+      defenderGangLosses: result.defenderGangLosses,
+      attackerGangStats:  result.attackerGangStats,
+      defenderGangStats:  result.defenderGangStats,
+    };
 
-    console.log(`[RESOLVE] Salvando batalha resolvida...`);
+    // ── Construir relatório de e-mail ─────────────────────────────────────
+    const report = buildAttackReport(result);
+
+    // ── Salvar attack ─────────────────────────────────────────────────────
+    attack.status       = 'resolved';
+    attack.success      = result.success;
+    attack.critical     = result.critical;
+    attack.loot         = result.lootDirtyMoney;
+    attack.resolvedAtIso = new Date().toISOString();
+    attack.report = {
+      resolution, // salva o objeto resolution para reutilizar em getBattleReport
+      winner:               result.winner,
+      rounds:               result.rounds,
+      lootDirtyMoney:       result.lootDirtyMoney,
+      barracoLevelPerdedor: result.barracoLevelPerdedor,
+      attacker:             result.attacker,
+      defender:             result.defender,
+      attackerSubject:      report.attackerSubject,
+      attackerBody:         report.attackerBody,
+      defenderSubject:      report.defenderSubject,
+      defenderBody:         report.defenderBody,
+    };
+
+    // ── Salvar tudo ────────────────────────────────────────────────────────
     await Promise.all([attacker.save(), defender.save(), attack.save()]);
+
+    // ── Emitir playerUpdate para ambos ────────────────────────────────────
     emitToPlayer(String(attacker._id), 'playerUpdate', { player: mergePlayerState(attacker.toObject()) });
     emitToPlayer(String(defender._id), 'playerUpdate', { player: mergePlayerState(defender.toObject()) });
-    console.log(`[RESOLVE] Batalha salva: ${battleId}`);
 
-    // =========================================================================
-    // P7: ENVIAR EMAILS COM RETRY
-    // =========================================================================
+    // ── Emitir resultado ao defensor via socket ───────────────────────────
+    // O AttackIncomingToast já notificou a chegada; agora notifica o resultado.
+    emitToPlayer(String(defender._id), 'attackReceived', {
+      attackerName: String(attacker.name || 'Desconhecido'),
+      loot:         result.success ? result.lootDirtyMoney : 0,
+      critical:     result.critical,
+      message:      result.success
+        ? `${attacker.name} invadiu seu território e roubou R$ ${result.lootDirtyMoney.toLocaleString('pt-BR')}`
+        : `${attacker.name} tentou invadir mas sua defesa resistiu!`,
+    });
 
-    console.log(`[RESOLVE] Enviando relatórios por email...`);
-    const [attackerMailResult, defenderMailResult] = await Promise.allSettled([
-      sendAttackMailWithRetry({
-        senderName: 'Sistema',
-        recipientId: attacker._id,
+    // ── Enviar e-mails ────────────────────────────────────────────────────
+    const [atkMail, defMail] = await Promise.allSettled([
+      sendAttackMail({
+        senderName:    'Sistema',
+        recipientId:   attacker._id,
         recipientName: attacker.name,
-        subject: report.attackerSubject,
-        body: report.attackerBody,
-        metadata: {
-          type: 'attack_report',
-          attackId: attack.id,
-          role: 'attacker',
-        },
+        subject:       report.attackerSubject,
+        body:          report.attackerBody,
+        metadata:      { type: 'attack_report', attackId: attack.id, role: 'attacker' },
       }),
-      sendAttackMailWithRetry({
-        senderName: 'Sistema',
-        recipientId: defender._id,
+      sendAttackMail({
+        senderName:    'Sistema',
+        recipientId:   defender._id,
         recipientName: defender.name,
-        subject: report.defenderSubject,
-        body: report.defenderBody,
-        metadata: {
-          type: 'attack_report',
-          attackId: attack.id,
-          role: 'defender',
-        },
+        subject:       report.defenderSubject,
+        body:          report.defenderBody,
+        metadata:      { type: 'attack_report', attackId: attack.id, role: 'defender' },
       }),
     ]);
 
-    // =========================================================================
-    // REGISTRAR STATUS DE ENVIO
-    // =========================================================================
+    const mailErrors = [
+      atkMail.status === 'rejected' ? 'attacker' : null,
+      defMail.status === 'rejected' ? 'defender' : null,
+    ].filter(Boolean);
 
-    const mailErrors = [];
-    if (attackerMailResult.status === 'rejected') {
-      mailErrors.push('attacker');
-      console.error(
-        `[RESOLVE] Erro ao enviar email para atacante: ${attackerMailResult.reason?.message}`
-      );
-    }
-    if (defenderMailResult.status === 'rejected') {
-      mailErrors.push('defender');
-      console.error(
-        `[RESOLVE] Erro ao enviar email para defensor: ${defenderMailResult.reason?.message}`
-      );
-    }
-
-    if (mailErrors.length === 0) {
-      console.log(`[RESOLVE] Todos os emails enviados com sucesso`);
-    }
-
-    // Armazenar status de envio para auditoria
     attack.mailStatus = {
-      sentToAttacker: attackerMailResult.status === 'fulfilled' &&
-        attackerMailResult.value?.success === true,
-      sentToDefensor: defenderMailResult.status === 'fulfilled' &&
-        defenderMailResult.value?.success === true,
-      errors: mailErrors,
-      retriedAt: new Date().toISOString(),
+      sentToAttacker: atkMail.status === 'fulfilled' && atkMail.value?.success === true,
+      sentToDefensor: defMail.status === 'fulfilled' && defMail.value?.success === true,
+      errors:         mailErrors,
+      retriedAt:      new Date().toISOString(),
     };
-
     await attack.save();
 
-    // =========================================================================
-    // RESPONDER COM SUCESSO
-    // =========================================================================
+    console.log(`[RESOLVE] Batalha finalizada: ${battleId} | ${result.winner} | loot: ${result.lootDirtyMoney}`);
 
+    // ── Resposta no shape que o frontend (attackApi.ts) normalizeReportResponse() espera ──
     const responseData = {
       ...buildResponse(attack),
-      mailStatus: attack.mailStatus,
+      // ← 'resolution' é o campo que normalizeReportResponse extrai
+      resolution,
       attacker: {
-        ...result.attacker,
-        gang: {
-          members: attacker.gang?.members || [],
-          stats: {
-            totalMembers: attacker.gang?.members?.length || 0,
-            activeMembers: attacker.gang?.members?.filter(m => m.status === 'ativo').length || 0,
-            injuredMembers: attacker.gang?.members?.filter(m => m.status === 'ferido').length || 0,
-            deadMembers: attacker.gang?.members?.filter(m => m.status === 'morto').length || 0,
-          },
-        },
+        playerId:    String(attacker._id),
+        playerName:  String(attacker.name || ''),
+        factionId:   attacker.factionId  || null,
+        factionName: '',
+        factionTag:  '',
       },
       defender: {
-        ...result.defender,
-        gang: {
-          members: defender.gang?.members || [],
-          stats: {
-            totalMembers: defender.gang?.members?.length || 0,
-            activeMembers: defender.gang?.members?.filter(m => m.status === 'ativo').length || 0,
-            injuredMembers: defender.gang?.members?.filter(m => m.status === 'ferido').length || 0,
-            deadMembers: defender.gang?.members?.filter(m => m.status === 'morto').length || 0,
-          },
-        },
+        playerId:    String(defender._id),
+        playerName:  String(defender.name || ''),
+        factionId:   defender.factionId  || null,
+        factionName: '',
+        factionTag:  '',
       },
     };
 
-    // Adicionar aviso se houver problema com email
     if (mailErrors.length > 0) {
-      responseData.warning = `Relatório não foi enviado para: ${mailErrors.join(', ')}. ` +
-        `Os dados da batalha foram salvos e você pode consultar o resultado depois.`;
+      responseData.warning = `E-mail não enviado para: ${mailErrors.join(', ')}`;
     }
 
-    console.log(`[RESOLVE] Batalha finalizada com sucesso: ${battleId}`);
     return res.json(responseData);
-
-  } catch (error) {
-    console.error('[RESOLVE] Erro crítico em resolveBattle:', error);
-    return res.status(500).json({
-      error: 'Erro ao resolver batalha',
-      message: error.message,
-    });
+  } catch (err) {
+    console.error('[RESOLVE]', err);
+    return res.status(500).json({ error: 'Erro ao resolver batalha', message: err.message });
   }
 }
 
 /**
- * Retorna o relatório de uma batalha já resolvida
+ * GET /battle/report/:battleId
+ * Retorna relatório de batalha já resolvida.
  */
 export async function getBattleReport(req, res) {
   try {
@@ -647,48 +493,13 @@ export async function getBattleReport(req, res) {
     const { battleId } = req.params;
 
     const attack = await Attack.findOne({ id: String(battleId) });
-    if (!attack) {
-      return res.status(404).json({ error: 'Batalha não encontrada' });
-    }
+    if (!attack) return res.status(404).json({ error: 'Batalha não encontrada' });
 
-    const allowed =
-      String(attack.attackerId) === requesterId || String(attack.targetId) === requesterId;
+    const allowed = String(attack.attackerId) === requesterId || String(attack.targetId) === requesterId;
+    if (!allowed) return res.status(403).json({ error: 'Acesso negado' });
 
-    if (!allowed) {
-      return res.status(403).json({ error: 'Acesso negado' });
-    }
-
-    return res.json(buildResponse(attack));
-  } catch (error) {
-    console.error('[REPORT] Erro em getBattleReport:', error);
-    return res.status(500).json({ error: 'Erro ao buscar relatório' });
-  }
-}
-
-/**
- * Retorna histórico de todas as batalhas do jogador
- */
-export async function getBattleHistory(req, res) {
-  try {
-    const requesterId = String(req.user.id);
-
-    const attacks = await Attack.find({
-      $or: [{ attackerId: requesterId }, { targetId: requesterId }],
-    })
-      .sort({ createdAt: -1 })
-      .limit(100)
-      .lean();
-
-    return res.json(attacks.map((attack) => buildResponse(attack)));
-  } catch (error) {
-    console.error('[HISTORY] Erro em getBattleHistory:', error);
-    return res.status(500).json({ error: 'Erro ao buscar histórico de batalha' });
-  }
-}
-
-/**
- * Alias para compatibilidade com rotas existentes
- */
-export async function initiateAttack(req, res) {
-  return startBattle(req, res);
-}
+    return res.json({
+      ...buildResponse(attack),
+      resolution: attack.report?.resolution || null,
+      attacker: {
+ 

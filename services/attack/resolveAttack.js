@@ -1,543 +1,501 @@
+// services/attack/resolveAttack.js
+
 const MEMBER_TYPES = [
-  'capanga',
-  'frente',
-  'executor',
-  'assassino',
-  'muralha',
-  'certeiro',
-  'motorista',
-  'nitro',
+  'capanga', 'frente', 'executor', 'assassino',
+  'muralha', 'certeiro', 'motorista', 'nitro',
 ];
 
+// ─── ATRIBUTOS (rajada=ATQ, blindagem=DEF, folego=HP, quebra=DANO) ──────────
 const ATRIBUTOS_GANG = {
-  capanga: {
-    1: { rajada: 9, blindagem: 13, folego: 12, quebra: 8 },
-    2: { rajada: 10, blindagem: 15, folego: 14, quebra: 9 },
-    3: { rajada: 11, blindagem: 17, folego: 16, quebra: 10 },
-    4: { rajada: 13, blindagem: 19, folego: 18, quebra: 11 },
-    5: { rajada: 15, blindagem: 21, folego: 20, quebra: 12 },
-    6: { rajada: 17, blindagem: 23, folego: 22, quebra: 13 },
-    7: { rajada: 19, blindagem: 25, folego: 24, quebra: 14 },
-    8: { rajada: 21, blindagem: 27, folego: 26, quebra: 15 },
-    9: { rajada: 23, blindagem: 29, folego: 28, quebra: 16 },
+  capanga:  {
+    1:  { rajada: 9,  blindagem: 13, folego: 12, quebra: 8  },
+    2:  { rajada: 10, blindagem: 15, folego: 14, quebra: 9  },
+    3:  { rajada: 11, blindagem: 17, folego: 16, quebra: 10 },
+    4:  { rajada: 13, blindagem: 19, folego: 18, quebra: 11 },
+    5:  { rajada: 15, blindagem: 21, folego: 20, quebra: 12 },
+    6:  { rajada: 17, blindagem: 23, folego: 22, quebra: 13 },
+    7:  { rajada: 19, blindagem: 25, folego: 24, quebra: 14 },
+    8:  { rajada: 21, blindagem: 27, folego: 26, quebra: 15 },
+    9:  { rajada: 23, blindagem: 29, folego: 28, quebra: 16 },
     10: { rajada: 25, blindagem: 31, folego: 30, quebra: 17 },
   },
   frente: {
-    1: { rajada: 12, blindagem: 9, folego: 10, quebra: 12 },
-    2: { rajada: 14, blindagem: 10, folego: 11, quebra: 14 },
-    3: { rajada: 16, blindagem: 11, folego: 12, quebra: 16 },
-    4: { rajada: 18, blindagem: 12, folego: 13, quebra: 18 },
-    5: { rajada: 20, blindagem: 14, folego: 15, quebra: 21 },
-    6: { rajada: 22, blindagem: 15, folego: 16, quebra: 23 },
-    7: { rajada: 25, blindagem: 17, folego: 18, quebra: 26 },
-    8: { rajada: 27, blindagem: 18, folego: 19, quebra: 28 },
-    9: { rajada: 30, blindagem: 20, folego: 21, quebra: 31 },
+    1:  { rajada: 12, blindagem: 9,  folego: 10, quebra: 12 },
+    2:  { rajada: 14, blindagem: 10, folego: 11, quebra: 14 },
+    3:  { rajada: 16, blindagem: 11, folego: 12, quebra: 16 },
+    4:  { rajada: 18, blindagem: 12, folego: 13, quebra: 18 },
+    5:  { rajada: 20, blindagem: 14, folego: 15, quebra: 21 },
+    6:  { rajada: 22, blindagem: 15, folego: 16, quebra: 23 },
+    7:  { rajada: 25, blindagem: 17, folego: 18, quebra: 26 },
+    8:  { rajada: 27, blindagem: 18, folego: 19, quebra: 28 },
+    9:  { rajada: 30, blindagem: 20, folego: 21, quebra: 31 },
     10: { rajada: 32, blindagem: 22, folego: 23, quebra: 34 },
   },
   executor: {
-    1: { rajada: 11, blindagem: 7, folego: 9, quebra: 12 },
-    2: { rajada: 13, blindagem: 8, folego: 10, quebra: 14 },
-    3: { rajada: 15, blindagem: 9, folego: 11, quebra: 16 },
-    4: { rajada: 17, blindagem: 10, folego: 12, quebra: 18 },
-    5: { rajada: 19, blindagem: 11, folego: 13, quebra: 21 },
-    6: { rajada: 21, blindagem: 12, folego: 14, quebra: 23 },
-    7: { rajada: 24, blindagem: 13, folego: 15, quebra: 26 },
-    8: { rajada: 26, blindagem: 14, folego: 16, quebra: 29 },
-    9: { rajada: 29, blindagem: 15, folego: 17, quebra: 32 },
+    1:  { rajada: 11, blindagem: 7,  folego: 9,  quebra: 12 },
+    2:  { rajada: 13, blindagem: 8,  folego: 10, quebra: 14 },
+    3:  { rajada: 15, blindagem: 9,  folego: 11, quebra: 16 },
+    4:  { rajada: 17, blindagem: 10, folego: 12, quebra: 18 },
+    5:  { rajada: 19, blindagem: 11, folego: 13, quebra: 21 },
+    6:  { rajada: 21, blindagem: 12, folego: 14, quebra: 23 },
+    7:  { rajada: 24, blindagem: 13, folego: 15, quebra: 26 },
+    8:  { rajada: 26, blindagem: 14, folego: 16, quebra: 29 },
+    9:  { rajada: 29, blindagem: 15, folego: 17, quebra: 32 },
     10: { rajada: 31, blindagem: 16, folego: 18, quebra: 35 },
   },
   assassino: {
-    1: { rajada: 12, blindagem: 7, folego: 8, quebra: 13 },
-    2: { rajada: 14, blindagem: 8, folego: 9, quebra: 15 },
-    3: { rajada: 16, blindagem: 9, folego: 10, quebra: 17 },
-    4: { rajada: 18, blindagem: 10, folego: 11, quebra: 20 },
-    5: { rajada: 20, blindagem: 11, folego: 12, quebra: 23 },
-    6: { rajada: 22, blindagem: 12, folego: 13, quebra: 26 },
-    7: { rajada: 25, blindagem: 13, folego: 14, quebra: 29 },
-    8: { rajada: 27, blindagem: 14, folego: 15, quebra: 32 },
-    9: { rajada: 30, blindagem: 15, folego: 16, quebra: 35 },
+    1:  { rajada: 12, blindagem: 7,  folego: 8,  quebra: 13 },
+    2:  { rajada: 14, blindagem: 8,  folego: 9,  quebra: 15 },
+    3:  { rajada: 16, blindagem: 9,  folego: 10, quebra: 17 },
+    4:  { rajada: 18, blindagem: 10, folego: 11, quebra: 20 },
+    5:  { rajada: 20, blindagem: 11, folego: 12, quebra: 23 },
+    6:  { rajada: 22, blindagem: 12, folego: 13, quebra: 26 },
+    7:  { rajada: 25, blindagem: 13, folego: 14, quebra: 29 },
+    8:  { rajada: 27, blindagem: 14, folego: 15, quebra: 32 },
+    9:  { rajada: 30, blindagem: 15, folego: 16, quebra: 35 },
     10: { rajada: 33, blindagem: 16, folego: 17, quebra: 38 },
   },
   muralha: {
-    1: { rajada: 6, blindagem: 15, folego: 16, quebra: 5 },
-    2: { rajada: 7, blindagem: 17, folego: 18, quebra: 6 },
-    3: { rajada: 8, blindagem: 19, folego: 20, quebra: 7 },
-    4: { rajada: 9, blindagem: 21, folego: 22, quebra: 8 },
-    5: { rajada: 10, blindagem: 24, folego: 25, quebra: 9 },
-    6: { rajada: 11, blindagem: 26, folego: 27, quebra: 10 },
-    7: { rajada: 12, blindagem: 29, folego: 30, quebra: 11 },
-    8: { rajada: 13, blindagem: 31, folego: 32, quebra: 12 },
-    9: { rajada: 14, blindagem: 34, folego: 35, quebra: 13 },
+    1:  { rajada: 6,  blindagem: 15, folego: 16, quebra: 5  },
+    2:  { rajada: 7,  blindagem: 17, folego: 18, quebra: 6  },
+    3:  { rajada: 8,  blindagem: 19, folego: 20, quebra: 7  },
+    4:  { rajada: 9,  blindagem: 21, folego: 22, quebra: 8  },
+    5:  { rajada: 10, blindagem: 24, folego: 25, quebra: 9  },
+    6:  { rajada: 11, blindagem: 26, folego: 27, quebra: 10 },
+    7:  { rajada: 12, blindagem: 29, folego: 30, quebra: 11 },
+    8:  { rajada: 13, blindagem: 31, folego: 32, quebra: 12 },
+    9:  { rajada: 14, blindagem: 34, folego: 35, quebra: 13 },
     10: { rajada: 15, blindagem: 37, folego: 38, quebra: 14 },
   },
   certeiro: {
-    1: { rajada: 9, blindagem: 10, folego: 10, quebra: 8 },
-    2: { rajada: 10, blindagem: 11, folego: 11, quebra: 9 },
-    3: { rajada: 11, blindagem: 12, folego: 12, quebra: 10 },
-    4: { rajada: 12, blindagem: 13, folego: 13, quebra: 11 },
-    5: { rajada: 13, blindagem: 15, folego: 14, quebra: 12 },
-    6: { rajada: 14, blindagem: 16, folego: 15, quebra: 13 },
-    7: { rajada: 16, blindagem: 18, folego: 17, quebra: 15 },
-    8: { rajada: 17, blindagem: 19, folego: 18, quebra: 16 },
-    9: { rajada: 19, blindagem: 21, folego: 20, quebra: 18 },
+    1:  { rajada: 9,  blindagem: 10, folego: 10, quebra: 8  },
+    2:  { rajada: 10, blindagem: 11, folego: 11, quebra: 9  },
+    3:  { rajada: 11, blindagem: 12, folego: 12, quebra: 10 },
+    4:  { rajada: 12, blindagem: 13, folego: 13, quebra: 11 },
+    5:  { rajada: 13, blindagem: 15, folego: 14, quebra: 12 },
+    6:  { rajada: 14, blindagem: 16, folego: 15, quebra: 13 },
+    7:  { rajada: 16, blindagem: 18, folego: 17, quebra: 15 },
+    8:  { rajada: 17, blindagem: 19, folego: 18, quebra: 16 },
+    9:  { rajada: 19, blindagem: 21, folego: 20, quebra: 18 },
     10: { rajada: 21, blindagem: 23, folego: 22, quebra: 20 },
   },
   motorista: {
-    1: { rajada: 7, blindagem: 14, folego: 14, quebra: 7 },
-    2: { rajada: 8, blindagem: 16, folego: 16, quebra: 8 },
-    3: { rajada: 9, blindagem: 18, folego: 18, quebra: 9 },
-    4: { rajada: 10, blindagem: 20, folego: 20, quebra: 10 },
-    5: { rajada: 11, blindagem: 23, folego: 23, quebra: 11 },
-    6: { rajada: 12, blindagem: 25, folego: 25, quebra: 12 },
-    7: { rajada: 13, blindagem: 28, folego: 28, quebra: 13 },
-    8: { rajada: 14, blindagem: 30, folego: 30, quebra: 14 },
-    9: { rajada: 15, blindagem: 33, folego: 33, quebra: 15 },
+    1:  { rajada: 7,  blindagem: 14, folego: 14, quebra: 7  },
+    2:  { rajada: 8,  blindagem: 16, folego: 16, quebra: 8  },
+    3:  { rajada: 9,  blindagem: 18, folego: 18, quebra: 9  },
+    4:  { rajada: 10, blindagem: 20, folego: 20, quebra: 10 },
+    5:  { rajada: 11, blindagem: 23, folego: 23, quebra: 11 },
+    6:  { rajada: 12, blindagem: 25, folego: 25, quebra: 12 },
+    7:  { rajada: 13, blindagem: 28, folego: 28, quebra: 13 },
+    8:  { rajada: 14, blindagem: 30, folego: 30, quebra: 14 },
+    9:  { rajada: 15, blindagem: 33, folego: 33, quebra: 15 },
     10: { rajada: 17, blindagem: 36, folego: 36, quebra: 17 },
   },
   nitro: {
-    1: { rajada: 8, blindagem: 13, folego: 15, quebra: 8 },
-    2: { rajada: 9, blindagem: 15, folego: 17, quebra: 9 },
-    3: { rajada: 10, blindagem: 17, folego: 19, quebra: 10 },
-    4: { rajada: 11, blindagem: 19, folego: 21, quebra: 11 },
-    5: { rajada: 12, blindagem: 21, folego: 24, quebra: 12 },
-    6: { rajada: 13, blindagem: 23, folego: 26, quebra: 13 },
-    7: { rajada: 15, blindagem: 26, folego: 29, quebra: 15 },
-    8: { rajada: 17, blindagem: 28, folego: 32, quebra: 17 },
-    9: { rajada: 19, blindagem: 31, folego: 35, quebra: 19 },
+    1:  { rajada: 8,  blindagem: 13, folego: 15, quebra: 8  },
+    2:  { rajada: 9,  blindagem: 15, folego: 17, quebra: 9  },
+    3:  { rajada: 10, blindagem: 17, folego: 19, quebra: 10 },
+    4:  { rajada: 11, blindagem: 19, folego: 21, quebra: 11 },
+    5:  { rajada: 12, blindagem: 21, folego: 24, quebra: 12 },
+    6:  { rajada: 13, blindagem: 23, folego: 26, quebra: 13 },
+    7:  { rajada: 15, blindagem: 26, folego: 29, quebra: 15 },
+    8:  { rajada: 17, blindagem: 28, folego: 32, quebra: 17 },
+    9:  { rajada: 19, blindagem: 31, folego: 35, quebra: 19 },
     10: { rajada: 21, blindagem: 34, folego: 38, quebra: 21 },
   },
 };
 
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+
 function toNumber(value, fallback = 0) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function toPositiveInt(value, fallback = 1) {
-  const numeric = Math.floor(toNumber(value, fallback));
-  return numeric > 0 ? numeric : fallback;
+  const n = Math.floor(toNumber(value, fallback));
+  return n > 0 ? n : fallback;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function randomBetween(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function emptyByType() {
+  return Object.fromEntries(MEMBER_TYPES.map((t) => [t, 0]));
+}
+
+// ─── VIAGEM ───────────────────────────────────────────────────────────────────
+
 export function getBattleCapacity(barracoLevel) {
   return Math.max(100, toPositiveInt(barracoLevel, 1) * 100);
 }
 
 export function getGangAttackTimePerTileMs(barracoLevel, baseTime = 5000) {
-  return Math.max(1, Math.floor(toNumber(baseTime, 5000))) / Math.max(1, toPositiveInt(barracoLevel, 1));
+  return Math.max(1, Math.floor(toNumber(baseTime, 5000)))
+    / Math.max(1, toPositiveInt(barracoLevel, 1));
 }
 
 export function getRouteDistanceTiles(origin, target) {
-  const dx = Math.abs(toPositiveInt(target.tileX, 0) - toPositiveInt(origin.tileX, 0));
-  const dy = Math.abs(toPositiveInt(target.tileY, 0) - toPositiveInt(origin.tileY, 0));
+  const dx = Math.abs(toNumber(target.tileX, 0) - toNumber(origin.tileX, 0));
+  const dy = Math.abs(toNumber(target.tileY, 0) - toNumber(origin.tileY, 0));
   return Math.max(dx, dy);
 }
 
 export function buildTravelMetrics({ origin, target, barracoLevel }) {
   const routeDistanceTiles = getRouteDistanceTiles(origin, target);
-  const timePerTileMs = getGangAttackTimePerTileMs(barracoLevel, 5000);
-  const totalDurationMs = routeDistanceTiles * timePerTileMs;
-
-  return {
-    routeDistanceTiles,
-    timePerTileMs,
-    totalDurationMs,
-  };
+  const timePerTileMs      = getGangAttackTimePerTileMs(barracoLevel, 5000);
+  const totalDurationMs    = routeDistanceTiles * timePerTileMs;
+  return { routeDistanceTiles, timePerTileMs, totalDurationMs };
 }
 
-function createEmptyComposition() {
-  return {
-    capanga: 0,
-    frente: 0,
-    executor: 0,
-    assassino: 0,
-    muralha: 0,
-    certeiro: 0,
-    motorista: 0,
-    nitro: 0,
-  };
-}
-
-function recalculateGangStats(gangMembers = []) {
-  const totalMembers = gangMembers.length;
-  const activeMembers = gangMembers.filter((item) => item.status === 'ativo').length;
-  const injuredMembers = gangMembers.filter((item) => item.status === 'ferido').length;
-  const deadMembers = gangMembers.filter((item) => item.status === 'morto').length;
-  const trainingMembers = gangMembers.filter((item) => item.status === 'treinando').length;
-
-  const totalLevels = gangMembers.reduce((sum, item) => sum + toPositiveInt(item.level, 1), 0);
-  const totalPower = gangMembers.reduce((sum, item) => sum + toPositiveInt(item.level, 1) * 10, 0);
-
-  return {
-    totalMembers,
-    activeMembers,
-    injuredMembers,
-    deadMembers,
-    trainingMembers,
-    totalPower,
-    averageLevel: totalMembers > 0 ? Number((totalLevels / totalMembers).toFixed(2)) : 0,
-  };
-}
-
-function normalizeSelection(selection = {}) {
-  const normalized = createEmptyComposition();
-  for (const memberType of MEMBER_TYPES) {
-    normalized[memberType] = Math.max(0, Math.floor(toNumber(selection?.[memberType], 0)));
-  }
-  return normalized;
-}
-
-function sortMembersForDeployment(a, b) {
-  const recruitedCompare = String(a?.recruitedAt || '').localeCompare(String(b?.recruitedAt || ''));
-  if (recruitedCompare !== 0) return recruitedCompare;
-  return String(a?.id || '').localeCompare(String(b?.id || ''));
-}
+// ─── MEMBROS ATIVOS ───────────────────────────────────────────────────────────
 
 function getActiveMembers(player) {
   return Array.isArray(player?.gang?.members)
-    ? player.gang.members.filter((member) => member.status === 'ativo').sort(sortMembersForDeployment)
+    ? player.gang.members
+        .filter((m) => m.status === 'ativo')
+        .sort((a, b) =>
+          String(a?.recruitedAt || '').localeCompare(String(b?.recruitedAt || ''))
+        )
     : [];
 }
 
+function normalizeSelection(selection = {}) {
+  const out = emptyByType();
+  for (const t of MEMBER_TYPES) {
+    out[t] = Math.max(0, Math.floor(toNumber(selection?.[t], 0)));
+  }
+  return out;
+}
+
 export function resolveSelectedMemberIdsForAttack({ attacker, selection, selectedMemberIds }) {
-  const activeMembers = getActiveMembers(attacker);
+  const active   = getActiveMembers(attacker);
   const capacity = getBattleCapacity(attacker?.niveis?.barracoLevel || 1);
 
   if (Array.isArray(selectedMemberIds) && selectedMemberIds.length > 0) {
-    return activeMembers
-      .filter((member) => selectedMemberIds.includes(String(member.id)))
+    return active
+      .filter((m) => selectedMemberIds.includes(String(m.id)))
       .slice(0, capacity)
-      .map((member) => String(member.id));
+      .map((m) => String(m.id));
   }
 
-  const safeSelection = normalizeSelection(selection);
+  const safe   = normalizeSelection(selection);
   const chosen = [];
   let used = 0;
 
-  for (const memberType of MEMBER_TYPES) {
-    const byType = activeMembers.filter((member) => member.type === memberType);
-    const wanted = Math.max(0, Math.min(safeSelection[memberType], capacity - used));
-
-    for (let index = 0; index < wanted; index += 1) {
-      if (!byType[index]) break;
-      chosen.push(String(byType[index].id));
-      used += 1;
+  for (const t of MEMBER_TYPES) {
+    const byType = active.filter((m) => m.type === t);
+    const wanted = Math.min(safe[t], capacity - used);
+    for (let i = 0; i < wanted; i++) {
+      if (!byType[i]) break;
+      chosen.push(String(byType[i].id));
+      used++;
     }
   }
 
   return chosen;
 }
 
-function getAtributos(memberType, level) {
-  const safeType = MEMBER_TYPES.includes(String(memberType)) ? String(memberType) : 'capanga';
-  const safeLevel = Math.max(1, Math.min(10, toPositiveInt(level, 1)));
+// ─── STATS DE GANGUE ─────────────────────────────────────────────────────────
+
+function computeGangStats(members) {
+  const active  = (members || []).filter((m) => m.status === 'ativo');
+  const feridos = (members || []).filter((m) => m.status === 'ferido').length;
+  const mortos  = (members || []).filter((m) => m.status === 'morto').length;
+
+  let rajada = 0, blindagem = 0, folego = 0, quebra = 0;
+
+  for (const m of active) {
+    const safeType  = MEMBER_TYPES.includes(String(m.type)) ? String(m.type) : 'capanga';
+    const safeLevel = clamp(toPositiveInt(m.level, 1), 1, 10);
+    const attr      = ATRIBUTOS_GANG[safeType][safeLevel];
+    rajada    += attr.rajada;
+    blindagem += attr.blindagem;
+    folego    += attr.folego;
+    quebra    += attr.quebra;
+  }
+
+  // Poder total — mesmo peso do frontend gangStore
+  const totalPower = Math.round(
+    rajada    * 1.35 +
+    blindagem * 1.10 +
+    folego    * 1.05 +
+    quebra    * 1.20
+  );
+
+  return {
+    totalMembers: (members || []).length,
+    ativos:       active.length,
+    feridos,
+    mortos,
+    rajada:    Math.round(rajada),
+    blindagem: Math.round(blindagem),
+    folego:    Math.round(folego),
+    quebra:    Math.round(quebra),
+    totalPower,
+  };
+}
+
+// ─── BAIXAS ───────────────────────────────────────────────────────────────────
+
+function resolveGangCasualties({ members, ownStats, enemyStats, side }) {
+  const mortos  = emptyByType();
+  const feridos = emptyByType();
+  const active  = (members || []).filter((m) => m.status === 'ativo');
+
+  if (!active.length) return { mortos, feridos, preservadosPeloMedico: 0 };
+
+  // Pressão inimiga vs proteção própria
+  const pressure    = enemyStats.rajada * 1.05 + enemyStats.quebra * 1.10;
+  const protection  = ownStats.blindagem * 0.90 + ownStats.folego  * 0.85;
+  const ownPower    = Math.max(1, ownStats.totalPower);
+
+  let lossRate = clamp(
+    (pressure - protection * 0.55) / ownPower,
+    0.04,
+    0.65
+  );
+
+  // Atacante sofre 8% a mais de baixas que defensor
+  lossRate *= (side === 'attacker' ? 1.08 : 0.94);
+  lossRate  = clamp(lossRate, 0.04, 0.65);
+
+  const totalCasualties = Math.max(
+    0,
+    Math.round(active.length * lossRate)
+  );
+
+  // Médico salva alguns
+  const medSave = clamp(0.18 + (ownStats.medicalPower || 0) * 0.003, 0.18, 0.75);
+  let preserved = 0;
+
+  // Ordena por tipo (linha de frente cai primeiro)
+  const PRIORITY = { muralha: 1, motorista: 2, frente: 3, nitro: 4, capanga: 5, certeiro: 6, executor: 7, assassino: 8 };
+  const sorted   = [...active].sort(
+    (a, b) => (PRIORITY[a.type] || 5) - (PRIORITY[b.type] || 5)
+  );
+
+  for (let i = 0; i < totalCasualties; i++) {
+    const m = sorted[i % sorted.length];
+    if (!m) continue;
+    const t = MEMBER_TYPES.includes(String(m.type)) ? String(m.type) : 'capanga';
+
+    if (Math.random() < medSave) {
+      feridos[t]++;
+      preserved++;
+    } else {
+      // Chance de morte vs ferimento
+      const deathChance = clamp(0.52 - ownStats.blindagem * 0.0007 - ownStats.folego * 0.0009, 0.12, 0.72);
+      if (Math.random() < deathChance) mortos[t]++;
+      else feridos[t]++;
+    }
+  }
+
+  return { mortos, feridos, preservadosPeloMedico: preserved };
+}
+
+// ─── BATALHA (round-by-round, Mafia City style) ───────────────────────────────
+
+function getAtributos(type, level) {
+  const safeType  = MEMBER_TYPES.includes(String(type)) ? String(type) : 'capanga';
+  const safeLevel = clamp(toPositiveInt(level, 1), 1, 10);
   return ATRIBUTOS_GANG[safeType][safeLevel];
 }
 
 function buildBattleUnits(side, members) {
-  return members.map((member, index) => {
-    const atributos = getAtributos(member.type, member.level);
-    const folegoBase = Math.max(1, toPositiveInt(atributos.folego, 1));
-
+  return members.map((m, i) => {
+    const a = getAtributos(m.type, m.level);
     return {
-      battleId: `${side}_${member.id}_${index}`,
-      persistedId: String(member.id),
+      battleId:    `${side}_${m.id}_${i}`,
+      persistedId: String(m.id),
+      type:        String(m.type),
       side,
-      type: String(member.type),
-      level: Math.max(1, Math.min(10, toPositiveInt(member.level, 1))),
-      rajada: Math.max(1, toPositiveInt(atributos.rajada, 1)),
-      blindagem: Math.max(0, toPositiveInt(atributos.blindagem, 0)),
-      quebra: Math.max(0, toPositiveInt(atributos.quebra, 0)),
-      folegoBase,
-      folegoAtual: folegoBase,
-      recruitedAt: String(member.recruitedAt || ''),
+      level:       clamp(toPositiveInt(m.level, 1), 1, 10),
+      rajada:      Math.max(1, a.rajada),
+      blindagem:   Math.max(0, a.blindagem),
+      quebra:      Math.max(0, a.quebra),
+      folegoBase:  Math.max(1, a.folego),
+      folegoAtual: Math.max(1, a.folego),
       damageDealt: 0,
-      damageTaken: 0,
     };
   });
 }
 
-function isAlive(unit) {
-  return unit.folegoAtual > 0;
-}
+function isAlive(u) { return u.folegoAtual > 0; }
 
-function compareTurnOrder(a, b) {
-  const speedA = a.rajada + a.folegoAtual;
-  const speedB = b.rajada + b.folegoAtual;
-  if (speedB !== speedA) return speedB - speedA;
-  if (b.quebra !== a.quebra) return b.quebra - a.quebra;
-  if (b.blindagem !== a.blindagem) return b.blindagem - a.blindagem;
-  return String(a.battleId).localeCompare(String(b.battleId));
-}
-
-function pickTarget(enemyUnits) {
-  return enemyUnits.find(isAlive) || null;
-}
-
-function classifyStatus(unit) {
-  if (unit.folegoAtual <= 0) return 'morto';
-  if (unit.folegoAtual < unit.folegoBase) return 'ferido';
+function classifyStatus(u) {
+  if (u.folegoAtual <= 0)          return 'morto';
+  if (u.folegoAtual < u.folegoBase) return 'ferido';
   return 'ativo';
 }
 
-function summarizeCompositionFromMembers(members) {
-  const composition = createEmptyComposition();
-  for (const member of members) {
-    if (MEMBER_TYPES.includes(String(member.type))) {
-      composition[member.type] += 1;
-    }
+function countByStatus(units, status) {
+  return units.filter((u) => classifyStatus(u) === status).length;
+}
+
+function summarizeComposition(members) {
+  const out = emptyByType();
+  for (const m of members) {
+    if (MEMBER_TYPES.includes(String(m.type))) out[m.type]++;
   }
-  return composition;
+  return out;
 }
 
-function summarizeFinalCompositionFromUnits(units) {
-  const composition = createEmptyComposition();
-  for (const unit of units) {
-    if (isAlive(unit) && MEMBER_TYPES.includes(String(unit.type))) {
-      composition[unit.type] += 1;
-    }
+function summarizeFinalComposition(units) {
+  const out = emptyByType();
+  for (const u of units) {
+    if (isAlive(u) && MEMBER_TYPES.includes(String(u.type))) out[u.type]++;
   }
-  return composition;
+  return out;
 }
 
-function countStatus(units, status) {
-  return units.filter((unit) => classifyStatus(unit) === status).length;
-}
-
-function sumDamageDealt(units) {
-  return units.reduce((sum, unit) => sum + unit.damageDealt, 0);
-}
-
-function sumDamageTaken(units) {
-  return units.reduce((sum, unit) => sum + unit.damageTaken, 0);
-}
-
-function computeLoot({
-  winner,
-  attacker,
-  defender,
-  attackerDamageDone,
-  defenderDamageDone,
-  attackerInitialFolegoTotal,
-  defenderInitialFolegoTotal,
-}) {
-  if (winner === 'empate') {
-    return {
-      lootDirtyMoney: 0,
-      barracoLevelPerdedor: 0,
-      nextDirtyMoneyAtacante: Math.max(0, toPositiveInt(attacker?.balances?.dirtyMoney, 0)),
-      nextDirtyMoneyDefensor: Math.max(0, toPositiveInt(defender?.balances?.dirtyMoney, 0)),
-    };
-  }
-
-  const loser = winner === 'atacante' ? defender : attacker;
-  const winnerPlayer = winner === 'atacante' ? attacker : defender;
-  const damageCausedToLoser = winner === 'atacante' ? attackerDamageDone : defenderDamageDone;
-  const loserInitialFolegoTotal = winner === 'atacante' ? defenderInitialFolegoTotal : attackerInitialFolegoTotal;
-
-  const espolioMaximo = 100 * Math.max(1, toPositiveInt(loser?.niveis?.barracoLevel, 1));
-  const taxaDeDano = loserInitialFolegoTotal > 0 ? damageCausedToLoser / loserInitialFolegoTotal : 0;
-  const espolioCalculado = Math.floor(espolioMaximo * Math.min(1, taxaDeDano));
-  const lootDirtyMoney = Math.min(
-    Math.max(0, espolioCalculado),
-    Math.max(0, toPositiveInt(loser?.balances?.dirtyMoney, 0))
-  );
-
-  return {
-    lootDirtyMoney,
-    barracoLevelPerdedor: Math.max(1, toPositiveInt(loser?.niveis?.barracoLevel, 1)),
-    nextDirtyMoneyAtacante:
-      winner === 'atacante'
-        ? Math.max(0, toPositiveInt(winnerPlayer?.balances?.dirtyMoney, 0) + lootDirtyMoney)
-        : Math.max(0, toPositiveInt(attacker?.balances?.dirtyMoney, 0) - lootDirtyMoney),
-    nextDirtyMoneyDefensor:
-      winner === 'defensor'
-        ? Math.max(0, toPositiveInt(winnerPlayer?.balances?.dirtyMoney, 0) + lootDirtyMoney)
-        : Math.max(0, toPositiveInt(defender?.balances?.dirtyMoney, 0) - lootDirtyMoney),
-  };
-}
-
-function updateGangMembersAfterBattle(originalMembers, unitsMap) {
-  return originalMembers.map((member) => {
-    const unit = unitsMap.get(String(member.id));
-    if (!unit) {
-      return { ...member };
-    }
-
-    return {
-      ...member,
-      status: classifyStatus(unit),
-    };
+function updateMembersAfterBattle(originalMembers, unitsMap) {
+  return originalMembers.map((m) => {
+    const u = unitsMap.get(String(m.id));
+    return u ? { ...m, status: classifyStatus(u) } : { ...m };
   });
 }
 
-export function resolveAttackResult({
-  attacker,
-  defender,
-  selectedMemberIds = [],
-  selection = {},
-}) {
-  const attackerActiveMembers = getActiveMembers(attacker);
-  const defenderActiveMembers = getActiveMembers(defender);
+// ─── EXPORT PRINCIPAL ─────────────────────────────────────────────────────────
 
-  const attackerCapacity = getBattleCapacity(attacker?.niveis?.barracoLevel || 1);
-  const defenderCapacity = getBattleCapacity(defender?.niveis?.barracoLevel || 1);
+export function resolveAttackResult({ attacker, defender, selectedMemberIds = [], selection = {} }) {
+  const attackerActive = getActiveMembers(attacker);
+  const defenderActive = getActiveMembers(defender);
 
-  const resolvedSelectedMemberIds = resolveSelectedMemberIdsForAttack({
-    attacker,
-    selection,
-    selectedMemberIds,
-  });
+  const capacity = getBattleCapacity(attacker?.niveis?.barracoLevel || 1);
 
-  const attackerMembersInBattle = attackerActiveMembers
-    .filter((member) => resolvedSelectedMemberIds.includes(String(member.id)))
-    .slice(0, attackerCapacity);
+  const resolvedIds = resolveSelectedMemberIdsForAttack({ attacker, selection, selectedMemberIds });
 
-  const defenderMembersInBattle = defenderActiveMembers.slice(0, defenderCapacity);
+  const attackerMarch   = attackerActive.filter((m) => resolvedIds.includes(String(m.id))).slice(0, capacity);
+  const defenderMarch   = defenderActive.slice(0, getBattleCapacity(defender?.niveis?.barracoLevel || 1));
 
-  const attackerUnits = buildBattleUnits('atacante', attackerMembersInBattle);
-  const defenderUnits = buildBattleUnits('defensor', defenderMembersInBattle);
+  // Stats pré-batalha (para winChance e relatório)
+  const attackerGangStats = computeGangStats(attackerMarch);
+  const defenderGangStats = computeGangStats(defenderMarch);
 
-  const attackerInitialFolegoTotal = attackerUnits.reduce((sum, unit) => sum + unit.folegoBase, 0);
-  const defenderInitialFolegoTotal = defenderUnits.reduce((sum, unit) => sum + unit.folegoBase, 0);
+  // WinChance: poder ofensivo do atacante vs poder defensivo do defensor
+  const attackPower  = attackerGangStats.rajada * 1.20 + attackerGangStats.quebra  * 1.10;
+  const defensePower = defenderGangStats.blindagem * 1.20 + defenderGangStats.folego * 1.05;
+  const rawChance    = attackPower / Math.max(1, attackPower + defensePower);
+  const winChance    = clamp(rawChance, 0.15, 0.85);
+
+  // ── Round-by-round ──────────────────────────────────────────────────────
+  const attackerUnits = buildBattleUnits('atacante', attackerMarch);
+  const defenderUnits = buildBattleUnits('defensor', defenderMarch);
+
+  const atkFolegoTotal = attackerUnits.reduce((s, u) => s + u.folegoBase, 0);
+  const defFolegoTotal = defenderUnits.reduce((s, u) => s + u.folegoBase, 0);
 
   let rounds = 0;
-  const maxRounds = 10000;
+  const MAX_ROUNDS = 10000;
 
-  while (
-    attackerUnits.some(isAlive) &&
-    defenderUnits.some(isAlive) &&
-    rounds < maxRounds
-  ) {
-    rounds += 1;
-
-    const turnQueue = [...attackerUnits, ...defenderUnits]
+  while (attackerUnits.some(isAlive) && defenderUnits.some(isAlive) && rounds < MAX_ROUNDS) {
+    rounds++;
+    const queue = [...attackerUnits, ...defenderUnits]
       .filter(isAlive)
-      .sort(compareTurnOrder);
+      .sort((a, b) => (b.rajada + b.folegoAtual) - (a.rajada + a.folegoAtual));
 
-    for (const actingUnit of turnQueue) {
-      if (!isAlive(actingUnit)) continue;
-
-      const enemyUnits = actingUnit.side === 'atacante' ? defenderUnits : attackerUnits;
-      const target = pickTarget(enemyUnits);
+    for (const actor of queue) {
+      if (!isAlive(actor)) continue;
+      const enemies = actor.side === 'atacante' ? defenderUnits : attackerUnits;
+      const target  = enemies.find(isAlive);
       if (!target) break;
 
-      const damage = Math.max(
-        1,
-        (actingUnit.rajada + actingUnit.quebra) - target.blindagem
-      );
-
-      target.folegoAtual = Math.max(0, target.folegoAtual - damage);
-      actingUnit.damageDealt += damage;
-      target.damageTaken += damage;
+      const damage = Math.max(1, actor.rajada + actor.quebra - target.blindagem);
+      target.folegoAtual  = Math.max(0, target.folegoAtual - damage);
+      actor.damageDealt  += damage;
     }
   }
 
-  const attackerAlive = attackerUnits.filter(isAlive).length;
-  const defenderAlive = defenderUnits.filter(isAlive).length;
-  const attackerRemainingFolego = attackerUnits.reduce((sum, unit) => sum + unit.folegoAtual, 0);
-  const defenderRemainingFolego = defenderUnits.reduce((sum, unit) => sum + unit.folegoAtual, 0);
-  const attackerDamageDone = sumDamageDealt(attackerUnits);
-  const defenderDamageDone = sumDamageDealt(defenderUnits);
+  // ── Determina vencedor ──────────────────────────────────────────────────
+  const atkAlive  = attackerUnits.filter(isAlive).length;
+  const defAlive  = defenderUnits.filter(isAlive).length;
+  const atkFolego = attackerUnits.reduce((s, u) => s + u.folegoAtual, 0);
+  const defFolego = defenderUnits.reduce((s, u) => s + u.folegoAtual, 0);
+  const atkDamage = attackerUnits.reduce((s, u) => s + u.damageDealt, 0);
+  const defDamage = defenderUnits.reduce((s, u) => s + u.damageDealt, 0);
 
   let winner = 'empate';
+  if      (atkAlive > 0 && defAlive <= 0)  winner = 'atacante';
+  else if (defAlive > 0 && atkAlive <= 0)  winner = 'defensor';
+  else if (atkAlive > defAlive)            winner = 'atacante';
+  else if (defAlive > atkAlive)            winner = 'defensor';
+  else if (atkFolego > defFolego)          winner = 'atacante';
+  else if (defFolego > atkFolego)          winner = 'defensor';
+  else if (atkDamage > defDamage)          winner = 'atacante';
+  else if (defDamage > atkDamage)          winner = 'defensor';
 
-  if (attackerAlive > 0 && defenderAlive <= 0) {
-    winner = 'atacante';
-  } else if (defenderAlive > 0 && attackerAlive <= 0) {
-    winner = 'defensor';
-  } else if (attackerAlive > defenderAlive) {
-    winner = 'atacante';
-  } else if (defenderAlive > attackerAlive) {
-    winner = 'defensor';
-  } else if (attackerRemainingFolego > defenderRemainingFolego) {
-    winner = 'atacante';
-  } else if (defenderRemainingFolego > attackerRemainingFolego) {
-    winner = 'defensor';
-  } else if (attackerDamageDone > defenderDamageDone) {
-    winner = 'atacante';
-  } else if (defenderDamageDone > attackerDamageDone) {
-    winner = 'defensor';
-  }
+  const success  = winner === 'atacante';
+  const critical = success && (atkAlive / Math.max(1, attackerUnits.length)) > 0.80;
 
-  const loot = computeLoot({
-    winner,
-    attacker,
-    defender,
-    attackerDamageDone,
-    defenderDamageDone,
-    attackerInitialFolegoTotal,
-    defenderInitialFolegoTotal,
+  // ── Loot ────────────────────────────────────────────────────────────────
+  const defenderDirtyMoney = Math.max(0, toNumber(defender?.balances?.dirtyMoney, 0));
+  const exposedDirty  = defenderDirtyMoney * 0.40;
+  const lootPercent   = success ? (critical ? randomBetween(0.20, 0.25) : randomBetween(0.10, 0.15)) : 0;
+  const lootDirtyMoney = success ? Math.floor(Math.min(exposedDirty * lootPercent, exposedDirty)) : 0;
+  const correLoot      = success ? (critical ? Math.floor(randomBetween(3, 5)) : Math.floor(randomBetween(1, 3))) : 0;
+  const prestigeLoot   = success ? (critical ? 25 : 10) : 0;
+
+  // ── Saldos atualizados ──────────────────────────────────────────────────
+  const attackerDirtyMoney = Math.max(0, toNumber(attacker?.balances?.dirtyMoney, 0));
+  const nextDirtyMoneyAtacante = success
+    ? attackerDirtyMoney + lootDirtyMoney
+    : attackerDirtyMoney;
+  const nextDirtyMoneyDefensor = success
+    ? Math.max(0, defenderDirtyMoney - lootDirtyMoney)
+    : defenderDirtyMoney;
+
+  // ── Baixas ───────────────────────────────────────────────────────────────
+  const attackerGangLosses = resolveGangCasualties({
+    members:   attackerMarch,
+    ownStats:  attackerGangStats,
+    enemyStats: defenderGangStats,
+    side: 'attacker',
+  });
+  const defenderGangLosses = resolveGangCasualties({
+    members:   defenderMarch,
+    ownStats:  defenderGangStats,
+    enemyStats: attackerGangStats,
+    side: 'defender',
   });
 
-  const attackerUnitsMap = new Map(attackerUnits.map((unit) => [unit.persistedId, unit]));
-  const defenderUnitsMap = new Map(defenderUnits.map((unit) => [unit.persistedId, unit]));
+  // ── IDs de mortos e feridos (para o controller atualizar status) ─────────
+  const attackerUnitsMap = new Map(attackerUnits.map((u) => [u.persistedId, u]));
+  const defenderUnitsMap = new Map(defenderUnits.map((u) => [u.persistedId, u]));
 
-  const nextAttackerMembers = updateGangMembersAfterBattle(
+  const attackerDeadMemberIds    = attackerUnits.filter((u) => !isAlive(u)).map((u) => u.persistedId);
+  const defenderDeadMemberIds    = defenderUnits.filter((u) => !isAlive(u)).map((u) => u.persistedId);
+  const attackerInjuredMemberIds = attackerUnits.filter((u) => isAlive(u) && u.folegoAtual < u.folegoBase).map((u) => u.persistedId);
+  const defenderInjuredMemberIds = defenderUnits.filter((u) => isAlive(u) && u.folegoAtual < u.folegoBase).map((u) => u.persistedId);
+
+  // ── Atualiza membros no gang object ──────────────────────────────────────
+  const nextAttackerMembers = updateMembersAfterBattle(
     Array.isArray(attacker?.gang?.members) ? clone(attacker.gang.members) : [],
     attackerUnitsMap
   );
-  const nextDefenderMembers = updateGangMembersAfterBattle(
+  const nextDefenderMembers = updateMembersAfterBattle(
     Array.isArray(defender?.gang?.members) ? clone(defender.gang.members) : [],
     defenderUnitsMap
   );
 
-  return {
-    winner,
-    rounds,
-    lootDirtyMoney: loot.lootDirtyMoney,
-    barracoLevelPerdedor: loot.barracoLevelPerdedor,
-    nextDirtyMoneyAtacante: loot.nextDirtyMoneyAtacante,
-    nextDirtyMoneyDefensor: loot.nextDirtyMoneyDefensor,
-    attacker: {
-      playerId: String(attacker?._id || attacker?.id || ''),
-      name: String(attacker?.name || 'Atacante'),
-      factionTag: attacker?.factionId || null,
-      coordinates: {
-        x: toNumber(attacker?.mapPosition?.tileX, 0),
-        y: toNumber(attacker?.mapPosition?.tileY, 0),
-      },
-      barracoLevel: Math.max(1, toPositiveInt(attacker?.niveis?.barracoLevel, 1)),
-      tropasEliminadas: countStatus(defenderUnits, 'morto'),
-      perdas: countStatus(attackerUnits, 'morto'),
-      machucados: countStatus(attackerUnits, 'ferido'),
-      vivos: countStatus(attackerUnits, 'ativo'),
-      danoTotalCausado: attackerDamageDone,
-      danoTotalRecebido: sumDamageTaken(attackerUnits),
-      composicaoInicial: summarizeCompositionFromMembers(attackerMembersInBattle),
-      composicaoFinal: summarizeFinalCompositionFromUnits(attackerUnits),
-    },
-    defender: {
-      playerId: String(defender?._id || defender?.id || ''),
-      name: String(defender?.name || 'Defensor'),
-      factionTag: defender?.factionId || null,
-      coordinates: {
-        x: toNumber(defender?.mapPosition?.tileX, 0),
-        y: toNumber(defender?.mapPosition?.tileY, 0),
-      },
-      barracoLevel: Math.max(1, toPositiveInt(defender?.niveis?.barracoLevel, 1)),
-      tropasEliminadas: countStatus(attackerUnits, 'morto'),
-      perdas: countStatus(defenderUnits, 'morto'),
-      machucados: countStatus(defenderUnits, 'ferido'),
-      vivos: countStatus(defenderUnits, 'ativo'),
-      danoTotalCausado: defenderDamageDone,
-      danoTotalRecebido: sumDamageTaken(defenderUnits),
-      composicaoInicial: summarizeCompositionFromMembers(defenderMembersInBattle),
-      composicaoFinal: summarizeFinalCompositionFromUnits(defenderUnits),
-    },
-    nextAttackerGang: {
-      members: nextAttackerMembers,
-      stats: recalculateGangStats(nextAttackerMembers),
-      updatedAtIso: new Date().toISOString(),
-    },
-    nextDefenderGang: {
-  members: nextDefenderMembers,
-  stats: recalculateGangStats(nextDefenderMembers),
-  updatedAtIso: new Date().toISOString(),
-},
-selectedMemberIds: resolvedSelectedMemberIds,
-  };
-}
+  function recalcStats(members) {
+    return {
+      totalMembers:   members.length,
+      activeMembers:  members.filter((m) => m.status === 'ativo').length,
+      injuredMembers: members.filter((m) => m.status === 'ferido').length,
+      deadMembers:    members.filter((m) => m.status === 'morto').length,
+      trainingMembers: members.filter((m) => m.status === 'treinando').length,
+    };
+  }
+
+  const message = success
+    ? (critical ? 'ATAQUE CRÍTICO. O alvo foi esm

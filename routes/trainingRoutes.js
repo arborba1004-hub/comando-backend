@@ -1,32 +1,40 @@
 import express from 'express';
-import authMiddleware  from '../middlewares/authMiddleware.js';
+import authMiddleware from '../middlewares/authMiddleware.js';
 import {
-  persistTrainingState,
+  startTraining,
   collectTraining,
   getGangStatus,
+  persistTrainingState,
 } from '../controllers/trainingController.js';
 
 const router = express.Router();
 
-// Proteger todas as rotas com autenticação
 router.use(authMiddleware);
 
 /**
- * POST /api/training/persist
- * Salvar estado de treinamento e membros do gang
+ * GET /api/training/status
+ * Retorna gangue, slots de treinamento e saldos atualizados.
  */
-router.post('/persist', persistTrainingState);
+router.get('/status', getGangStatus);
+
+/**
+ * POST /api/training/start
+ * Inicia treinamento authoritative em um CT.
+ * Body: { ctKey, troopType }
+ */
+router.post('/start', startTraining);
 
 /**
  * POST /api/training/collect
- * Coletar membros treinados e adicioná-los ao saldo
+ * Coleta um treinamento concluído.
+ * Body: { slotId }
  */
 router.post('/collect', collectTraining);
 
 /**
- * GET /api/training/status
- * Obter status atual do gang do jogador
+ * POST /api/training/persist
+ * Compatibilidade com rota antiga: não aceita estado do frontend como verdade.
  */
-router.get('/status', getGangStatus);
+router.post('/persist', persistTrainingState);
 
 export default router;

@@ -109,6 +109,7 @@ const trainingSlotSchema = new mongoose.Schema(
       enum: ['capanga', 'frente', 'executor', 'assassino', 'muralha', 'certeiro', 'motorista', 'nitro'],
       required: true,
     },
+    troopLevel: { type: Number, default: 1, min: 1, max: 10 },  // ← NOVO
     quantity: { type: Number, required: true, min: 1 },
     startedAt: { type: Number, required: true },
     endsAt: { type: Number, required: true },

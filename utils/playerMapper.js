@@ -18,6 +18,8 @@ const GANG_MEMBER_TYPES = [
   'nitro',
 ];
 
+const TRAINING_CT_KEYS = ['ct_nw', 'ct_ne', 'ct_sw', 'ct_se'];
+
 function ensureObject(value, fallback = {}) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
 }
@@ -65,6 +67,36 @@ export function recalculateGangStats(gangMembers = []) {
   };
 }
 
+
+function sanitizeTrainingSlot(slot, index = 0) {
+  const safeCtKey = TRAINING_CT_KEYS.includes(String(slot?.ctKey))
+    ? String(slot.ctKey)
+    : 'ct_nw';
+
+  const safeTroopType = GANG_MEMBER_TYPES.includes(String(slot?.troopType))
+    ? String(slot.troopType)
+    : 'capanga';
+
+  const startedAt = toNumber(slot?.startedAt, Date.now());
+  const endsAt = toNumber(slot?.endsAt, startedAt);
+  const safeStatus = ['training', 'completed'].includes(String(slot?.status))
+    ? String(slot.status)
+    : Date.now() >= endsAt
+      ? 'completed'
+      : 'training';
+
+  return {
+    id: String(slot?.id || `training_slot_${index}_${Date.now()}`),
+    ctKey: safeCtKey,
+    troopType: safeTroopType,
+    quantity: Math.max(1, toPositiveInt(slot?.quantity, 1)),
+    startedAt,
+    endsAt,
+    status: safeStatus,
+    cost: Math.max(0, toNumber(slot?.cost, 0)),
+  };
+}
+
 function sanitizeGangMember(member, index = 0) {
   const safeType = GANG_MEMBER_TYPES.includes(String(member?.type))
     ? String(member.type)
@@ -92,8 +124,13 @@ function sanitizeGangState(input) {
     ? raw.members.map((item, index) => sanitizeGangMember(item, index))
     : defaults.members;
 
+  const trainingSlots = Array.isArray(raw.trainingSlots)
+    ? raw.trainingSlots.map((item, index) => sanitizeTrainingSlot(item, index))
+    : defaults.trainingSlots;
+
   return {
     members,
+    trainingSlots,
     stats: recalculateGangStats(members),
     updatedAtIso: raw.updatedAtIso ? String(raw.updatedAtIso) : null,
   };

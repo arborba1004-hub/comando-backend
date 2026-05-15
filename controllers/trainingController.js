@@ -1,160 +1,264 @@
-import Player from '../models/Player.js';
 import { randomUUID } from 'crypto';
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { emitToPlayer } from '../services/socketEmitter.js';
+import { recalculateGangStats } from '../utils/playerMapper.js';
 
-// ===== SALVAR ESTADO DE TREINAMENTO =====
-export async function persistTrainingState(req, res) {
+const VALID_CT_KEYS = ['ct_nw', 'ct_ne', 'ct_sw', 'ct_se'];
+const VALID_MEMBER_TYPES = [
+  'capanga',
+  'frente',
+  'executor',
+  'assassino',
+  'muralha',
+  'certeiro',
+  'motorista',
+  'nitro',
+];
+
+function ensureGang(player) {
+  if (!player.gang) {
+    player.gang = {
+      members: [],
+      trainingSlots: [],
+      stats: recalculateGangStats([]),
+      updatedAtIso: null,
+    };
+  }
+
+  if (!Array.isArray(player.gang.members)) {
+    player.gang.members = [];
+  }
+
+  if (!Array.isArray(player.gang.trainingSlots)) {
+    player.gang.trainingSlots = [];
+  }
+
+  return player.gang;
+}
+
+function getBarracoLevel(player) {
+  return Math.max(1, Math.floor(Number(player.niveis?.barracoLevel || 1)));
+}
+
+function calculateTrainingConfig(player) {
+  const barracoLevel = getBarracoLevel(player);
+
+  return {
+    barracoLevel,
+    quantity: barracoLevel * 10,
+    durationMs: barracoLevel * 2 * 60 * 1000,
+    cost: Math.floor(1000 * barracoLevel * 1.1),
+  };
+}
+
+function updateCompletedTrainingSlots(player) {
+  const gang = ensureGang(player);
+  const now = Date.now();
+  let changed = false;
+
+  gang.trainingSlots = gang.trainingSlots.map((slot) => {
+    if (slot.status === 'training' && now >= Number(slot.endsAt)) {
+      changed = true;
+      const plainSlot = typeof slot.toObject === 'function' ? slot.toObject() : slot;
+      return {
+        ...plainSlot,
+        status: 'completed',
+      };
+    }
+
+    return slot;
+  });
+
+  if (changed) {
+    gang.updatedAtIso = new Date().toISOString();
+    player.markModified('gang.trainingSlots');
+    player.markModified('gang.updatedAtIso');
+  }
+
+  return changed;
+}
+
+function buildTrainingPayload(player) {
+  const gang = ensureGang(player);
+  const plainGang = player.gang?.toObject ? player.gang.toObject() : player.gang;
+
+  return {
+    ok: true,
+    success: true,
+    gang: plainGang,
+    trainingSlots: gang.trainingSlots,
+    balances: player.balances,
+    playerBalances: player.balances,
+  };
+}
+
+async function saveAndBroadcastTrainingState(player, event = 'training:updated') {
+  ensureGang(player);
+  player.gang.stats = recalculateGangStats(player.gang.members);
+  player.gang.updatedAtIso = new Date().toISOString();
+  bumpVersion(player);
+
+  player.markModified('gang');
+  player.markModified('balances');
+
+  await player.save();
+
+  const payload = buildTrainingPayload(player);
+  emitToPlayer(String(player._id), event, payload);
+  emitToPlayer(String(player._id), 'gangUpdate', { gang: payload.gang });
+
+  return payload;
+}
+
+export async function startTraining(req, res) {
   try {
-    const player = req.player; // do middleware de auth
-    const { trainingState, gangMembers } = req.body;
+    const player = req.player;
+    const gang = ensureGang(player);
+    const { ctKey, troopType } = req.body || {};
 
-    if (!trainingState || !Array.isArray(gangMembers)) {
-      return res.status(400).json({
-        error: 'trainingState e gangMembers são obrigatórios'
-      });
+    if (!VALID_CT_KEYS.includes(String(ctKey))) {
+      return res.status(400).json({ error: 'CT inválido' });
     }
 
-    // Validar que os IDs dos membros foram realmente treinados
-    // (proteção contra cheating)
-    const maxMembers = Math.max(1, Math.floor(player.niveis?.barracoLevel || 1));
-    if (gangMembers.length > maxMembers * 100) {
-      return res.status(400).json({
-        error: 'Número de membros excede capacidade do barraco'
-      });
+    if (!VALID_MEMBER_TYPES.includes(String(troopType))) {
+      return res.status(400).json({ error: 'Tipo de membro inválido' });
     }
 
-    // Validar que os membros têm IDs válidos e tipos corretos
-    const validTypes = ['capanga', 'frente', 'executor', 'assassino', 'muralha', 'certeiro', 'motorista', 'nitro'];
-    for (const member of gangMembers) {
-      if (!member.id || !validTypes.includes(member.type)) {
-        return res.status(400).json({
-          error: 'Membro com ID ou tipo inválido'
-        });
-      }
+    const completedChanged = updateCompletedTrainingSlots(player);
+
+    const ctAlreadyOccupied = gang.trainingSlots.some((slot) => {
+      return String(slot.ctKey) === String(ctKey);
+    });
+
+    if (ctAlreadyOccupied) {
+      if (completedChanged) await saveAndBroadcastTrainingState(player);
+      return res.status(409).json({ error: 'Este CT já possui um treinamento pendente' });
     }
 
-    // Mesclar com membros existentes (apenas ativos)
-    const existingMembers = Array.isArray(player.gang?.members) 
-      ? player.gang.members.filter(m => m.status === 'ativo')
-      : [];
+    if (gang.trainingSlots.length >= 4) {
+      if (completedChanged) await saveAndBroadcastTrainingState(player);
+      return res.status(409).json({ error: 'Todos os CTs já estão ocupados' });
+    }
 
-    // Evitar duplicação: membros novos que não existem ainda
-    const newMemberIds = new Set(gangMembers.map(m => m.id));
-    const membersToKeep = existingMembers.filter(m => !newMemberIds.has(m.id));
+    const { quantity, durationMs, cost } = calculateTrainingConfig(player);
+    const dirtyMoney = Number(player.balances?.dirtyMoney || 0);
 
-    // Construir estado final
-    const allMembers = [...membersToKeep, ...gangMembers];
+    if (dirtyMoney < cost) {
+      if (completedChanged) await saveAndBroadcastTrainingState(player);
+      return res.status(400).json({ error: 'Dinheiro sujo insuficiente para iniciar o treinamento' });
+    }
 
-    // Atualizar player
-    player.gang.members = allMembers;
-    player.gang.updatedAtIso = new Date().toISOString();
-    bumpVersion(player);
+    const startedAt = Date.now();
+    const slot = {
+      id: randomUUID(),
+      ctKey: String(ctKey),
+      troopType: String(troopType),
+      quantity,
+      startedAt,
+      endsAt: startedAt + durationMs,
+      status: 'training',
+      cost,
+    };
 
-    await player.save();
-    emitToPlayer(String(player._id), 'gangUpdate', { gang: player.gang });
+    player.balances.dirtyMoney = Math.max(0, dirtyMoney - cost);
+    gang.trainingSlots.push(slot);
 
-    return res.json({
-      success: true,
-      message: 'Treinamento persistido',
-      totalMembers: allMembers.length,
-      activeMembers: allMembers.filter(m => m.status === 'ativo').length,
+    const payload = await saveAndBroadcastTrainingState(player);
+
+    return res.status(201).json({
+      ...payload,
+      message: 'Treinamento iniciado',
     });
   } catch (error) {
-    console.error('Erro em persistTrainingState:', error);
-    return res.status(500).json({
-      error: 'Erro ao persistir treinamento'
-    });
+    console.error('Erro em startTraining:', error);
+    return res.status(500).json({ error: 'Erro ao iniciar treinamento' });
   }
 }
 
-// ===== COLETAR MEMBROS TREINADOS =====
 export async function collectTraining(req, res) {
   try {
     const player = req.player;
-    const { slotKey, trainingState, memberType, quantity } = req.body;
+    const gang = ensureGang(player);
+    const { slotId } = req.body || {};
 
-    if (!slotKey || !memberType || !Number.isFinite(quantity) || quantity <= 0) {
-      return res.status(400).json({
-        error: 'slotKey, memberType e quantity (> 0) são obrigatórios'
-      });
+    if (!slotId) {
+      return res.status(400).json({ error: 'slotId é obrigatório' });
     }
 
-    const validTypes = ['capanga', 'frente', 'executor', 'assassino', 'muralha', 'certeiro', 'motorista', 'nitro'];
-    if (!validTypes.includes(memberType)) {
-      return res.status(400).json({
-        error: 'Tipo de membro inválido'
-      });
+    updateCompletedTrainingSlots(player);
+
+    const slotIndex = gang.trainingSlots.findIndex((slot) => String(slot.id) === String(slotId));
+
+    if (slotIndex < 0) {
+      return res.status(404).json({ error: 'Treinamento não encontrado' });
     }
 
-    // Criar novos membros treinados
-    const newMembers = [];
-    for (let i = 0; i < quantity; i++) {
-      newMembers.push({
-        id: `member_${player._id}_${Date.now()}_${i}_${Math.random().toString(36).slice(2)}`,
-        type: memberType,
-        level: 1,
-        status: 'ativo',
-        recruitedAt: new Date().toISOString(),
-        trainingEndsAt: null,
-        injuryEndsAt: null,
-      });
+    const slot = gang.trainingSlots[slotIndex];
+
+    if (Date.now() < Number(slot.endsAt)) {
+      return res.status(400).json({ error: 'Treinamento ainda não terminou' });
     }
 
-    // Adicionar ao gang do player
-    if (!player.gang?.members) {
-      player.gang.members = [];
+    const troopType = String(slot.troopType);
+    if (!VALID_MEMBER_TYPES.includes(troopType)) {
+      return res.status(400).json({ error: 'Tipo de membro inválido no treinamento' });
     }
-    player.gang.members.push(...newMembers);
-    player.gang.updatedAtIso = new Date().toISOString();
 
-    bumpVersion(player);
-    await player.save();
-    emitToPlayer(String(player._id), 'gangUpdate', { gang: player.gang });
+    const collectedAt = new Date().toISOString();
+    const quantity = Math.max(1, Math.floor(Number(slot.quantity || 1)));
+
+    const newMembers = Array.from({ length: quantity }, (_, index) => ({
+      id: `member_${player._id}_${Date.now()}_${index}_${randomUUID()}`,
+      type: troopType,
+      level: 1,
+      status: 'ativo',
+      recruitedAt: collectedAt,
+      trainingEndsAt: null,
+      injuryEndsAt: null,
+    }));
+
+    gang.members.push(...newMembers);
+    gang.trainingSlots.splice(slotIndex, 1);
+
+    const payload = await saveAndBroadcastTrainingState(player);
 
     return res.json({
-      success: true,
+      ...payload,
       message: `${quantity} membros coletados`,
       createdMembers: newMembers,
-      totalMembers: player.gang.members.length,
     });
   } catch (error) {
     console.error('Erro em collectTraining:', error);
-    return res.status(500).json({
-      error: 'Erro ao coletar treinamento'
-    });
+    return res.status(500).json({ error: 'Erro ao coletar treinamento' });
   }
 }
 
-// ===== OBTER ESTADO ATUAL DO GANG =====
 export async function getGangStatus(req, res) {
   try {
     const player = req.player;
+    const changed = updateCompletedTrainingSlots(player);
 
-    const members = Array.isArray(player.gang?.members) ? player.gang.members : [];
-    
-    const stats = {
-      totalMembers: members.length,
-      activeMembers: members.filter(m => m.status === 'ativo').length,
-      injuredMembers: members.filter(m => m.status === 'ferido').length,
-      deadMembers: members.filter(m => m.status === 'morto').length,
-      trainingMembers: members.filter(m => m.status === 'treinando').length,
-      totalPower: members.reduce((sum, m) => sum + (m.level || 1) * 10, 0),
-      averageLevel: members.length > 0 
-        ? (members.reduce((sum, m) => sum + (m.level || 1), 0) / members.length).toFixed(2)
-        : 0,
-    };
+    if (changed) {
+      const payload = await saveAndBroadcastTrainingState(player);
+      return res.json(payload);
+    }
 
-    return res.json({
-      success: true,
-      members,
-      stats,
-      barracoLevel: player.niveis?.barracoLevel || 1,
-    });
+    return res.json(buildTrainingPayload(player));
   } catch (error) {
     console.error('Erro em getGangStatus:', error);
-    return res.status(500).json({
-      error: 'Erro ao obter status do gang'
-    });
+    return res.status(500).json({ error: 'Erro ao obter status do treinamento' });
+  }
+}
+
+/**
+ * Compatibilidade temporária com rota antiga.
+ * Não persiste membros enviados pelo frontend, porque o backend é authoritative.
+ */
+export async function persistTrainingState(req, res) {
+  try {
+    return getGangStatus(req, res);
+  } catch (error) {
+    console.error('Erro em persistTrainingState:', error);
+    return res.status(500).json({ error: 'Erro ao obter status do treinamento' });
   }
 }

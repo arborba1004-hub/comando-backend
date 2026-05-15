@@ -95,6 +95,33 @@ const gangMemberSchema = new mongoose.Schema(
   { _id: false }
 );
 
+
+const trainingSlotSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    ctKey: {
+      type: String,
+      enum: ['ct_nw', 'ct_ne', 'ct_sw', 'ct_se'],
+      required: true,
+    },
+    troopType: {
+      type: String,
+      enum: ['capanga', 'frente', 'executor', 'assassino', 'muralha', 'certeiro', 'motorista', 'nitro'],
+      required: true,
+    },
+    quantity: { type: Number, required: true, min: 1 },
+    startedAt: { type: Number, required: true },
+    endsAt: { type: Number, required: true },
+    status: {
+      type: String,
+      enum: ['training', 'completed'],
+      default: 'training',
+    },
+    cost: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
 const gangStatsSchema = new mongoose.Schema(
   {
     totalMembers: { type: Number, default: createEmptyGangStats().totalMembers, min: 0 },
@@ -111,6 +138,7 @@ const gangStatsSchema = new mongoose.Schema(
 const gangStateSchema = new mongoose.Schema(
   {
     members: { type: [gangMemberSchema], default: createEmptyGangState().members },
+    trainingSlots: { type: [trainingSlotSchema], default: createEmptyGangState().trainingSlots },
     stats: { type: gangStatsSchema, default: createEmptyGangState().stats },
     updatedAtIso: { type: String, default: null },
   },

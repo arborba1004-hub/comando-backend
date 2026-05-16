@@ -49,6 +49,9 @@ export async function googleAuth(req, res) {
         name: payload.name || 'Jogador',
         avatar: payload.picture || '',
         mapPosition: freeMapPosition,
+        // Escudo de novato: 7 dias de proteção para o player começar tranquilo
+        shieldExpiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        shieldSource:    'novato',
       });
     } else {
       player.name = payload.name || player.name;

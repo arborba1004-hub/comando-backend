@@ -112,6 +112,111 @@ async function sendAttackMail({ senderName, recipientId, recipientName, subject,
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// VALIDAÇÕES MAFIA-CITY
+// ═════════════════════════════════════════════════════════════════════════════
+
+const COOLDOWN_DEFAULT_MS            = 24 * 60 * 60 * 1000;       // 24h
+const SHIELD_NOVATO_MS               = 7  * 24 * 60 * 60 * 1000;  // 7 dias
+const SHIELD_DERROTA_MS              = 8  * 60 * 60 * 1000;       // 8h
+const SHIELD_DERROTA_TRIGGER_PERCENT = 0.30;                       // 30% baixas → escudo
+
+function hasActiveShield(player) {
+  const expires = Number(player?.shieldExpiresAt || 0);
+  return expires > Date.now();
+}
+
+function getCooldownTimestamp(defender, attackerId) {
+  const map = defender?.lastAttacksAgainst;
+  if (!map) return 0;
+  // Mongoose Map ou objeto plain — suportar os dois
+  if (typeof map.get === 'function') {
+    return Number(map.get(String(attackerId)) || 0);
+  }
+  return Number(map[String(attackerId)] || 0);
+}
+
+function setCooldownTimestamp(defender, attackerId, timestamp) {
+  if (typeof defender.lastAttacksAgainst?.set === 'function') {
+    defender.lastAttacksAgainst.set(String(attackerId), timestamp);
+  } else {
+    defender.lastAttacksAgainst = defender.lastAttacksAgainst || {};
+    defender.lastAttacksAgainst[String(attackerId)] = timestamp;
+    defender.markModified('lastAttacksAgainst');
+  }
+}
+
+function getEffectiveCooldownMs(defender) {
+  const multiplier = toNumber(defender?.combatModifiers?.cooldownMultiplier, 1);
+  return COOLDOWN_DEFAULT_MS * Math.max(0.1, Math.min(1, multiplier));
+}
+
+function isInCooldown(defender, attackerId) {
+  const lastAt = getCooldownTimestamp(defender, attackerId);
+  if (!lastAt) return false;
+  return (Date.now() - lastAt) < getEffectiveCooldownMs(defender);
+}
+
+function getCooldownExpiresAt(defender, attackerId) {
+  const lastAt = getCooldownTimestamp(defender, attackerId);
+  if (!lastAt) return 0;
+  return lastAt + getEffectiveCooldownMs(defender);
+}
+
+/**
+ * Valida se atacante pode atacar defensor.
+ * Retorna { ok: true } ou { ok: false, status, reason, message, ... }.
+ */
+function validateCanAttack(attacker, defender) {
+  // 1. Self
+  if (String(attacker._id) === String(defender._id)) {
+    return {
+      ok: false,
+      status: 400,
+      reason: 'self_attack',
+      message: 'Você não pode atacar a si mesmo',
+    };
+  }
+
+  // 2. Mesma facção
+  if (attacker.factionId && defender.factionId && String(attacker.factionId) === String(defender.factionId)) {
+    return {
+      ok: false,
+      status: 403,
+      reason: 'same_faction',
+      message: 'Você não pode atacar um membro da sua facção',
+    };
+  }
+
+  // 3. Escudo
+  if (hasActiveShield(defender)) {
+    const expiresAt = Number(defender.shieldExpiresAt);
+    const source = String(defender.shieldSource || 'unknown');
+    return {
+      ok: false,
+      status: 403,
+      reason: 'shield_active',
+      shieldExpiresAt: expiresAt,
+      shieldSource: source,
+      message: `Defensor está protegido (escudo ${source}) até ${new Date(expiresAt).toLocaleString('pt-BR')}`,
+    };
+  }
+
+  // 4. Cooldown
+  if (isInCooldown(defender, attacker._id)) {
+    const expires = getCooldownExpiresAt(defender, attacker._id);
+    return {
+      ok: false,
+      status: 429,
+      reason: 'cooldown',
+      cooldownExpiresAt: expires,
+      message: `Aguarde até ${new Date(expires).toLocaleString('pt-BR')} para reatacar esse alvo`,
+    };
+  }
+
+  return { ok: true };
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // ENDPOINTS
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -186,8 +291,17 @@ export async function startBattle(req, res) {
     const defender = await Player.findById(String(targetId));
     if (!defender)  return res.status(404).json({ error: 'Defensor não encontrado' });
 
-    if (String(attacker._id) === String(defender._id))
-      return res.status(400).json({ error: 'Você não pode atacar a si mesmo' });
+    // ── Validações Mafia-City: self / facção / escudo / cooldown ───────────
+    const validation = validateCanAttack(attacker, defender);
+    if (!validation.ok) {
+      return res.status(validation.status).json({
+        error: validation.message,
+        reason: validation.reason,
+        shieldExpiresAt: validation.shieldExpiresAt,
+        shieldSource: validation.shieldSource,
+        cooldownExpiresAt: validation.cooldownExpiresAt,
+      });
+    }
 
     const safeSelection = sanitizeSelection(selection);
     if (!hasAnySelection(safeSelection) && !selectedMemberIds.length)
@@ -211,7 +325,13 @@ export async function startBattle(req, res) {
       tileY: Number.isFinite(Number(targetTileY)) ? Number(targetTileY) : Number(defender?.mapPosition?.tileY || 0),
     };
 
-    const travel     = buildTravelMetrics({ origin, target, barracoLevel: attacker?.niveis?.barracoLevel || 1 });
+    const velocityBonus = toNumber(attacker?.combatModifiers?.velocityBonus, 0);
+    const travel = buildTravelMetrics({
+      origin,
+      target,
+      barracoLevel: attacker?.niveis?.barracoLevel || 1,
+      velocityBonus,
+    });
     const launchedAt = new Date();
     const arriveAt   = new Date(launchedAt.getTime() + travel.totalDurationMs);
 
@@ -236,6 +356,10 @@ export async function startBattle(req, res) {
         .map(([type, quantity]) => ({ type, quantity })),
       selectedMemberIds: resolvedMemberIds,
     });
+
+    // ── Registrar cooldown: 24h até reatacar o mesmo defensor ──────────────
+    setCooldownTimestamp(defender, attacker._id, Date.now());
+    await defender.save();
 
     console.log(`[ATTACK] Iniciado: ${attack.attackerName} → ${attack.targetName} (${resolvedMemberIds.length} membros)`);
 
@@ -398,6 +522,19 @@ export async function resolveBattle(req, res) {
       defenderBody:         report.defenderBody,
     };
 
+    // ── Escudo pós-derrota ─────────────────────────────────────────────────
+    // Se defensor perdeu >30% dos membros que marcharam, ganha 8h de proteção.
+    const defenderInitialComp = result.defender?.composicaoInicial || {};
+    const defenderInitialCount = Object.values(defenderInitialComp).reduce((s, n) => s + Number(n || 0), 0);
+    const defenderLossesCount  = Number(result.defender?.perdas || 0) + Number(result.defender?.machucados || 0);
+    const lossPercent = defenderInitialCount > 0 ? defenderLossesCount / defenderInitialCount : 0;
+
+    if (result.winner === 'atacante' && lossPercent >= SHIELD_DERROTA_TRIGGER_PERCENT) {
+      defender.shieldExpiresAt = Date.now() + SHIELD_DERROTA_MS;
+      defender.shieldSource    = 'derrota';
+      console.log(`[ATTACK] Shield pós-derrota: ${defender.name} → 8h (${Math.round(lossPercent*100)}% baixas)`);
+    }
+
     // ── Salvar tudo ────────────────────────────────────────────────────────
     await Promise.all([attacker.save(), defender.save(), attack.save()]);
 
@@ -556,6 +693,42 @@ export async function getBattleHistory(req, res) {
   } catch (err) {
     console.error('[HISTORY]', err);
     return res.status(500).json({ error: 'Erro ao buscar histórico' });
+  }
+}
+
+/**
+ * GET /battle/can-attack/:targetId
+ * Verifica se o player pode atacar esse alvo agora.
+ * O frontend usa pra habilitar/desabilitar o botão de ataque no mapa
+ * e mostrar a razão quando bloqueado (escudo / cooldown / facção).
+ */
+export async function canAttack(req, res) {
+  try {
+    const attacker = req.player;
+    const { targetId } = req.params;
+
+    if (!targetId) {
+      return res.status(400).json({ canAttack: false, reason: 'no_target' });
+    }
+
+    const defender = await Player.findById(String(targetId));
+    if (!defender) {
+      return res.status(404).json({ canAttack: false, reason: 'target_not_found' });
+    }
+
+    const validation = validateCanAttack(attacker, defender);
+
+    return res.json({
+      canAttack:          validation.ok,
+      reason:             validation.reason ?? null,
+      message:            validation.message ?? null,
+      shieldExpiresAt:    validation.shieldExpiresAt ?? null,
+      shieldSource:       validation.shieldSource ?? null,
+      cooldownExpiresAt:  validation.cooldownExpiresAt ?? null,
+    });
+  } catch (err) {
+    console.error('[CAN_ATTACK]', err);
+    return res.status(500).json({ canAttack: false, reason: 'server_error' });
   }
 }
 

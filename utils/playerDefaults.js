@@ -139,5 +139,15 @@ export function getDefaultPlayerState() {
     version: 0,
     lastPassiveIncomeAt: Date.now(),
     lastSpinAt: 0,
+
+    // Campos de combate PvP (preenchidos no fluxo real; defaults aqui só pra forma)
+    shieldExpiresAt: 0,
+    shieldSource: null,
+    lastAttacksAgainst: {},
+    combatModifiers: {
+      velocityBonus: 0,
+      capacityBonus: 0,
+      cooldownMultiplier: 1,
+    },
   };
 }

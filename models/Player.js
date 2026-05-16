@@ -363,6 +363,36 @@ const playerSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+
+    // ─── Defesa: escudo de proteção contra ataques ─────────────────────────
+    // shieldExpiresAt: epoch ms. Se > Date.now(), defensor protegido.
+    // shieldSource: 'novato' (7d ao criar conta), 'derrota' (8h pós perda >30%),
+    //               'pacote' (futuro, comprado na loja).
+    shieldExpiresAt: {
+      type: Number,
+      default: 0,
+    },
+    shieldSource: {
+      type: String,
+      enum: ['novato', 'derrota', 'pacote', null],
+      default: null,
+    },
+
+    // ─── Cooldown 24h por alvo ─────────────────────────────────────────────
+    // Mapa { attackerId → epoch ms do último ataque }.
+    // Validado em startBattle. Limpeza lazy: entradas antigas só são ignoradas.
+    lastAttacksAgainst: {
+      type: Map,
+      of: Number,
+      default: () => new Map(),
+    },
+
+    // ─── Modificadores para pacotes/investimentos futuros ──────────────────
+    combatModifiers: {
+      velocityBonus:      { type: Number, default: 0,   min: 0, max: 0.9 },
+      capacityBonus:      { type: Number, default: 0,   min: 0 },
+      cooldownMultiplier: { type: Number, default: 1,   min: 0.1, max: 1.0 },
+    },
   },
   {
     timestamps: true,

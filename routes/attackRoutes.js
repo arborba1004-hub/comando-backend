@@ -7,6 +7,7 @@ import {
   getBattleHistory,
   initiateAttack,
   estimateBattle,
+  canAttack,
 } from '../controllers/attackController.js';
 
 const router = Router();
@@ -17,5 +18,6 @@ router.post('/resolve/:battleId', authMiddleware, resolveBattle);
 router.get('/report/:battleId', authMiddleware, getBattleReport);
 router.get('/history', authMiddleware, getBattleHistory);
 router.post('/initiate', authMiddleware, initiateAttack);
+router.get('/can-attack/:targetId', authMiddleware, canAttack);
 
 export default router;

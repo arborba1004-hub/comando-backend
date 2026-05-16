@@ -135,24 +135,70 @@ function emptyByType() {
 
 // ─── VIAGEM ───────────────────────────────────────────────────────────────────
 
-export function getBattleCapacity(barracoLevel) {
-  return Math.max(100, toPositiveInt(barracoLevel, 1) * 100);
+/**
+ * Capacidade máxima de tropas em um ataque.
+ *
+ * Curva: barraco contribui suavemente (+10 por nível). Modificadores de
+ * pacote/investimento (capacityBonus, 0+) aumentam mais agressivamente.
+ *
+ *   capacidade = (100 + 10 × (barraco - 1)) × (1 + capacityBonus)
+ *
+ * Exemplos:
+ *   barraco 1, sem bônus: 100
+ *   barraco 50, sem bônus: 590
+ *   barraco 50 + bônus 0.5: 885
+ */
+export function getBattleCapacity(barracoLevel, capacityBonus = 0) {
+  const safeLevel = Math.max(1, toPositiveInt(barracoLevel, 1));
+  const safeBonus = Math.max(0, toNumber(capacityBonus, 0));
+
+  const base = 100 + 10 * (safeLevel - 1);
+  return Math.floor(base * (1 + safeBonus));
 }
 
-export function getGangAttackTimePerTileMs(barracoLevel, baseTime = 5000) {
-  return Math.max(1, Math.floor(toNumber(baseTime, 5000)))
-    / Math.max(1, toPositiveInt(barracoLevel, 1));
+/**
+ * Tempo por tile da gangue, em ms.
+ *
+ * Curva: barraco influencia pouco (5% mais rápido por nível). Modificadores
+ * de pacote/investimento (velocityBonus, 0-0.9) aceleram mais.
+ *
+ *   tempoBase = 5000 / (1 + 0.05 × (barraco - 1))
+ *   tempoFinal = tempoBase × (1 - velocityBonus)
+ *
+ * Exemplos:
+ *   barraco 1, sem bônus: 5000ms/tile
+ *   barraco 50, sem bônus: ~1818ms/tile
+ *   barraco 50 + bônus 0.5: ~909ms/tile
+ */
+export function getGangAttackTimePerTileMs(barracoLevel, velocityBonus = 0, baseTime = 5000) {
+  const safeBase = Math.max(1, Math.floor(toNumber(baseTime, 5000)));
+  const safeLevel = Math.max(1, toPositiveInt(barracoLevel, 1));
+  const safeBonus = clamp(toNumber(velocityBonus, 0), 0, 0.9);
+
+  const levelFactor = 1 + 0.05 * (safeLevel - 1);
+  const baseSpeed   = safeBase / levelFactor;
+  const withBonus   = baseSpeed * (1 - safeBonus);
+
+  return Math.max(50, Math.floor(withBonus));
 }
 
+/**
+ * Distância em tiles entre dois pontos do mapa.
+ * Mafia City usa Manhattan: dx + dy (sem diagonal).
+ */
 export function getRouteDistanceTiles(origin, target) {
   const dx = Math.abs(toNumber(target.tileX, 0) - toNumber(origin.tileX, 0));
   const dy = Math.abs(toNumber(target.tileY, 0) - toNumber(origin.tileY, 0));
-  return Math.max(dx, dy);
+  return dx + dy;
 }
 
-export function buildTravelMetrics({ origin, target, barracoLevel }) {
+/**
+ * Calcula viagem completa: rota, tempo por tile, duração total.
+ * Aceita velocityBonus opcional (vindo de player.combatModifiers).
+ */
+export function buildTravelMetrics({ origin, target, barracoLevel, velocityBonus = 0 }) {
   const routeDistanceTiles = getRouteDistanceTiles(origin, target);
-  const timePerTileMs      = getGangAttackTimePerTileMs(barracoLevel, 5000);
+  const timePerTileMs      = getGangAttackTimePerTileMs(barracoLevel, velocityBonus);
   const totalDurationMs    = routeDistanceTiles * timePerTileMs;
   return { routeDistanceTiles, timePerTileMs, totalDurationMs };
 }
@@ -371,12 +417,16 @@ export function resolveAttackResult({ attacker, defender, selectedMemberIds = []
   const attackerActive = getActiveMembers(attacker);
   const defenderActive = getActiveMembers(defender);
 
-  const capacity = getBattleCapacity(attacker?.niveis?.barracoLevel || 1);
+  const attackerCapacityBonus = toNumber(attacker?.combatModifiers?.capacityBonus, 0);
+  const defenderCapacityBonus = toNumber(defender?.combatModifiers?.capacityBonus, 0);
+
+  const capacity         = getBattleCapacity(attacker?.niveis?.barracoLevel || 1, attackerCapacityBonus);
+  const defenderCapacity = getBattleCapacity(defender?.niveis?.barracoLevel || 1, defenderCapacityBonus);
 
   const resolvedIds = resolveSelectedMemberIdsForAttack({ attacker, selection, selectedMemberIds });
 
   const attackerMarch   = attackerActive.filter((m) => resolvedIds.includes(String(m.id))).slice(0, capacity);
-  const defenderMarch   = defenderActive.slice(0, getBattleCapacity(defender?.niveis?.barracoLevel || 1));
+  const defenderMarch   = defenderActive.slice(0, defenderCapacity);
 
   // Stats pré-batalha (para winChance e relatório)
   const attackerGangStats = computeGangStats(attackerMarch);

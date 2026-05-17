@@ -273,7 +273,8 @@ export async function estimateBattle(req, res) {
 
 /**
  * POST /battle/start
- * Inicia batalha, cria registro, emite 'attackReceived' ao defensor via socket.
+ * Inicia batalha, cria registro, emite 'attackIncoming' ao defensor (marcha começou).
+ * Quando a batalha resolve em /battle/resolve, dispara 'attackReceived' (resultado).
  */
 export async function startBattle(req, res) {
   try {
@@ -363,13 +364,17 @@ export async function startBattle(req, res) {
 
     console.log(`[ATTACK] Iniciado: ${attack.attackerName} → ${attack.targetName} (${resolvedMemberIds.length} membros)`);
 
-    // ── Notifica defensor via socket (evento 'attackReceived') ─────────────
-    // Frontend: AttackIncomingToast.tsx escuta este evento.
-    emitToPlayer(String(defender._id), 'attackReceived', {
-      attackerName: String(attacker.name || 'Desconhecido'),
-      loot:         null,   // ainda não calculado — será no resolve
-      critical:     false,
-      message:      `${attacker.name} está marchando para o seu território`,
+    // ── Notifica defensor via socket: ataque chegando ──────────────────────
+    // Evento 'attackIncoming' = aviso de marcha (antes da resolução).
+    // Frontend: AttackIncomingToast escuta este evento.
+    // Distinto de 'attackReceived' que é o aviso final do resultado (resolveBattle).
+    emitToPlayer(String(defender._id), 'attackIncoming', {
+      attackerName:    String(attacker.name || 'Desconhecido'),
+      attackerFaction: attacker.factionId || null,
+      memberCount:     resolvedMemberIds.length,
+      arriveAtIso:     arriveAt.toISOString(),
+      totalDurationMs: travel.totalDurationMs,
+      message:         `${attacker.name} está marchando para o seu território`,
     });
 
     return res.status(201).json({

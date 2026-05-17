@@ -74,6 +74,11 @@ const attackSchema = new mongoose.Schema(
     defenderFactionName: { type: String, default: '' },
     defenderFactionTag: { type: String, default: '' },
 
+    // Skin visual do comboio escolhida pelo atacante no momento do ataque.
+    // Usada pelo frontend de TODOS os clientes para renderizar o squad com
+    // a aparência correta. 'comboio_padrao' é o fallback do catálogo.
+    attackerConvoySkinId: { type: String, default: 'comboio_padrao' },
+
     origin: {
       tileX: { type: Number, default: 0 },
       tileY: { type: Number, default: 0 },

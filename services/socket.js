@@ -101,9 +101,8 @@ export function initSocket(server) {
     let playerId, playerName, barracoLevel, power, factionId, tileX, tileY;
 
     try {
-      const url   = new URL(req.url, 'http://localhost');
-      const token = url.searchParams.get('token');
-      if (!token) { ws.close(1008, 'TOKEN_MISSING'); return; }
+      const token = req.headers['authorization']?.replace('Bearer ', '');
+if (!token) { ws.close(1008, 'TOKEN_MISSING'); return; }
 
       const decoded = jwt.verify(token, env.JWT_SECRET);
       const player  = await Player.findById(decoded.id)

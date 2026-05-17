@@ -5,7 +5,7 @@ import Attack      from '../models/Attack.js';
 import Player      from '../models/Player.js';
 import ChatMessage from '../models/ChatMessage.js';
 import { bumpVersion }      from '../utils/gameHelpers.js';
-import { emitToPlayer }     from '../services/socketEmitter.js';
+import { emitToPlayer, broadcastToAll }     from '../services/socketEmitter.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import {
   buildTravelMetrics,
@@ -58,6 +58,10 @@ function hasAnySelection(selection) {
   return Object.values(selection || {}).some((v) => Number(v || 0) > 0);
 }
 
+function getMemberCountFromAttack(attack) {
+  return Array.isArray(attack?.selectedMemberIds) ? attack.selectedMemberIds.length : 0;
+}
+
 function buildResponse(attack) {
   return {
     battleId:           attack.id,
@@ -81,6 +85,8 @@ function buildResponse(attack) {
     arriveAtIso:        attack.arriveAtIso,
     resolvedAtIso:      attack.resolvedAtIso || null,
     report:             attack.report || null,
+    memberCount:        getMemberCountFromAttack(attack),
+    attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',
   };
 }
 
@@ -268,15 +274,13 @@ function validateCanAttack(attacker, defender) {
   }
 
   if (hasActiveShield(defender)) {
-    const expiresAt = Number(defender.shieldExpiresAt);
-    const source = String(defender.shieldSource || 'unknown');
     return {
       ok: false,
       status: 403,
       reason: 'shield_active',
-      shieldExpiresAt: expiresAt,
-      shieldSource: source,
-      message: `Defensor está protegido (escudo ${source}) até ${new Date(expiresAt).toLocaleString('pt-BR')}`,
+      shieldExpiresAt: defender.shieldExpiresAt,
+      shieldSource: defender.shieldSource || 'unknown',
+      message: 'O alvo está protegido por um escudo ativo',
     };
   }
 
@@ -437,6 +441,61 @@ async function resolveAttackDocument(attack) {
       : `${attacker.name} tentou invadir mas sua defesa resistiu!`,
   });
 
+  // ────────────────────────────────────────────────────────────────────────
+  // BROADCAST GLOBAL: squad inicia retorno para a posição ATUALIZADA
+  // do atacante. Todos os clientes assinantes podem animar a viagem de
+  // volta. O atacante é excluído porque já controla a animação localmente
+  // (useMapAttack.confirmAttack chama mountGangSquadAnimation para o
+  // retorno após receber a resolução).
+  // ────────────────────────────────────────────────────────────────────────
+  try {
+    const updatedAttackerOrigin = getAttackCenterFromMapPosition(attacker.mapPosition || {});
+    const velocityBonus = toNumber(attacker?.combatModifiers?.velocityBonus, 0);
+    const returnTravel  = buildTravelMetrics({
+      origin:       attack.target,        // squad parte do alvo
+      target:       updatedAttackerOrigin, // chega no centro ATUAL do atacante
+      barracoLevel: attacker?.niveis?.barracoLevel || 1,
+      velocityBonus,
+    });
+
+    const returnLaunchIso = new Date().toISOString();
+    const returnArriveIso = new Date(
+      Date.now() + returnTravel.totalDurationMs
+    ).toISOString();
+
+    broadcastToAll('attack:squadResolved', {
+      battleId:             attack.id,
+      attackerId:           String(attack.attackerId),
+      attackerName:         String(attack.attackerName || ''),
+      attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',
+      memberCount:          getMemberCountFromAttack(attack),
+
+      // Onde o squad estava (centro do alvo)
+      returnOrigin: {
+        tileX: toNumber(attack?.target?.tileX, 0),
+        tileY: toNumber(attack?.target?.tileY, 0),
+      },
+      // Para onde o squad volta (centro ATUAL do barraco do atacante)
+      returnTarget: {
+        tileX: updatedAttackerOrigin.tileX,
+        tileY: updatedAttackerOrigin.tileY,
+      },
+
+      returnRouteDistanceTiles: returnTravel.routeDistanceTiles,
+      returnTimePerTileMs:      returnTravel.timePerTileMs,
+      returnTotalDurationMs:    returnTravel.totalDurationMs,
+      returnLaunchedAtIso:      returnLaunchIso,
+      returnArriveAtIso:        returnArriveIso,
+
+      resolution: {
+        success:  result.success,
+        critical: result.critical,
+      },
+    }, String(attack.attackerId)); // ← exclui o atacante do broadcast
+  } catch (broadcastErr) {
+    console.error(`[ATTACK_RESOLVED_BROADCAST] Falha ao broadcastar retorno de ${attack.id}:`, broadcastErr?.message);
+  }
+
   const [atkMail, defMail] = await Promise.allSettled([
     sendAttackMail({
       senderName:    'Sistema',
@@ -566,6 +625,8 @@ export async function estimateBattle(req, res) {
 /**
  * POST /battle/start
  * Cria ataque persistente, bloqueia tropas em marcha e avisa o defensor.
+ * Também broadcasta o início da marcha para TODOS os clientes conectados,
+ * permitindo que defensores e observadores vejam o squad em tempo real.
  */
 export async function startBattle(req, res) {
   let attackId = null;
@@ -579,6 +640,7 @@ export async function startBattle(req, res) {
       targetId,
       selection = {},
       selectedMemberIds = [],
+      convoySkinId,
     } = req.body || {};
 
     if (!targetId) return res.status(400).json({ error: 'targetId é obrigatório' });
@@ -641,7 +703,8 @@ export async function startBattle(req, res) {
     });
     const launchedAt = new Date();
     const arriveAt   = new Date(launchedAt.getTime() + travel.totalDurationMs);
-    const arriveAtIso = arriveAt.toISOString();
+    const launchedAtIso = launchedAt.toISOString();
+    const arriveAtIso   = arriveAt.toISOString();
 
     const resolvedMemberIdSet = new Set(resolvedMemberIds.map(String));
     for (const member of attacker.gang?.members || []) {
@@ -657,6 +720,10 @@ export async function startBattle(req, res) {
     await attacker.save();
     emitPlayerAndGangUpdate(attacker);
 
+    const safeConvoySkinId = (typeof convoySkinId === 'string' && convoySkinId.trim())
+      ? convoySkinId.trim()
+      : 'comboio_padrao';
+
     let attack;
     try {
       attack = await Attack.create({
@@ -668,12 +735,13 @@ export async function startBattle(req, res) {
         targetName:        String(defender.name || 'Defensor'),
         attackerFactionId: attacker.factionId  || null,
         defenderFactionId: defender.factionId  || null,
+        attackerConvoySkinId: safeConvoySkinId,
         origin,
         target,
         routeDistanceTiles: travel.routeDistanceTiles,
         timePerTileMs:      travel.timePerTileMs,
         totalDurationMs:    travel.totalDurationMs,
-        launchedAtIso:      launchedAt.toISOString(),
+        launchedAtIso,
         arriveAtIso,
         selectedTroops:     Object.entries(safeSelection)
           .filter(([, qty]) => Number(qty) > 0)
@@ -694,6 +762,7 @@ export async function startBattle(req, res) {
 
     console.log(`[ATTACK] Iniciado: ${attack.attackerName} → ${attack.targetName} (${resolvedMemberIds.length} membros)`);
 
+    // ── Toast textual para o defensor ─────────────────────────────────────
     emitToPlayer(String(defender._id), 'attackIncoming', {
       attackerName:    String(attacker.name || 'Desconhecido'),
       attackerFaction: attacker.factionId || null,
@@ -708,6 +777,39 @@ export async function startBattle(req, res) {
       },
       message: `${attacker.name} está marchando para o seu território`,
     });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // BROADCAST GLOBAL: marcha do squad visível no mapa para todos os
+    // clientes conectados (defensor + observadores). O atacante é excluído
+    // porque já anima o squad localmente via useMapAttack.confirmAttack.
+    // ────────────────────────────────────────────────────────────────────────
+    try {
+      broadcastToAll('attack:squadStarted', {
+        battleId:             attack.id,
+        attackerId:           String(attacker._id),
+        attackerName:         String(attacker.name || ''),
+        defenderId:           String(defender._id),
+        defenderName:         String(defender.name || ''),
+        attackerConvoySkinId: safeConvoySkinId,
+        memberCount:          resolvedMemberIds.length,
+        origin:               { tileX: origin.tileX, tileY: origin.tileY },
+        target:               { tileX: target.tileX, tileY: target.tileY },
+        route: {
+          fromTileX: origin.tileX,
+          fromTileY: origin.tileY,
+          toTileX:   target.tileX,
+          toTileY:   target.tileY,
+        },
+        routeDistanceTiles: travel.routeDistanceTiles,
+        timePerTileMs:      travel.timePerTileMs,
+        totalDurationMs:    travel.totalDurationMs,
+        launchedAtIso,
+        arriveAtIso,
+        barracoLevel:       attacker?.niveis?.barracoLevel || 1,
+      }, String(attacker._id)); // ← exclui o atacante
+    } catch (broadcastErr) {
+      console.error(`[ATTACK_STARTED_BROADCAST] Falha ao broadcastar marcha de ${attack.id}:`, broadcastErr?.message);
+    }
 
     return res.status(201).json({
       success: true,
@@ -827,6 +929,7 @@ export async function getActiveBattles(req, res) {
       const role = String(attack.attackerId) === requesterId ? 'attacker' : 'defender';
       const arriveAtMs = new Date(attack.arriveAtIso || 0).getTime();
       const remainingMs = Math.max(0, arriveAtMs - Date.now());
+      const memberCount = Array.isArray(attack.selectedMemberIds) ? attack.selectedMemberIds.length : 0;
 
       return {
         battleId:           attack.id,
@@ -852,6 +955,8 @@ export async function getActiveBattles(req, res) {
         totalDurationMs:    attack.totalDurationMs,
         timePerTileMs:      attack.timePerTileMs,
         routeDistanceTiles: attack.routeDistanceTiles,
+        memberCount,
+        attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',
       };
     }));
   } catch (err) {

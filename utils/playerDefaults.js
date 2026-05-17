@@ -8,6 +8,7 @@ export function createEmptyGangStats() {
     injuredMembers: 0,
     deadMembers: 0,
     trainingMembers: 0,
+    marchingMembers: 0,
     totalPower: 0,
     averageLevel: 0,
   };

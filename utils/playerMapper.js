@@ -6,7 +6,7 @@ import {
   createEmptyGangStats,
 } from './playerDefaults.js';
 
-const LOT_SIZE = 8;
+const LOT_SIZE = 6;
 const GANG_MEMBER_TYPES = [
   'capanga',
   'frente',
@@ -46,6 +46,7 @@ export function recalculateGangStats(gangMembers = []) {
   const injuredMembers = gangMembers.filter((item) => item.status === 'ferido').length;
   const deadMembers = gangMembers.filter((item) => item.status === 'morto').length;
   const trainingMembers = gangMembers.filter((item) => item.status === 'treinando').length;
+  const marchingMembers = gangMembers.filter((item) => item.status === 'marchando').length;
 
   const totalLevels = gangMembers.reduce(
     (sum, item) => sum + toPositiveInt(item.level, 1),
@@ -62,6 +63,7 @@ export function recalculateGangStats(gangMembers = []) {
     injuredMembers,
     deadMembers,
     trainingMembers,
+    marchingMembers,
     totalPower,
     averageLevel: totalMembers > 0 ? Number((totalLevels / totalMembers).toFixed(2)) : 0,
   };
@@ -102,7 +104,7 @@ function sanitizeGangMember(member, index = 0) {
     ? String(member.type)
     : 'capanga';
 
-  const safeStatus = ['ativo', 'ferido', 'morto', 'treinando'].includes(String(member?.status))
+  const safeStatus = ['ativo', 'ferido', 'morto', 'treinando', 'marchando'].includes(String(member?.status))
     ? String(member.status)
     : 'ativo';
 
@@ -114,6 +116,8 @@ function sanitizeGangMember(member, index = 0) {
     recruitedAt: String(member?.recruitedAt || new Date().toISOString()),
     trainingEndsAt: member?.trainingEndsAt ? String(member.trainingEndsAt) : null,
     injuryEndsAt: member?.injuryEndsAt ? String(member.injuryEndsAt) : null,
+    activeAttackId: member?.activeAttackId ? String(member.activeAttackId) : null,
+    marchingUntil: member?.marchingUntil ? String(member.marchingUntil) : null,
   };
 }
 

@@ -23,6 +23,22 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// O mapa do frontend reserva um espaço lógico para cada jogador.
+// O mapPosition salvo no Player representa a origem/canto desse espaço,
+// não o ponto central do barraco. A marcha de ataque precisa usar o centro.
+const ATTACK_SPACE_WIDTH_TILES  = 6;
+const ATTACK_SPACE_HEIGHT_TILES = 6;
+
+function getAttackCenterFromMapPosition(position = {}) {
+  const originTileX = toNumber(position?.tileX, 0);
+  const originTileY = toNumber(position?.tileY, 0);
+
+  return {
+    tileX: originTileX + Math.floor(ATTACK_SPACE_WIDTH_TILES / 2),
+    tileY: originTileY + Math.floor(ATTACK_SPACE_HEIGHT_TILES / 2),
+  };
+}
+
 function sanitizeSelection(selection = {}) {
   const TYPES = ['capanga','frente','executor','assassino','muralha','certeiro','motorista','nitro'];
   return Object.fromEntries(
@@ -42,6 +58,12 @@ function buildResponse(attack) {
     attackerName:       attack.attackerName,
     defenderId:         attack.targetId,
     defenderName:       attack.targetName,
+    route: {
+      fromTileX: toNumber(attack?.origin?.tileX, 0),
+      fromTileY: toNumber(attack?.origin?.tileY, 0),
+      toTileX:   toNumber(attack?.target?.tileX, 0),
+      toTileY:   toNumber(attack?.target?.tileY, 0),
+    },
     routeDistanceTiles: attack.routeDistanceTiles,
     timePerTileMs:      attack.timePerTileMs,
     totalDurationMs:    attack.totalDurationMs,
@@ -281,8 +303,6 @@ export async function startBattle(req, res) {
     const attacker = req.player;
     const {
       targetId, targetName,
-      targetTileX, targetTileY,
-      originTileX, originTileY,
       selection = {},
       selectedMemberIds = [],
     } = req.body || {};
@@ -317,14 +337,10 @@ export async function startBattle(req, res) {
     if (!resolvedMemberIds.length)
       return res.status(400).json({ error: 'Nenhum membro ativo disponível para o ataque' });
 
-    const origin = {
-      tileX: Number.isFinite(Number(originTileX)) ? Number(originTileX) : Number(attacker?.mapPosition?.tileX || 0),
-      tileY: Number.isFinite(Number(originTileY)) ? Number(originTileY) : Number(attacker?.mapPosition?.tileY || 0),
-    };
-    const target = {
-      tileX: Number.isFinite(Number(targetTileX)) ? Number(targetTileX) : Number(defender?.mapPosition?.tileX || 0),
-      tileY: Number.isFinite(Number(targetTileY)) ? Number(targetTileY) : Number(defender?.mapPosition?.tileY || 0),
-    };
+    // Backend é a autoridade da rota: ignora originTileX/originTileY/targetTileX/targetTileY
+    // enviados pelo cliente para impedir manipulação de distância/tempo de marcha.
+    const origin = getAttackCenterFromMapPosition(attacker?.mapPosition);
+    const target = getAttackCenterFromMapPosition(defender?.mapPosition);
 
     const velocityBonus = toNumber(attacker?.combatModifiers?.velocityBonus, 0);
     const travel = buildTravelMetrics({
@@ -374,6 +390,12 @@ export async function startBattle(req, res) {
       memberCount:     resolvedMemberIds.length,
       arriveAtIso:     arriveAt.toISOString(),
       totalDurationMs: travel.totalDurationMs,
+      route: {
+        fromTileX: origin.tileX,
+        fromTileY: origin.tileY,
+        toTileX:   target.tileX,
+        toTileY:   target.tileY,
+      },
       message:         `${attacker.name} está marchando para o seu território`,
     });
 

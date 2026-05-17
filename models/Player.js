@@ -85,12 +85,14 @@ const gangMemberSchema = new mongoose.Schema(
     level: { type: Number, default: 1, min: 1, max: 10 },
     status: {
       type: String,
-      enum: ['ativo', 'ferido', 'morto', 'treinando'],
+      enum: ['ativo', 'ferido', 'morto', 'treinando', 'marchando'],
       default: 'ativo',
     },
     recruitedAt: { type: String, default: () => new Date().toISOString() },
     trainingEndsAt: { type: String, default: null },
     injuryEndsAt: { type: String, default: null },
+    activeAttackId: { type: String, default: null },
+    marchingUntil: { type: String, default: null },
   },
   { _id: false }
 );
@@ -130,6 +132,7 @@ const gangStatsSchema = new mongoose.Schema(
     injuredMembers: { type: Number, default: createEmptyGangStats().injuredMembers, min: 0 },
     deadMembers: { type: Number, default: createEmptyGangStats().deadMembers, min: 0 },
     trainingMembers: { type: Number, default: createEmptyGangStats().trainingMembers, min: 0 },
+    marchingMembers: { type: Number, default: createEmptyGangStats().marchingMembers, min: 0 },
     totalPower: { type: Number, default: createEmptyGangStats().totalPower, min: 0 },
     averageLevel: { type: Number, default: createEmptyGangStats().averageLevel, min: 0 },
   },

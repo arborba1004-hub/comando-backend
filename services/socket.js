@@ -30,6 +30,18 @@ function broadcast(event, data, excludeWs = null) {
   }
 }
 
+// Broadcast público para uso fora do socket.js (controllers, services).
+// excludePlayerId: jogador que NÃO deve receber o evento (útil quando o
+// emissor já trata o evento localmente — ex: o atacante já anima o squad
+// no próprio cliente via confirmAttack).
+export function broadcastToAll(event, data, excludePlayerId = null) {
+  if (!wss) return;
+  const excludeWs = excludePlayerId
+    ? (playerToSocket.get(String(excludePlayerId)) ?? null)
+    : null;
+  broadcast(event, data, excludeWs);
+}
+
 function projectForMap(player) {
   return {
     id:           String(player._id),

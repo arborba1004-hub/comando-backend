@@ -38,6 +38,7 @@ const reportSchema = new mongoose.Schema(
       default: 'empate',
     },
     rounds: { type: Number, default: 0, min: 0 },
+    resolution: { type: Object, default: null },
     lootDirtyMoney: { type: Number, default: 0, min: 0 },
     barracoLevelPerdedor: { type: Number, default: 0, min: 0 },
     attacker: { type: reportSideSchema, default: {} },
@@ -99,6 +100,13 @@ const attackSchema = new mongoose.Schema(
     loot: { type: Number, default: 0, min: 0 },
 
     report: { type: reportSchema, default: {} },
+
+    mailStatus: {
+      sentToAttacker: { type: Boolean, default: false },
+      sentToDefensor: { type: Boolean, default: false },
+      errors: { type: [String], default: [] },
+      retriedAt: { type: String, default: null },
+    },
   },
   {
     timestamps: true,

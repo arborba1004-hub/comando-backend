@@ -4,8 +4,8 @@ import { randomUUID } from 'crypto';
 import Attack      from '../models/Attack.js';
 import Player      from '../models/Player.js';
 import ChatMessage from '../models/ChatMessage.js';
-import { bumpVersion }     from '../utils/gameHelpers.js';
-import { emitToPlayer }    from '../services/socketEmitter.js';
+import { bumpVersion }      from '../utils/gameHelpers.js';
+import { emitToPlayer }     from '../services/socketEmitter.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import {
   buildTravelMetrics,
@@ -23,9 +23,17 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-// O mapa do frontend reserva um espaço lógico para cada jogador.
-// O mapPosition salvo no Player representa a origem/canto desse espaço,
-// não o ponto central do barraco. A marcha de ataque precisa usar o centro.
+function getRequesterId(req) {
+  return String(req?.user?.id || req?.player?._id || '');
+}
+
+function isRequestAuthenticated(req) {
+  return Boolean(getRequesterId(req));
+}
+
+// O mapPosition salvo no Player representa a origem/canto do espaço do jogador.
+// A marcha precisa sair do centro do lote do atacante e chegar no centro do lote
+// do defensor. Mantém 6x6 porque o frontend atual usa PLAYER_SPACE_WIDTH/HEIGHT = 6.
 const ATTACK_SPACE_WIDTH_TILES  = 6;
 const ATTACK_SPACE_HEIGHT_TILES = 6;
 
@@ -58,6 +66,8 @@ function buildResponse(attack) {
     attackerName:       attack.attackerName,
     defenderId:         attack.targetId,
     defenderName:       attack.targetName,
+    origin:             attack.origin || null,
+    target:             attack.target || null,
     route: {
       fromTileX: toNumber(attack?.origin?.tileX, 0),
       fromTileY: toNumber(attack?.origin?.tileY, 0),
@@ -69,7 +79,30 @@ function buildResponse(attack) {
     totalDurationMs:    attack.totalDurationMs,
     launchedAtIso:      attack.launchedAtIso,
     arriveAtIso:        attack.arriveAtIso,
+    resolvedAtIso:      attack.resolvedAtIso || null,
     report:             attack.report || null,
+  };
+}
+
+function buildResolvedPayload(attack, resolution = null) {
+  const savedReport = attack.report || {};
+  return {
+    ...buildResponse(attack),
+    resolution: resolution || savedReport.resolution || null,
+    attacker: {
+      playerId:    String(attack.attackerId),
+      playerName:  String(attack.attackerName || ''),
+      factionId:   attack.attackerFactionId || null,
+      factionName: attack.attackerFactionName || '',
+      factionTag:  attack.attackerFactionTag || '',
+    },
+    defender: {
+      playerId:    String(attack.targetId),
+      playerName:  String(attack.targetName || ''),
+      factionId:   attack.defenderFactionId || null,
+      factionName: attack.defenderFactionName || '',
+      factionTag:  attack.defenderFactionTag || '',
+    },
   };
 }
 
@@ -79,25 +112,55 @@ function appendAttackHistory(player, item, limit = 50) {
   player.attackHistory = next.slice(0, limit);
 }
 
-function updateMemberStatusAfterBattle(members = [], deadIds = new Set(), injuredIds = new Set()) {
-  if (!Array.isArray(members)) return members;
-  const now          = Date.now();
-  const recoveryMs   = 3_600_000; // 1h
+function emitPlayerAndGangUpdate(player) {
+  const playerId = String(player?._id || '');
+  if (!playerId) return;
 
-  for (const m of members) {
-    if (!m?.id) continue;
-    if (deadIds.has(String(m.id))) {
-      m.status      = 'morto';
-      m.injuryEndsAt = null;
-    } else if (injuredIds.has(String(m.id))) {
-      m.status      = 'ferido';
-      m.injuryEndsAt = new Date(now + recoveryMs).toISOString();
-    } else if (m.status === 'ferido') {
-      const end = m.injuryEndsAt ? new Date(m.injuryEndsAt).getTime() : 0;
-      if (end <= now) { m.status = 'ativo'; m.injuryEndsAt = null; }
+  const plain = typeof player.toObject === 'function' ? player.toObject() : player;
+  emitToPlayer(playerId, 'playerUpdate', { player: mergePlayerState(plain) });
+  emitToPlayer(playerId, 'gangUpdate', { gang: plain.gang || { members: [], trainingSlots: [], stats: {} } });
+}
+
+function markGangModified(player) {
+  if (typeof player?.markModified === 'function') {
+    player.markModified('gang');
+  }
+}
+
+function clearMarchingMembersForAttack(player, attackId) {
+  if (!Array.isArray(player?.gang?.members)) return 0;
+
+  let changed = 0;
+  for (const member of player.gang.members) {
+    if (String(member?.activeAttackId || '') === String(attackId)) {
+      member.status = 'ativo';
+      member.activeAttackId = null;
+      member.marchingUntil = null;
+      changed += 1;
     }
   }
-  return members;
+
+  if (changed > 0) {
+    markGangModified(player);
+  }
+
+  return changed;
+}
+
+async function rollbackMarchingMembers(attackerId, attackId) {
+  try {
+    const attacker = await Player.findById(String(attackerId));
+    if (!attacker) return;
+
+    const changed = clearMarchingMembersForAttack(attacker, attackId);
+    if (changed > 0) {
+      bumpVersion(attacker);
+      await attacker.save();
+      emitPlayerAndGangUpdate(attacker);
+    }
+  } catch (err) {
+    console.error(`[ATTACK_ROLLBACK] Falha ao liberar tropas do ataque ${attackId}:`, err?.message || err);
+  }
 }
 
 // ─── Email com retry ─────────────────────────────────────────────────────────
@@ -108,17 +171,17 @@ async function sendAttackMail({ senderName, recipientId, recipientName, subject,
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       await ChatMessage.create({
-        channel:      'mail',
-        senderId:     'system',
+        channel:       'mail',
+        senderId:      'system',
         senderName,
-        recipientId:  String(recipientId),
+        recipientId:   String(recipientId),
         recipientName: String(recipientName),
-        subject:      String(subject || ''),
-        body:         String(body    || ''),
-        read:         false,
-        system:       true,
-        messageType:  'text',
-        metadata:     metadata && typeof metadata === 'object' ? metadata : {},
+        subject:       String(subject || ''),
+        body:          String(body    || ''),
+        read:          false,
+        system:        true,
+        messageType:   'text',
+        metadata:      metadata && typeof metadata === 'object' ? metadata : {},
       });
       return { success: true, attempt: attempt + 1 };
     } catch (err) {
@@ -150,10 +213,11 @@ function hasActiveShield(player) {
 function getCooldownTimestamp(defender, attackerId) {
   const map = defender?.lastAttacksAgainst;
   if (!map) return 0;
-  // Mongoose Map ou objeto plain — suportar os dois
+
   if (typeof map.get === 'function') {
     return Number(map.get(String(attackerId)) || 0);
   }
+
   return Number(map[String(attackerId)] || 0);
 }
 
@@ -184,12 +248,7 @@ function getCooldownExpiresAt(defender, attackerId) {
   return lastAt + getEffectiveCooldownMs(defender);
 }
 
-/**
- * Valida se atacante pode atacar defensor.
- * Retorna { ok: true } ou { ok: false, status, reason, message, ... }.
- */
 function validateCanAttack(attacker, defender) {
-  // 1. Self
   if (String(attacker._id) === String(defender._id)) {
     return {
       ok: false,
@@ -199,7 +258,6 @@ function validateCanAttack(attacker, defender) {
     };
   }
 
-  // 2. Mesma facção
   if (attacker.factionId && defender.factionId && String(attacker.factionId) === String(defender.factionId)) {
     return {
       ok: false,
@@ -209,7 +267,6 @@ function validateCanAttack(attacker, defender) {
     };
   }
 
-  // 3. Escudo
   if (hasActiveShield(defender)) {
     const expiresAt = Number(defender.shieldExpiresAt);
     const source = String(defender.shieldSource || 'unknown');
@@ -223,7 +280,6 @@ function validateCanAttack(attacker, defender) {
     };
   }
 
-  // 4. Cooldown
   if (isInCooldown(defender, attacker._id)) {
     const expires = getCooldownExpiresAt(defender, attacker._id);
     return {
@@ -239,13 +295,228 @@ function validateCanAttack(attacker, defender) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// LÓGICA CORE DA BATALHA
+// ═════════════════════════════════════════════════════════════════════════════
+
+async function resolveAttackDocument(attack) {
+  if (!attack) {
+    return { ok: false, status: 404, error: 'Batalha não encontrada' };
+  }
+
+  if (attack.status === 'resolved') {
+    return { ok: true, data: buildResolvedPayload(attack) };
+  }
+
+  if (attack.status === 'cancelled') {
+    return { ok: false, status: 409, error: 'Batalha cancelada' };
+  }
+
+  if (attack.arriveAtIso && new Date(attack.arriveAtIso).getTime() > Date.now()) {
+    const remainingMs = new Date(attack.arriveAtIso).getTime() - Date.now();
+    return { ok: false, status: 409, error: 'A marcha ainda não chegou ao destino', remainingMs };
+  }
+
+  const attacker = await Player.findById(String(attack.attackerId));
+  const defender = await Player.findById(String(attack.targetId));
+
+  if (!attacker || !defender) {
+    attack.status = 'cancelled';
+    attack.resolvedAtIso = new Date().toISOString();
+    await attack.save();
+    return { ok: false, status: 404, error: 'Jogadores não encontrados (batalha cancelada)' };
+  }
+
+  const result = resolveAttackResult({
+    battleId: String(attack.id),
+    attacker: attacker.toObject(),
+    defender: defender.toObject(),
+    selection: Object.fromEntries(
+      (Array.isArray(attack.selectedTroops) ? attack.selectedTroops : [])
+        .map((item) => [item.type, item.quantity])
+    ),
+    selectedMemberIds: Array.isArray(attack.selectedMemberIds) ? attack.selectedMemberIds : [],
+  });
+
+  attacker.balances = attacker.balances || {};
+  defender.balances = defender.balances || {};
+  attacker.balances.dirtyMoney = result.nextDirtyMoneyAtacante;
+  defender.balances.dirtyMoney = result.nextDirtyMoneyDefensor;
+
+  attacker.gang = {
+    ...(attacker.gang?.toObject?.() || attacker.gang || {}),
+    ...result.nextAttackerGang,
+    trainingSlots: attacker.gang?.trainingSlots || [],
+  };
+
+  defender.gang = {
+    ...(defender.gang?.toObject?.() || defender.gang || {}),
+    ...result.nextDefenderGang,
+    trainingSlots: defender.gang?.trainingSlots || [],
+  };
+
+  attacker.gang.updatedAtIso = new Date().toISOString();
+  defender.gang.updatedAtIso = new Date().toISOString();
+
+  markGangModified(attacker);
+  markGangModified(defender);
+
+  bumpVersion(attacker);
+  bumpVersion(defender);
+
+  const historyItem = {
+    id:           attack.id,
+    attackerId:   attack.attackerId,
+    attackerName: attack.attackerName,
+    targetId:     attack.targetId,
+    targetName:   attack.targetName,
+    success:      result.success,
+    loot:         result.lootDirtyMoney,
+    createdAt:    new Date().toISOString(),
+  };
+
+  appendAttackHistory(attacker, historyItem);
+  appendAttackHistory(defender, historyItem);
+
+  const resolution = {
+    success:       result.success,
+    loot:          result.lootDirtyMoney + (result.spoils?.luxuryConvertedDirtyMoney || 0),
+    chance:        Math.round(result.winChance * 100),
+    attackerPower: result.attackerGangStats.totalPower,
+    defenderPower: result.defenderGangStats.totalPower,
+    message:       result.message,
+    critical:      result.critical,
+    spoils:        result.spoils,
+    attackerGangLosses: result.attackerGangLosses,
+    defenderGangLosses: result.defenderGangLosses,
+    attackerGangStats:  result.attackerGangStats,
+    defenderGangStats:  result.defenderGangStats,
+  };
+
+  const report = buildAttackReport(result);
+
+  attack.status        = 'resolved';
+  attack.success       = result.success;
+  attack.critical      = result.critical;
+  attack.loot          = result.lootDirtyMoney;
+  attack.resolvedAtIso = new Date().toISOString();
+  attack.report = {
+    resolution,
+    winner:               result.winner,
+    rounds:               result.rounds,
+    lootDirtyMoney:       result.lootDirtyMoney,
+    barracoLevelPerdedor: result.barracoLevelPerdedor,
+    attacker:             result.attacker,
+    defender:             result.defender,
+    attackerSubject:      report.attackerSubject,
+    attackerBody:         report.attackerBody,
+    defenderSubject:      report.defenderSubject,
+    defenderBody:         report.defenderBody,
+  };
+
+  const defenderInitialComp = result.defender?.composicaoInicial || {};
+  const defenderInitialCount = Object.values(defenderInitialComp).reduce((s, n) => s + Number(n || 0), 0);
+  const defenderLossesCount  = Number(result.defender?.perdas || 0) + Number(result.defender?.machucados || 0);
+  const lossPercent = defenderInitialCount > 0 ? defenderLossesCount / defenderInitialCount : 0;
+
+  if (result.winner === 'atacante' && lossPercent >= SHIELD_DERROTA_TRIGGER_PERCENT) {
+    defender.shieldExpiresAt = Date.now() + SHIELD_DERROTA_MS;
+    defender.shieldSource    = 'derrota';
+  }
+
+  await Promise.all([attacker.save(), defender.save(), attack.save()]);
+
+  emitPlayerAndGangUpdate(attacker);
+  emitPlayerAndGangUpdate(defender);
+
+  emitToPlayer(String(defender._id), 'attackReceived', {
+    attackerName: String(attacker.name || 'Desconhecido'),
+    loot:         result.success ? result.lootDirtyMoney : 0,
+    critical:     result.critical,
+    message:      result.success
+      ? `${attacker.name} invadiu seu território e roubou R$ ${result.lootDirtyMoney.toLocaleString('pt-BR')}`
+      : `${attacker.name} tentou invadir mas sua defesa resistiu!`,
+  });
+
+  const [atkMail, defMail] = await Promise.allSettled([
+    sendAttackMail({
+      senderName:    'Sistema',
+      recipientId:   attacker._id,
+      recipientName: attacker.name,
+      subject:       report.attackerSubject,
+      body:          report.attackerBody,
+      metadata:      { type: 'attack_report', attackId: attack.id, role: 'attacker' },
+    }),
+    sendAttackMail({
+      senderName:    'Sistema',
+      recipientId:   defender._id,
+      recipientName: defender.name,
+      subject:       report.defenderSubject,
+      body:          report.defenderBody,
+      metadata:      { type: 'attack_report', attackId: attack.id, role: 'defender' },
+    }),
+  ]);
+
+  const attackerMailFailed =
+    atkMail.status === 'rejected' ||
+    (atkMail.status === 'fulfilled' && atkMail.value?.success !== true);
+
+  const defenderMailFailed =
+    defMail.status === 'rejected' ||
+    (defMail.status === 'fulfilled' && defMail.value?.success !== true);
+
+  const mailErrors = [
+    attackerMailFailed ? 'attacker' : null,
+    defenderMailFailed ? 'defender' : null,
+  ].filter(Boolean);
+
+  attack.mailStatus = {
+    sentToAttacker: !attackerMailFailed,
+    sentToDefensor: !defenderMailFailed,
+    errors:         mailErrors,
+    retriedAt:      new Date().toISOString(),
+  };
+  await attack.save();
+
+  console.log(`[RESOLVE] Batalha finalizada: ${attack.id} | ${result.winner} | loot: ${result.lootDirtyMoney}`);
+
+  const responseData = buildResolvedPayload(attack, resolution);
+
+  if (mailErrors.length > 0) {
+    responseData.warning = `E-mail não enviado para: ${mailErrors.join(', ')}`;
+  }
+
+  return { ok: true, data: responseData };
+}
+
+async function autoResolveDueBattlesForPlayer(playerId) {
+  const requesterId = String(playerId || '');
+  if (!requesterId) return [];
+
+  const dueAttacks = await Attack.find({
+    status: 'travelling',
+    arriveAtIso: { $lte: new Date().toISOString() },
+    $or: [{ attackerId: requesterId }, { targetId: requesterId }],
+  });
+
+  const results = [];
+  for (const attack of dueAttacks) {
+    try {
+      results.push(await resolveAttackDocument(attack));
+    } catch (err) {
+      console.error(`[AUTO-RESOLVE] Erro ao resolver batalha pendente ${attack.id}:`, err?.message || err);
+    }
+  }
+
+  return results;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // ENDPOINTS
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
  * POST /battle/estimate
  * Estima o resultado sem criar batalha.
- * Retorna os campos que o frontend espera: estimatedLoot, estimatedChance, attackerPower, defenderPower.
  */
 export async function estimateBattle(req, res) {
   try {
@@ -257,12 +528,14 @@ export async function estimateBattle(req, res) {
     const defender = await Player.findById(String(targetId));
     if (!defender)  return res.status(404).json({ error: 'Defensor não encontrado' });
 
-    if (String(attacker._id) === String(defender._id))
+    if (String(attacker._id) === String(defender._id)) {
       return res.status(400).json({ error: 'Você não pode atacar a si mesmo' });
+    }
 
     const safeSelection = sanitizeSelection(selection);
-    if (!hasAnySelection(safeSelection) && !selectedMemberIds.length)
+    if (!hasAnySelection(safeSelection) && !selectedMemberIds.length) {
       return res.status(400).json({ error: 'Seleção de ataque vazia' });
+    }
 
     const result = resolveAttackResult({
       attacker:          attacker.toObject(),
@@ -271,17 +544,14 @@ export async function estimateBattle(req, res) {
       selectedMemberIds,
     });
 
-    // ── Resposta no shape que o frontend (attackApi.ts) espera ─────────────
     return res.json({
-      // Frontend shape (attackApi.ts EstimateBattleResponse)
       estimatedLoot:       result.lootDirtyMoney,
-      estimatedChance:     Math.round(result.winChance * 100), // 0–100
+      estimatedChance:     Math.round(result.winChance * 100),
       attackerPower:       result.attackerGangStats.totalPower,
       defenderPower:       result.defenderGangStats.totalPower,
       correCost:           10,
       attackerGangPower:   result.attackerGangStats.totalPower,
       defenderGangPower:   result.defenderGangStats.totalPower,
-      // Campos extras para debug/display
       estimatedWinner:     result.winner,
       estimatedRounds:     result.rounds,
       attacker:            result.attacker,
@@ -295,24 +565,32 @@ export async function estimateBattle(req, res) {
 
 /**
  * POST /battle/start
- * Inicia batalha, cria registro, emite 'attackIncoming' ao defensor (marcha começou).
- * Quando a batalha resolve em /battle/resolve, dispara 'attackReceived' (resultado).
+ * Cria ataque persistente, bloqueia tropas em marcha e avisa o defensor.
  */
 export async function startBattle(req, res) {
+  let attackId = null;
+  let attackerIdForRollback = null;
+
   try {
-    const attacker = req.player;
+    const requesterId = getRequesterId(req);
+    if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
+
     const {
-      targetId, targetName,
+      targetId,
       selection = {},
       selectedMemberIds = [],
     } = req.body || {};
 
     if (!targetId) return res.status(400).json({ error: 'targetId é obrigatório' });
 
+    const attacker = await Player.findById(requesterId);
+    if (!attacker) return res.status(401).json({ error: 'Atacante não encontrado' });
+
     const defender = await Player.findById(String(targetId));
     if (!defender)  return res.status(404).json({ error: 'Defensor não encontrado' });
 
-    // ── Validações Mafia-City: self / facção / escudo / cooldown ───────────
+    attackerIdForRollback = String(attacker._id);
+
     const validation = validateCanAttack(attacker, defender);
     if (!validation.ok) {
       return res.status(validation.status).json({
@@ -325,8 +603,9 @@ export async function startBattle(req, res) {
     }
 
     const safeSelection = sanitizeSelection(selection);
-    if (!hasAnySelection(safeSelection) && !selectedMemberIds.length)
+    if (!hasAnySelection(safeSelection) && !selectedMemberIds.length) {
       return res.status(400).json({ error: 'Seleção de ataque vazia' });
+    }
 
     const resolvedMemberIds = resolveSelectedMemberIdsForAttack({
       attacker:          attacker.toObject(),
@@ -334,14 +613,25 @@ export async function startBattle(req, res) {
       selectedMemberIds,
     });
 
-    if (!resolvedMemberIds.length)
+    if (!resolvedMemberIds.length) {
       return res.status(400).json({ error: 'Nenhum membro ativo disponível para o ataque' });
+    }
 
-    // Backend é a autoridade da rota: ignora originTileX/originTileY/targetTileX/targetTileY
-    // enviados pelo cliente para impedir manipulação de distância/tempo de marcha.
+    const availableIds = new Set(
+      (Array.isArray(attacker.gang?.members) ? attacker.gang.members : [])
+        .filter((member) => member.status === 'ativo')
+        .map((member) => String(member.id))
+    );
+
+    const unavailable = resolvedMemberIds.some((id) => !availableIds.has(String(id)));
+    if (unavailable) {
+      return res.status(409).json({ error: 'Algumas tropas não estão mais disponíveis para ataque' });
+    }
+
+    attackId = randomUUID();
+
     const origin = getAttackCenterFromMapPosition(attacker?.mapPosition);
     const target = getAttackCenterFromMapPosition(defender?.mapPosition);
-
     const velocityBonus = toNumber(attacker?.combatModifiers?.velocityBonus, 0);
     const travel = buildTravelMetrics({
       origin,
@@ -351,44 +641,64 @@ export async function startBattle(req, res) {
     });
     const launchedAt = new Date();
     const arriveAt   = new Date(launchedAt.getTime() + travel.totalDurationMs);
+    const arriveAtIso = arriveAt.toISOString();
 
-    const attack = await Attack.create({
-      id:                randomUUID(),
-      status:            'travelling',
-      attackerId:        String(attacker._id),
-      attackerName:      String(attacker.name || 'Atacante'),
-      targetId:          String(defender._id),
-      targetName:        String(targetName || defender.name || 'Defensor'),
-      attackerFactionId: attacker.factionId  || null,
-      defenderFactionId: defender.factionId  || null,
-      origin,
-      target,
-      routeDistanceTiles: travel.routeDistanceTiles,
-      timePerTileMs:      travel.timePerTileMs,
-      totalDurationMs:    travel.totalDurationMs,
-      launchedAtIso:      launchedAt.toISOString(),
-      arriveAtIso:        arriveAt.toISOString(),
-      selectedTroops:     Object.entries(safeSelection)
-        .filter(([, qty]) => Number(qty) > 0)
-        .map(([type, quantity]) => ({ type, quantity })),
-      selectedMemberIds: resolvedMemberIds,
-    });
+    const resolvedMemberIdSet = new Set(resolvedMemberIds.map(String));
+    for (const member of attacker.gang?.members || []) {
+      if (resolvedMemberIdSet.has(String(member.id))) {
+        member.status = 'marchando';
+        member.activeAttackId = attackId;
+        member.marchingUntil = arriveAtIso;
+      }
+    }
 
-    // ── Registrar cooldown: 24h até reatacar o mesmo defensor ──────────────
+    markGangModified(attacker);
+    bumpVersion(attacker);
+    await attacker.save();
+    emitPlayerAndGangUpdate(attacker);
+
+    let attack;
+    try {
+      attack = await Attack.create({
+        id:                attackId,
+        status:            'travelling',
+        attackerId:        String(attacker._id),
+        attackerName:      String(attacker.name || 'Atacante'),
+        targetId:          String(defender._id),
+        targetName:        String(defender.name || 'Defensor'),
+        attackerFactionId: attacker.factionId  || null,
+        defenderFactionId: defender.factionId  || null,
+        origin,
+        target,
+        routeDistanceTiles: travel.routeDistanceTiles,
+        timePerTileMs:      travel.timePerTileMs,
+        totalDurationMs:    travel.totalDurationMs,
+        launchedAtIso:      launchedAt.toISOString(),
+        arriveAtIso,
+        selectedTroops:     Object.entries(safeSelection)
+          .filter(([, qty]) => Number(qty) > 0)
+          .map(([type, quantity]) => ({ type, quantity })),
+        selectedMemberIds: resolvedMemberIds,
+      });
+    } catch (createErr) {
+      await rollbackMarchingMembers(attacker._id, attackId);
+      throw createErr;
+    }
+
     setCooldownTimestamp(defender, attacker._id, Date.now());
-    await defender.save();
+    try {
+      await defender.save();
+    } catch (cooldownErr) {
+      console.error(`[ATTACK] Ataque ${attack.id} criado, mas cooldown do defensor não salvou:`, cooldownErr?.message || cooldownErr);
+    }
 
     console.log(`[ATTACK] Iniciado: ${attack.attackerName} → ${attack.targetName} (${resolvedMemberIds.length} membros)`);
 
-    // ── Notifica defensor via socket: ataque chegando ──────────────────────
-    // Evento 'attackIncoming' = aviso de marcha (antes da resolução).
-    // Frontend: AttackIncomingToast escuta este evento.
-    // Distinto de 'attackReceived' que é o aviso final do resultado (resolveBattle).
     emitToPlayer(String(defender._id), 'attackIncoming', {
       attackerName:    String(attacker.name || 'Desconhecido'),
       attackerFaction: attacker.factionId || null,
       memberCount:     resolvedMemberIds.length,
-      arriveAtIso:     arriveAt.toISOString(),
+      arriveAtIso,
       totalDurationMs: travel.totalDurationMs,
       route: {
         fromTileX: origin.tileX,
@@ -396,7 +706,7 @@ export async function startBattle(req, res) {
         toTileX:   target.tileX,
         toTileY:   target.tileY,
       },
-      message:         `${attacker.name} está marchando para o seu território`,
+      message: `${attacker.name} está marchando para o seu território`,
     });
 
     return res.status(201).json({
@@ -411,236 +721,31 @@ export async function startBattle(req, res) {
 
 /**
  * POST /battle/resolve/:battleId
- * Resolve a batalha, aplica resultados, salva, envia e-mails e emite updates via socket.
- * Inclui campo 'resolution' com o shape exato que o frontend (attackApi.ts) normaliza.
+ * Atacante ou defensor podem disparar a resolução depois da chegada.
  */
 export async function resolveBattle(req, res) {
   try {
-    const requesterId = String(req.user.id);
-    const { battleId } = req.params;
+    const requesterId = getRequesterId(req);
+    if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
 
+    const { battleId } = req.params;
     const attack = await Attack.findOne({ id: String(battleId) });
     if (!attack) return res.status(404).json({ error: 'Batalha não encontrada' });
 
-    if (String(attack.attackerId) !== requesterId)
-      return res.status(403).json({ error: 'Somente o atacante pode resolver esta batalha' });
+    const involved = String(attack.attackerId) === requesterId || String(attack.targetId) === requesterId;
+    if (!involved) {
+      return res.status(403).json({ error: 'Você não tem permissão para resolver esta batalha' });
+    }
 
-    if (attack.status === 'resolved') {
-      // Batalha já resolvida — reconstrói resolution a partir do report salvo
-      const savedReport = attack.report || {};
-      return res.json({
-        ...buildResponse(attack),
-        resolution: savedReport.resolution || null,
-        attacker: {
-          playerId:   String(attack.attackerId),
-          playerName: String(attack.attackerName),
-          factionId:  attack.attackerFactionId || null,
-        },
-        defender: {
-          playerId:   String(attack.targetId),
-          playerName: String(attack.targetName),
-          factionId:  attack.defenderFactionId || null,
-        },
+    const result = await resolveAttackDocument(attack);
+    if (!result.ok) {
+      return res.status(result.status || 500).json({
+        error: result.error || 'Erro ao resolver batalha',
+        remainingMs: result.remainingMs,
       });
     }
 
-    // Verifica se a marcha chegou
-    if (attack.arriveAtIso && new Date(attack.arriveAtIso).getTime() > Date.now()) {
-      const remainingMs = new Date(attack.arriveAtIso).getTime() - Date.now();
-      return res.status(409).json({ error: 'A marcha ainda não chegou ao destino', remainingMs });
-    }
-
-    const attacker = await Player.findById(String(attack.attackerId));
-    const defender = await Player.findById(String(attack.targetId));
-    if (!attacker || !defender) return res.status(404).json({ error: 'Jogadores não encontrados' });
-
-    // ── Calcular resultado ────────────────────────────────────────────────
-    const result = resolveAttackResult({
-      attacker: attacker.toObject(),
-      defender: defender.toObject(),
-      selection: Object.fromEntries(
-        (Array.isArray(attack.selectedTroops) ? attack.selectedTroops : [])
-          .map((item) => [item.type, item.quantity])
-      ),
-      selectedMemberIds: Array.isArray(attack.selectedMemberIds) ? attack.selectedMemberIds : [],
-    });
-
-    // ── Atualizar saldos ──────────────────────────────────────────────────
-    attacker.balances.dirtyMoney = result.nextDirtyMoneyAtacante;
-    defender.balances.dirtyMoney = result.nextDirtyMoneyDefensor;
-
-    // ── Atualizar gang do atacante ────────────────────────────────────────
-    attacker.gang = result.nextAttackerGang;
-    if (attacker.gang?.members) {
-      attacker.gang.members = updateMemberStatusAfterBattle(
-        attacker.gang.members,
-        new Set(result.attackerDeadMemberIds    || []),
-        new Set(result.attackerInjuredMemberIds || [])
-      );
-    }
-
-    // ── Atualizar gang do defensor ────────────────────────────────────────
-    defender.gang = result.nextDefenderGang;
-    if (defender.gang?.members) {
-      defender.gang.members = updateMemberStatusAfterBattle(
-        defender.gang.members,
-        new Set(result.defenderDeadMemberIds    || []),
-        new Set(result.defenderInjuredMemberIds || [])
-      );
-    }
-
-    if (attacker.gang) attacker.gang.updatedAtIso = new Date().toISOString();
-    if (defender.gang) defender.gang.updatedAtIso = new Date().toISOString();
-
-    bumpVersion(attacker);
-    bumpVersion(defender);
-
-    // ── Histórico ─────────────────────────────────────────────────────────
-    const historyItem = {
-      id:           attack.id,
-      attackerId:   attack.attackerId,
-      attackerName: attack.attackerName,
-      targetId:     attack.targetId,
-      targetName:   attack.targetName,
-      success:      result.success,
-      loot:         result.lootDirtyMoney,
-      createdAt:    new Date().toISOString(),
-    };
-    appendAttackHistory(attacker, historyItem);
-    appendAttackHistory(defender, historyItem);
-
-    // ── Montar o objeto 'resolution' no shape que o frontend espera ────────
-    // Referência: attackApi.ts → normalizeResolution()
-    const resolution = {
-      success:       result.success,
-      loot:          result.lootDirtyMoney + (result.spoils?.luxuryConvertedDirtyMoney || 0),
-      chance:        Math.round(result.winChance * 100), // frontend divide por 100 se > 1
-      attackerPower: result.attackerGangStats.totalPower,
-      defenderPower: result.defenderGangStats.totalPower,
-      message:       result.message,
-      critical:      result.critical,
-      spoils:        result.spoils,
-      attackerGangLosses: result.attackerGangLosses,
-      defenderGangLosses: result.defenderGangLosses,
-      attackerGangStats:  result.attackerGangStats,
-      defenderGangStats:  result.defenderGangStats,
-    };
-
-    // ── Construir relatório de e-mail ─────────────────────────────────────
-    const report = buildAttackReport(result);
-
-    // ── Salvar attack ─────────────────────────────────────────────────────
-    attack.status       = 'resolved';
-    attack.success      = result.success;
-    attack.critical     = result.critical;
-    attack.loot         = result.lootDirtyMoney;
-    attack.resolvedAtIso = new Date().toISOString();
-    attack.report = {
-      resolution, // salva o objeto resolution para reutilizar em getBattleReport
-      winner:               result.winner,
-      rounds:               result.rounds,
-      lootDirtyMoney:       result.lootDirtyMoney,
-      barracoLevelPerdedor: result.barracoLevelPerdedor,
-      attacker:             result.attacker,
-      defender:             result.defender,
-      attackerSubject:      report.attackerSubject,
-      attackerBody:         report.attackerBody,
-      defenderSubject:      report.defenderSubject,
-      defenderBody:         report.defenderBody,
-    };
-
-    // ── Escudo pós-derrota ─────────────────────────────────────────────────
-    // Se defensor perdeu >30% dos membros que marcharam, ganha 8h de proteção.
-    const defenderInitialComp = result.defender?.composicaoInicial || {};
-    const defenderInitialCount = Object.values(defenderInitialComp).reduce((s, n) => s + Number(n || 0), 0);
-    const defenderLossesCount  = Number(result.defender?.perdas || 0) + Number(result.defender?.machucados || 0);
-    const lossPercent = defenderInitialCount > 0 ? defenderLossesCount / defenderInitialCount : 0;
-
-    if (result.winner === 'atacante' && lossPercent >= SHIELD_DERROTA_TRIGGER_PERCENT) {
-      defender.shieldExpiresAt = Date.now() + SHIELD_DERROTA_MS;
-      defender.shieldSource    = 'derrota';
-      console.log(`[ATTACK] Shield pós-derrota: ${defender.name} → 8h (${Math.round(lossPercent*100)}% baixas)`);
-    }
-
-    // ── Salvar tudo ────────────────────────────────────────────────────────
-    await Promise.all([attacker.save(), defender.save(), attack.save()]);
-
-    // ── Emitir playerUpdate para ambos ────────────────────────────────────
-    emitToPlayer(String(attacker._id), 'playerUpdate', { player: mergePlayerState(attacker.toObject()) });
-    emitToPlayer(String(defender._id), 'playerUpdate', { player: mergePlayerState(defender.toObject()) });
-
-    // ── Emitir resultado ao defensor via socket ───────────────────────────
-    // O AttackIncomingToast já notificou a chegada; agora notifica o resultado.
-    emitToPlayer(String(defender._id), 'attackReceived', {
-      attackerName: String(attacker.name || 'Desconhecido'),
-      loot:         result.success ? result.lootDirtyMoney : 0,
-      critical:     result.critical,
-      message:      result.success
-        ? `${attacker.name} invadiu seu território e roubou R$ ${result.lootDirtyMoney.toLocaleString('pt-BR')}`
-        : `${attacker.name} tentou invadir mas sua defesa resistiu!`,
-    });
-
-    // ── Enviar e-mails ────────────────────────────────────────────────────
-    const [atkMail, defMail] = await Promise.allSettled([
-      sendAttackMail({
-        senderName:    'Sistema',
-        recipientId:   attacker._id,
-        recipientName: attacker.name,
-        subject:       report.attackerSubject,
-        body:          report.attackerBody,
-        metadata:      { type: 'attack_report', attackId: attack.id, role: 'attacker' },
-      }),
-      sendAttackMail({
-        senderName:    'Sistema',
-        recipientId:   defender._id,
-        recipientName: defender.name,
-        subject:       report.defenderSubject,
-        body:          report.defenderBody,
-        metadata:      { type: 'attack_report', attackId: attack.id, role: 'defender' },
-      }),
-    ]);
-
-    const mailErrors = [
-      atkMail.status === 'rejected' ? 'attacker' : null,
-      defMail.status === 'rejected' ? 'defender' : null,
-    ].filter(Boolean);
-
-    attack.mailStatus = {
-      sentToAttacker: atkMail.status === 'fulfilled' && atkMail.value?.success === true,
-      sentToDefensor: defMail.status === 'fulfilled' && defMail.value?.success === true,
-      errors:         mailErrors,
-      retriedAt:      new Date().toISOString(),
-    };
-    await attack.save();
-
-    console.log(`[RESOLVE] Batalha finalizada: ${battleId} | ${result.winner} | loot: ${result.lootDirtyMoney}`);
-
-    // ── Resposta no shape que o frontend (attackApi.ts) normalizeReportResponse() espera ──
-    const responseData = {
-      ...buildResponse(attack),
-      // ← 'resolution' é o campo que normalizeReportResponse extrai
-      resolution,
-      attacker: {
-        playerId:    String(attacker._id),
-        playerName:  String(attacker.name || ''),
-        factionId:   attacker.factionId  || null,
-        factionName: '',
-        factionTag:  '',
-      },
-      defender: {
-        playerId:    String(defender._id),
-        playerName:  String(defender.name || ''),
-        factionId:   defender.factionId  || null,
-        factionName: '',
-        factionTag:  '',
-      },
-    };
-
-    if (mailErrors.length > 0) {
-      responseData.warning = `E-mail não enviado para: ${mailErrors.join(', ')}`;
-    }
-
-    return res.json(responseData);
+    return res.json(result.data);
   } catch (err) {
     console.error('[RESOLVE]', err);
     return res.status(500).json({ error: 'Erro ao resolver batalha', message: err.message });
@@ -649,37 +754,26 @@ export async function resolveBattle(req, res) {
 
 /**
  * GET /battle/report/:battleId
- * Retorna relatório de batalha já resolvida.
+ * Retorna relatório e resolve automaticamente se a marcha já chegou.
  */
 export async function getBattleReport(req, res) {
   try {
-    const requesterId = String(req.user.id);
-    const { battleId } = req.params;
+    const requesterId = getRequesterId(req);
+    if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
 
+    const { battleId } = req.params;
     const attack = await Attack.findOne({ id: String(battleId) });
     if (!attack) return res.status(404).json({ error: 'Batalha não encontrada' });
 
     const allowed = String(attack.attackerId) === requesterId || String(attack.targetId) === requesterId;
     if (!allowed) return res.status(403).json({ error: 'Acesso negado' });
 
-    return res.json({
-      ...buildResponse(attack),
-      resolution: attack.report?.resolution || null,
-      attacker: {
-        playerId:    String(attack.attackerId),
-        playerName:  String(attack.attackerName),
-        factionId:   attack.attackerFactionId || null,
-        factionName: '',
-        factionTag:  '',
-      },
-      defender: {
-        playerId:    String(attack.targetId),
-        playerName:  String(attack.targetName),
-        factionId:   attack.defenderFactionId || null,
-        factionName: '',
-        factionTag:  '',
-      },
-    });
+    if (attack.status === 'travelling' && new Date(attack.arriveAtIso || 0).getTime() <= Date.now()) {
+      const result = await resolveAttackDocument(attack);
+      if (result.ok) return res.json(result.data);
+    }
+
+    return res.json(buildResolvedPayload(attack));
   } catch (err) {
     console.error('[REPORT]', err);
     return res.status(500).json({ error: 'Erro ao buscar relatório' });
@@ -688,11 +782,14 @@ export async function getBattleReport(req, res) {
 
 /**
  * GET /battle/history
- * Histórico de batalhas do jogador autenticado.
+ * Histórico de batalhas do jogador autenticado. Resolve pendentes vencidas antes.
  */
 export async function getBattleHistory(req, res) {
   try {
-    const requesterId = String(req.user.id);
+    const requesterId = getRequesterId(req);
+    if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    await autoResolveDueBattlesForPlayer(requesterId);
 
     const attacks = await Attack.find({
       $or: [{ attackerId: requesterId }, { targetId: requesterId }],
@@ -701,22 +798,7 @@ export async function getBattleHistory(req, res) {
       .limit(100)
       .lean();
 
-    return res.json(
-      attacks.map((a) => ({
-        ...buildResponse(a),
-        resolution: a.report?.resolution || null,
-        attacker: {
-          playerId:   String(a.attackerId),
-          playerName: String(a.attackerName),
-          factionId:  a.attackerFactionId || null,
-        },
-        defender: {
-          playerId:   String(a.targetId),
-          playerName: String(a.targetName),
-          factionId:  a.defenderFactionId || null,
-        },
-      }))
-    );
+    return res.json(attacks.map((attack) => buildResolvedPayload(attack)));
   } catch (err) {
     console.error('[HISTORY]', err);
     return res.status(500).json({ error: 'Erro ao buscar histórico' });
@@ -724,10 +806,62 @@ export async function getBattleHistory(req, res) {
 }
 
 /**
+ * GET /battle/active
+ * Ataques travelling envolvendo o jogador. Também resolve os que já venceram.
+ */
+export async function getActiveBattles(req, res) {
+  try {
+    const requesterId = getRequesterId(req);
+    if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    await autoResolveDueBattlesForPlayer(requesterId);
+
+    const attacks = await Attack.find({
+      status: 'travelling',
+      $or: [{ attackerId: requesterId }, { targetId: requesterId }],
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json(attacks.map((attack) => {
+      const role = String(attack.attackerId) === requesterId ? 'attacker' : 'defender';
+      const arriveAtMs = new Date(attack.arriveAtIso || 0).getTime();
+      const remainingMs = Math.max(0, arriveAtMs - Date.now());
+
+      return {
+        battleId:           attack.id,
+        status:             attack.status,
+        role,
+        attackerId:         attack.attackerId,
+        attackerName:       attack.attackerName,
+        defenderId:         attack.targetId,
+        defenderName:       attack.targetName,
+        targetId:           attack.targetId,
+        targetName:         attack.targetName,
+        origin:             attack.origin || null,
+        target:             attack.target || null,
+        route: {
+          fromTileX: toNumber(attack?.origin?.tileX, 0),
+          fromTileY: toNumber(attack?.origin?.tileY, 0),
+          toTileX:   toNumber(attack?.target?.tileX, 0),
+          toTileY:   toNumber(attack?.target?.tileY, 0),
+        },
+        launchedAtIso:      attack.launchedAtIso,
+        arriveAtIso:        attack.arriveAtIso,
+        remainingMs,
+        totalDurationMs:    attack.totalDurationMs,
+        timePerTileMs:      attack.timePerTileMs,
+        routeDistanceTiles: attack.routeDistanceTiles,
+      };
+    }));
+  } catch (err) {
+    console.error('[ACTIVE_BATTLES]', err);
+    return res.status(500).json({ error: 'Erro ao buscar batalhas ativas' });
+  }
+}
+
+/**
  * GET /battle/can-attack/:targetId
- * Verifica se o player pode atacar esse alvo agora.
- * O frontend usa pra habilitar/desabilitar o botão de ataque no mapa
- * e mostrar a razão quando bloqueado (escudo / cooldown / facção).
  */
 export async function canAttack(req, res) {
   try {

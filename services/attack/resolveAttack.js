@@ -205,14 +205,37 @@ export function buildTravelMetrics({ origin, target, barracoLevel, velocityBonus
 
 // ─── MEMBROS ATIVOS ───────────────────────────────────────────────────────────
 
+function sortMembersByRecruitment(members = []) {
+  return [...members].sort((a, b) =>
+    String(a?.recruitedAt || '').localeCompare(String(b?.recruitedAt || ''))
+  );
+}
+
 function getActiveMembers(player) {
   return Array.isArray(player?.gang?.members)
-    ? player.gang.members
-        .filter((m) => m.status === 'ativo')
-        .sort((a, b) =>
-          String(a?.recruitedAt || '').localeCompare(String(b?.recruitedAt || ''))
-        )
+    ? sortMembersByRecruitment(player.gang.members.filter((m) => m.status === 'ativo'))
     : [];
+}
+
+function getAttackEligibleMembers(player, battleId = null) {
+  if (!Array.isArray(player?.gang?.members)) return [];
+
+  const safeBattleId = battleId ? String(battleId) : null;
+
+  return sortMembersByRecruitment(
+    player.gang.members.filter((m) => {
+      if (m.status === 'ativo') return true;
+      return Boolean(
+        safeBattleId &&
+        m.status === 'marchando' &&
+        String(m.activeAttackId || '') === safeBattleId
+      );
+    })
+  );
+}
+
+function asBattleActive(member) {
+  return { ...member, status: 'ativo' };
 }
 
 function normalizeSelection(selection = {}) {
@@ -223,32 +246,53 @@ function normalizeSelection(selection = {}) {
   return out;
 }
 
-export function resolveSelectedMemberIdsForAttack({ attacker, selection, selectedMemberIds }) {
-  const active   = getActiveMembers(attacker);
-  const capacity = getBattleCapacity(attacker?.niveis?.barracoLevel || 1);
+function resolveMemberIdsFromPool({ pool, selection, selectedMemberIds, capacity }) {
+  const safeCapacity = Math.max(0, Math.floor(toNumber(capacity, 0)));
+  const byId = new Map((pool || []).map((member) => [String(member.id), member]));
 
   if (Array.isArray(selectedMemberIds) && selectedMemberIds.length > 0) {
-    return active
-      .filter((m) => selectedMemberIds.includes(String(m.id)))
-      .slice(0, capacity)
-      .map((m) => String(m.id));
+    const uniqueIds = [];
+    const seen = new Set();
+
+    for (const rawId of selectedMemberIds) {
+      const id = String(rawId);
+      if (seen.has(id) || !byId.has(id)) continue;
+      seen.add(id);
+      uniqueIds.push(id);
+      if (uniqueIds.length >= safeCapacity) break;
+    }
+
+    return uniqueIds;
   }
 
-  const safe   = normalizeSelection(selection);
+  const safe = normalizeSelection(selection);
   const chosen = [];
   let used = 0;
 
-  for (const t of MEMBER_TYPES) {
-    const byType = active.filter((m) => m.type === t);
-    const wanted = Math.min(safe[t], capacity - used);
-    for (let i = 0; i < wanted; i++) {
-      if (!byType[i]) break;
-      chosen.push(String(byType[i].id));
-      used++;
+  for (const type of MEMBER_TYPES) {
+    const byType = (pool || []).filter((member) => member.type === type);
+    const wanted = Math.min(safe[type], safeCapacity - used);
+
+    for (let index = 0; index < wanted; index++) {
+      if (!byType[index]) break;
+      chosen.push(String(byType[index].id));
+      used += 1;
     }
   }
 
   return chosen;
+}
+
+export function resolveSelectedMemberIdsForAttack({ attacker, selection, selectedMemberIds }) {
+  const active   = getActiveMembers(attacker);
+  const capacity = getBattleCapacity(attacker?.niveis?.barracoLevel || 1);
+
+  return resolveMemberIdsFromPool({
+    pool: active,
+    selection,
+    selectedMemberIds,
+    capacity,
+  });
 }
 
 // ─── STATS DE GANGUE ─────────────────────────────────────────────────────────
@@ -404,17 +448,44 @@ function summarizeFinalComposition(units) {
   return out;
 }
 
-function updateMembersAfterBattle(originalMembers, unitsMap) {
-  return originalMembers.map((m) => {
-    const u = unitsMap.get(String(m.id));
-    return u ? { ...m, status: classifyStatus(u) } : { ...m };
+function updateMembersAfterBattle(originalMembers, unitsMap, battleId = null) {
+  const now = Date.now();
+  const recoveryMs = 3_600_000;
+  const safeBattleId = battleId ? String(battleId) : null;
+
+  return originalMembers.map((member) => {
+    const unit = unitsMap.get(String(member.id));
+    const belongsToBattle = Boolean(
+      safeBattleId &&
+      String(member?.activeAttackId || '') === safeBattleId
+    );
+
+    if (!unit && !belongsToBattle) {
+      return { ...member };
+    }
+
+    const nextStatus = unit ? classifyStatus(unit) : 'ativo';
+    const next = {
+      ...member,
+      status: nextStatus,
+      activeAttackId: null,
+      marchingUntil: null,
+    };
+
+    if (nextStatus === 'ferido') {
+      next.injuryEndsAt = new Date(now + recoveryMs).toISOString();
+    } else {
+      next.injuryEndsAt = null;
+    }
+
+    return next;
   });
 }
 
 // ─── EXPORT PRINCIPAL ─────────────────────────────────────────────────────────
 
-export function resolveAttackResult({ attacker, defender, selectedMemberIds = [], selection = {} }) {
-  const attackerActive = getActiveMembers(attacker);
+export function resolveAttackResult({ battleId = null, attacker, defender, selectedMemberIds = [], selection = {} }) {
+  const attackerEligible = getAttackEligibleMembers(attacker, battleId);
   const defenderActive = getActiveMembers(defender);
 
   const attackerCapacityBonus = toNumber(attacker?.combatModifiers?.capacityBonus, 0);
@@ -423,10 +494,21 @@ export function resolveAttackResult({ attacker, defender, selectedMemberIds = []
   const capacity         = getBattleCapacity(attacker?.niveis?.barracoLevel || 1, attackerCapacityBonus);
   const defenderCapacity = getBattleCapacity(defender?.niveis?.barracoLevel || 1, defenderCapacityBonus);
 
-  const resolvedIds = resolveSelectedMemberIdsForAttack({ attacker, selection, selectedMemberIds });
+  const resolvedIds = resolveMemberIdsFromPool({
+    pool: attackerEligible,
+    selection,
+    selectedMemberIds,
+    capacity,
+  });
 
-  const attackerMarch   = attackerActive.filter((m) => resolvedIds.includes(String(m.id))).slice(0, capacity);
-  const defenderMarch   = defenderActive.slice(0, defenderCapacity);
+  const attackerMarch = attackerEligible
+    .filter((m) => resolvedIds.includes(String(m.id)))
+    .slice(0, capacity)
+    .map(asBattleActive);
+
+  const defenderMarch = defenderActive
+    .slice(0, defenderCapacity)
+    .map(asBattleActive);
 
   // Stats pré-batalha (para winChance e relatório)
   const attackerGangStats = computeGangStats(attackerMarch);
@@ -530,7 +612,8 @@ export function resolveAttackResult({ attacker, defender, selectedMemberIds = []
   // ── Atualiza membros no gang object ──────────────────────────────────────
   const nextAttackerMembers = updateMembersAfterBattle(
     Array.isArray(attacker?.gang?.members) ? clone(attacker.gang.members) : [],
-    attackerUnitsMap
+    attackerUnitsMap,
+    battleId
   );
   const nextDefenderMembers = updateMembersAfterBattle(
     Array.isArray(defender?.gang?.members) ? clone(defender.gang.members) : [],
@@ -538,12 +621,28 @@ export function resolveAttackResult({ attacker, defender, selectedMemberIds = []
   );
 
   function recalcStats(members) {
+    const safeMembers = Array.isArray(members) ? members : [];
+    const totalLevels = safeMembers.reduce(
+      (sum, member) => sum + clamp(toPositiveInt(member?.level, 1), 1, 10),
+      0
+    );
+
+    const totalPower = safeMembers.reduce((sum, member) => {
+      const type = MEMBER_TYPES.includes(String(member?.type)) ? String(member.type) : 'capanga';
+      const level = clamp(toPositiveInt(member?.level, 1), 1, 10);
+      const attr = ATRIBUTOS_GANG[type][level];
+      return sum + Math.round(attr.rajada * 1.35 + attr.blindagem * 1.10 + attr.folego * 1.05 + attr.quebra * 1.20);
+    }, 0);
+
     return {
-      totalMembers:   members.length,
-      activeMembers:  members.filter((m) => m.status === 'ativo').length,
-      injuredMembers: members.filter((m) => m.status === 'ferido').length,
-      deadMembers:    members.filter((m) => m.status === 'morto').length,
-      trainingMembers: members.filter((m) => m.status === 'treinando').length,
+      totalMembers:    safeMembers.length,
+      activeMembers:   safeMembers.filter((m) => m.status === 'ativo').length,
+      injuredMembers:  safeMembers.filter((m) => m.status === 'ferido').length,
+      deadMembers:     safeMembers.filter((m) => m.status === 'morto').length,
+      trainingMembers: safeMembers.filter((m) => m.status === 'treinando').length,
+      marchingMembers: safeMembers.filter((m) => m.status === 'marchando').length,
+      totalPower,
+      averageLevel: safeMembers.length > 0 ? Number((totalLevels / safeMembers.length).toFixed(2)) : 0,
     };
   }
 

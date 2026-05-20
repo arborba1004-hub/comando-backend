@@ -35,20 +35,16 @@ export async function createMercadoPagoConvoyPreference({ purchase, player, conv
 
   const purchaseId = String(purchase._id);
   const playerId = String(player._id);
-  const title = String(convoy.name || 'Comboio Commandia');
-  const description = String(convoy.description || `Comboio ${convoy.id}`);
 
   const payload = {
-    items: [
-      {
-        id: convoy.id,
-        title,
-        description,
-        quantity: 1,
-        unit_price: Number(amount.toFixed(2)),
-        currency_id: purchase.currency || 'BRL',
-      },
-    ],
+    items: [{
+      id: convoy.id,
+      title: String(convoy.name || 'Comboio Commandia'),
+      description: String(convoy.description || `Comboio ${convoy.id}`),
+      quantity: 1,
+      unit_price: Number(amount.toFixed(2)),
+      currency_id: purchase.currency || 'BRL',
+    }],
     external_reference: purchaseId,
     metadata: {
       purchase_id: purchaseId,

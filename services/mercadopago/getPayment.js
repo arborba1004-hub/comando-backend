@@ -10,28 +10,17 @@ export async function getMercadoPagoPayment(paymentId) {
     throw error;
   }
 
-  const id = String(paymentId || '').trim();
-  if (!id) {
-    const error = new Error('paymentId ausente.');
-    error.status = 400;
-    error.reason = 'missing_payment_id';
-    throw error;
-  }
-
-  const response = await fetch(`${MP_API_BASE}/v1/payments/${encodeURIComponent(id)}`, {
+  const response = await fetch(`${MP_API_BASE}/v1/payments/${encodeURIComponent(String(paymentId))}`, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${env.MP_ACCESS_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { Authorization: `Bearer ${env.MP_ACCESS_TOKEN}` },
   });
 
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const error = new Error(`Mercado Pago get payment failed: ${response.status}`);
+    const error = new Error(`Mercado Pago payment fetch failed: ${response.status}`);
     error.status = 502;
-    error.reason = 'mp_get_payment_failed';
+    error.reason = 'mp_payment_fetch_failed';
     error.details = data;
     throw error;
   }

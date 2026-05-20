@@ -183,24 +183,53 @@ export function getGangAttackTimePerTileMs(barracoLevel, velocityBonus = 0, base
 }
 
 /**
- * Distância em tiles entre dois pontos do mapa.
- * Mafia City usa Manhattan: dx + dy (sem diagonal).
+ * Menor rota em tiles quando o comboio pode andar nas 8 direções:
+ * diagonal, vertical e horizontal.
+ *
+ * Exemplo: (0,0) -> (5,3) = 5 movimentos:
+ * (0,0), (1,1), (2,2), (3,3), (4,3), (5,3).
  */
-export function getRouteDistanceTiles(origin, target) {
-  const dx = Math.abs(toNumber(target.tileX, 0) - toNumber(origin.tileX, 0));
-  const dy = Math.abs(toNumber(target.tileY, 0) - toNumber(origin.tileY, 0));
-  return dx + dy;
+export function buildShortestTileRoute(origin = {}, target = {}) {
+  let x = Math.floor(toNumber(origin.tileX, 0));
+  let y = Math.floor(toNumber(origin.tileY, 0));
+  const tx = Math.floor(toNumber(target.tileX, 0));
+  const ty = Math.floor(toNumber(target.tileY, 0));
+
+  const route = [{ tileX: x, tileY: y }];
+
+  while (x !== tx || y !== ty) {
+    if (x < tx) x += 1;
+    else if (x > tx) x -= 1;
+
+    if (y < ty) y += 1;
+    else if (y > ty) y -= 1;
+
+    route.push({ tileX: x, tileY: y });
+  }
+
+  return route;
 }
 
 /**
- * Calcula viagem completa: rota, tempo por tile, duração total.
- * Aceita velocityBonus opcional (vindo de player.combatModifiers).
+ * Distância em tiles com diagonal permitida.
+ * Como cada passo pode alterar X e Y ao mesmo tempo, a distância mínima é max(dx, dy).
+ */
+export function getRouteDistanceTiles(origin, target) {
+  const dx = Math.abs(Math.floor(toNumber(target.tileX, 0)) - Math.floor(toNumber(origin.tileX, 0)));
+  const dy = Math.abs(Math.floor(toNumber(target.tileY, 0)) - Math.floor(toNumber(origin.tileY, 0)));
+  return Math.max(dx, dy);
+}
+
+/**
+ * Calcula viagem completa: rota por tiles, tempo por tile e duração total.
+ * Aceita velocityBonus opcional vindo de aceleradores/investimentos/loja.
  */
 export function buildTravelMetrics({ origin, target, barracoLevel, velocityBonus = 0 }) {
-  const routeDistanceTiles = getRouteDistanceTiles(origin, target);
+  const routeTiles = buildShortestTileRoute(origin, target);
+  const routeDistanceTiles = Math.max(0, routeTiles.length - 1);
   const timePerTileMs      = getGangAttackTimePerTileMs(barracoLevel, velocityBonus);
   const totalDurationMs    = routeDistanceTiles * timePerTileMs;
-  return { routeDistanceTiles, timePerTileMs, totalDurationMs };
+  return { routeTiles, routeDistanceTiles, timePerTileMs, totalDurationMs };
 }
 
 // ─── MEMBROS ATIVOS ───────────────────────────────────────────────────────────

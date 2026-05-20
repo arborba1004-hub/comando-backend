@@ -1,20 +1,18 @@
-import { DEFAULT_CONVOY_SKIN_ID, getConvoySkin } from '../data/convoyCatalog.js';
-import { normalizePlayerConvoys } from './convoyInventory.js';
+import { ensurePlayerConvoys, normalizePlayerConvoys } from './convoyInventory.js';
 
-export function grantRealMoneyConvoy(player, skinId, { equip = true } = {}) {
-  const skin = getConvoySkin(skinId);
-  const convoys = normalizePlayerConvoys(player?.convoys || {});
+export function grantRealMoneyConvoy(player, convoySkinId, options = {}) {
+  const convoys = ensurePlayerConvoys(player);
+  const id = String(convoySkinId || '').trim();
 
-  if (!convoys.ownedSkinIds.includes(skin.id)) {
-    convoys.ownedSkinIds.push(skin.id);
+  if (id && !convoys.ownedSkinIds.includes(id)) {
+    convoys.ownedSkinIds.push(id);
   }
 
-  if (equip) {
-    convoys.equippedSkinId = skin.id || DEFAULT_CONVOY_SKIN_ID;
+  if (options.equip !== false && id) {
+    convoys.equippedSkinId = id;
   }
 
   player.convoys = normalizePlayerConvoys(convoys);
   if (typeof player.markModified === 'function') player.markModified('convoys');
-
   return player.convoys;
 }

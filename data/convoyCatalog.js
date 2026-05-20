@@ -71,6 +71,25 @@ export const CONVOY_CATALOG = [
     fitTileLength: 2.8,
     speedBonusPercent: 0,
   },
+  {
+    id: 'comboio_real_199_glb',
+    name: 'Comboio Real GLB',
+    description: 'Comboio premium comprado com dinheiro real via Mercado Pago Checkout Pro.',
+    rarity: 'raro',
+    price: 1.99,
+    currency: 'realMoney',
+    purchaseType: 'realMoney',
+    realCurrency: 'BRL',
+    modelUrl: 'https://static.wixstatic.com/3d/50f4bf_3946576a583344c78d1d912657570015.glb',
+    icon: '💳',
+    accentColor: '#38bdf8',
+    modelScale: 0.42,
+    fitTileLength: 1.15,
+    speedBonusPercent: 0,
+    maxModelHeight: 1.35,
+    groundOffsetY: -0.12,
+    materialBoost: 2.4,
+  },
 ];
 
 export const CONVOY_BY_ID = CONVOY_CATALOG.reduce((acc, item) => {

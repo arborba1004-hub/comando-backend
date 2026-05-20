@@ -8,6 +8,14 @@ const selectedTroopSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const routeTileSchema = new mongoose.Schema(
+  {
+    tileX: { type: Number, default: 0 },
+    tileY: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const reportSideSchema = new mongoose.Schema(
   {
     playerId: { type: String, default: '' },
@@ -88,6 +96,9 @@ const attackSchema = new mongoose.Schema(
       tileX: { type: Number, default: 0 },
       tileY: { type: Number, default: 0 },
     },
+
+    // Rota autoritativa tile a tile. Permite diagonal, vertical e horizontal.
+    routeTiles: { type: [routeTileSchema], default: [] },
 
     routeDistanceTiles: { type: Number, default: 0, min: 0 },
     timePerTileMs: { type: Number, default: 0, min: 0 },

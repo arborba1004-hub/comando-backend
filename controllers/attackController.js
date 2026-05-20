@@ -47,6 +47,19 @@ function getAttackCenterFromMapPosition(position = {}) {
   };
 }
 
+
+function getAttackTravelVelocityBonus(player) {
+  const combatBonus = toNumber(player?.combatModifiers?.velocityBonus, 0);
+  const boosts = player?.activeBoosts || player?.boosts || {};
+  const shopBonus = toNumber(
+    boosts?.attackTravelVelocityBonus ?? boosts?.attackSpeedBonus ?? boosts?.convoySpeedBonus,
+    0
+  );
+
+  // Limite anti-exploit: mesmo com aceleradores, nunca passa de 90% de redução.
+  return Math.max(0, Math.min(0.9, combatBonus + shopBonus));
+}
+
 function sanitizeSelection(selection = {}) {
   const TYPES = ['capanga','frente','executor','assassino','muralha','certeiro','motorista','nitro'];
   return Object.fromEntries(
@@ -78,6 +91,7 @@ function buildResponse(attack) {
       toTileX:   toNumber(attack?.target?.tileX, 0),
       toTileY:   toNumber(attack?.target?.tileY, 0),
     },
+    routeTiles: Array.isArray(attack.routeTiles) ? attack.routeTiles : [],
     routeDistanceTiles: attack.routeDistanceTiles,
     timePerTileMs:      attack.timePerTileMs,
     totalDurationMs:    attack.totalDurationMs,
@@ -450,7 +464,7 @@ async function resolveAttackDocument(attack) {
   // ────────────────────────────────────────────────────────────────────────
   try {
     const updatedAttackerOrigin = getAttackCenterFromMapPosition(attacker.mapPosition || {});
-    const velocityBonus = toNumber(attacker?.combatModifiers?.velocityBonus, 0);
+    const velocityBonus = getAttackTravelVelocityBonus(attacker);
     const returnTravel  = buildTravelMetrics({
       origin:       attack.target,        // squad parte do alvo
       target:       updatedAttackerOrigin, // chega no centro ATUAL do atacante
@@ -481,6 +495,7 @@ async function resolveAttackDocument(attack) {
         tileY: updatedAttackerOrigin.tileY,
       },
 
+      returnRouteTiles:          returnTravel.routeTiles,
       returnRouteDistanceTiles: returnTravel.routeDistanceTiles,
       returnTimePerTileMs:      returnTravel.timePerTileMs,
       returnTotalDurationMs:    returnTravel.totalDurationMs,
@@ -694,7 +709,7 @@ export async function startBattle(req, res) {
 
     const origin = getAttackCenterFromMapPosition(attacker?.mapPosition);
     const target = getAttackCenterFromMapPosition(defender?.mapPosition);
-    const velocityBonus = toNumber(attacker?.combatModifiers?.velocityBonus, 0);
+    const velocityBonus = getAttackTravelVelocityBonus(attacker);
     const travel = buildTravelMetrics({
       origin,
       target,
@@ -738,6 +753,7 @@ export async function startBattle(req, res) {
         attackerConvoySkinId: safeConvoySkinId,
         origin,
         target,
+        routeTiles: travel.routeTiles,
         routeDistanceTiles: travel.routeDistanceTiles,
         timePerTileMs:      travel.timePerTileMs,
         totalDurationMs:    travel.totalDurationMs,
@@ -775,6 +791,8 @@ export async function startBattle(req, res) {
         toTileX:   target.tileX,
         toTileY:   target.tileY,
       },
+      routeTiles: travel.routeTiles,
+      attackerConvoySkinId: safeConvoySkinId,
       message: `${attacker.name} está marchando para o seu território`,
     });
 
@@ -800,6 +818,7 @@ export async function startBattle(req, res) {
           toTileX:   target.tileX,
           toTileY:   target.tileY,
         },
+        routeTiles: travel.routeTiles,
         routeDistanceTiles: travel.routeDistanceTiles,
         timePerTileMs:      travel.timePerTileMs,
         totalDurationMs:    travel.totalDurationMs,
@@ -954,6 +973,7 @@ export async function getActiveBattles(req, res) {
         remainingMs,
         totalDurationMs:    attack.totalDurationMs,
         timePerTileMs:      attack.timePerTileMs,
+        routeTiles: Array.isArray(attack.routeTiles) ? attack.routeTiles : [],
         routeDistanceTiles: attack.routeDistanceTiles,
         memberCount,
         attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',

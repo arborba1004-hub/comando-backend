@@ -1,149 +1,93 @@
 import crypto from 'crypto';
 import RealMoneyPurchase from '../models/RealMoneyPurchase.js';
 import Player from '../models/Player.js';
-import { env } from '../config/env.js';
+import { getConvoySkin } from '../data/convoyCatalog.js';
 import { getMercadoPagoPayment } from '../services/mercadopago/getPayment.js';
 import { grantRealMoneyConvoy } from '../utils/grantRealMoneyConvoy.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
-import { emitToPlayer } from '../services/socketEmitter.js';
-import { mergePlayerState } from '../utils/playerMapper.js';
+import { env } from '../config/env.js';
 
-function parseSignatureHeader(headerValue = '') {
-  return String(headerValue || '')
-    .split(',')
-    .map((part) => part.trim().split('='))
-    .reduce((acc, [key, value]) => {
-      if (key && value) acc[key] = value;
-      return acc;
-    }, {});
+function getPaymentIdFromWebhook(body) {
+  return body?.data?.id || body?.id || body?.resource?.split?.('/').pop?.() || null;
 }
 
-function safeEqualHex(a, b) {
-  const aa = Buffer.from(String(a || ''), 'hex');
-  const bb = Buffer.from(String(b || ''), 'hex');
-  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
-}
-
-function verifyMercadoPagoSignature(req, paymentId) {
+function verifyMercadoPagoSignature(req) {
   if (!env.MP_WEBHOOK_SECRET) return true;
 
-  const requestId = req.headers['x-request-id'];
-  const signature = parseSignatureHeader(req.headers['x-signature']);
-  const ts = signature.ts;
-  const v1 = signature.v1;
+  const signature = String(req.headers['x-signature'] || '');
+  const requestId = String(req.headers['x-request-id'] || '');
+  const dataId = String(req.query?.['data.id'] || req.body?.data?.id || '');
 
-  if (!requestId || !ts || !v1 || !paymentId) return false;
+  const tsMatch = signature.match(/ts=([^,]+)/);
+  const v1Match = signature.match(/v1=([^,]+)/);
 
-  const manifest = `id:${paymentId};request-id:${requestId};ts:${ts};`;
-  const expected = crypto
-    .createHmac('sha256', env.MP_WEBHOOK_SECRET)
-    .update(manifest)
-    .digest('hex');
+  if (!tsMatch || !v1Match) return false;
 
-  return safeEqualHex(expected, v1);
+  const manifest = `id:${dataId};request-id:${requestId};ts:${tsMatch[1]};`;
+  const hmac = crypto.createHmac('sha256', env.MP_WEBHOOK_SECRET);
+  hmac.update(manifest);
+  const expected = hmac.digest('hex');
+
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(v1Match[1]));
 }
 
-function extractPaymentId(req) {
-  return String(
-    req.query?.['data.id'] ||
-    req.query?.id ||
-    req.body?.data?.id ||
-    req.body?.id ||
-    req.body?.resource ||
-    ''
-  ).trim();
-}
-
-function isPaymentNotification(req) {
-  const type = String(req.query?.type || req.body?.type || req.body?.topic || '').toLowerCase();
-  return !type || type === 'payment' || type === 'payments';
-}
-
-async function findPurchaseForPayment(payment) {
-  const externalReference = String(payment?.external_reference || '').trim();
-  const metadataPurchaseId = String(payment?.metadata?.purchase_id || '').trim();
-  const preferenceId = String(payment?.preference_id || payment?.order?.id || '').trim();
-
-  if (externalReference) {
-    const found = await RealMoneyPurchase.findById(externalReference);
-    if (found) return found;
-  }
-
-  if (metadataPurchaseId) {
-    const found = await RealMoneyPurchase.findById(metadataPurchaseId);
-    if (found) return found;
-  }
-
-  if (preferenceId) {
-    const found = await RealMoneyPurchase.findOne({ mpPreferenceId: preferenceId });
-    if (found) return found;
-  }
-
-  return null;
-}
-
-function emitPlayerUpdate(player) {
-  const playerId = String(player?._id || '');
-  if (!playerId) return;
-  const plain = typeof player.toObject === 'function' ? player.toObject() : player;
-  emitToPlayer(playerId, 'playerUpdate', { player: mergePlayerState(plain) });
+function paymentApproved(status) {
+  return ['approved', 'accredited'].includes(String(status || '').toLowerCase());
 }
 
 export async function handleMercadoPagoWebhook(req, res) {
   try {
-    if (!isPaymentNotification(req)) {
-      return res.json({ ok: true, ignored: true, reason: 'not_payment_event' });
+    if (!verifyMercadoPagoSignature(req)) {
+      return res.status(401).json({ error: 'invalid_signature' });
     }
 
-    const paymentId = extractPaymentId(req);
-    if (!paymentId) {
-      return res.status(400).json({ error: 'payment_id_missing' });
-    }
-
-    if (!verifyMercadoPagoSignature(req, paymentId)) {
-      return res.status(401).json({ error: 'invalid_mercadopago_signature' });
-    }
+    const paymentId = getPaymentIdFromWebhook(req.body);
+    if (!paymentId) return res.status(200).json({ ok: true, ignored: 'missing_payment_id' });
 
     const payment = await getMercadoPagoPayment(paymentId);
-    const purchase = await findPurchaseForPayment(payment);
+    const purchaseId = String(payment?.external_reference || payment?.metadata?.purchase_id || '').trim();
 
-    if (!purchase) {
-      return res.status(404).json({ error: 'purchase_not_found' });
-    }
+    if (!purchaseId) return res.status(200).json({ ok: true, ignored: 'missing_external_reference' });
 
-    purchase.rawWebhook = req.body;
+    const purchase = await RealMoneyPurchase.findById(purchaseId);
+    if (!purchase) return res.status(200).json({ ok: true, ignored: 'purchase_not_found' });
+
+    purchase.mpPaymentId = String(paymentId);
     purchase.rawPayment = payment;
-    purchase.mpPaymentId = String(payment.id || paymentId);
+    purchase.rawWebhook = req.body;
 
-    const paymentStatus = String(payment.status || '').toLowerCase();
+    const paidAmount = Number(payment?.transaction_amount || 0);
+    const expectedAmount = Number(purchase.amount || 0);
+    const sameAmount = Math.abs(paidAmount - expectedAmount) < 0.01;
 
-    if (purchase.status === 'approved' && purchase.grantedAt) {
+    if (!paymentApproved(payment?.status)) {
+      purchase.status = String(payment?.status || 'pending');
       await purchase.save();
-      return res.json({ ok: true, alreadyProcessed: true });
+      return res.json({ ok: true, status: purchase.status });
     }
 
-    if (paymentStatus !== 'approved') {
-      purchase.status = paymentStatus === 'rejected'
-        ? 'rejected'
-        : paymentStatus === 'cancelled'
-          ? 'cancelled'
-          : 'pending';
+    if (!sameAmount) {
+      purchase.status = 'failed';
       await purchase.save();
-      return res.json({ ok: true, status: purchase.status, granted: false });
+      return res.status(400).json({ error: 'invalid_amount', expectedAmount, paidAmount });
     }
 
-    const paidAmount = Number(payment.transaction_amount || 0);
-    if (!Number.isFinite(paidAmount) || paidAmount + 0.0001 < Number(purchase.amount || 0)) {
-      purchase.status = 'error';
-      purchase.errorMessage = `Valor pago inválido: esperado ${purchase.amount}, recebido ${paidAmount}`;
+    const convoy = getConvoySkin(purchase.convoySkinId);
+    if (convoy.id !== purchase.convoySkinId) {
+      purchase.status = 'failed';
       await purchase.save();
-      return res.status(400).json({ error: 'invalid_paid_amount' });
+      return res.status(400).json({ error: 'invalid_convoy' });
+    }
+
+    if (purchase.grantedAt) {
+      purchase.status = 'paid';
+      await purchase.save();
+      return res.json({ ok: true, alreadyGranted: true });
     }
 
     const player = await Player.findById(purchase.playerId);
     if (!player) {
-      purchase.status = 'error';
-      purchase.errorMessage = 'Player não encontrado para liberar comboio.';
+      purchase.status = 'failed';
       await purchase.save();
       return res.status(404).json({ error: 'player_not_found' });
     }
@@ -151,20 +95,15 @@ export async function handleMercadoPagoWebhook(req, res) {
     grantRealMoneyConvoy(player, purchase.convoySkinId, { equip: true });
     bumpVersion(player);
 
-    purchase.status = 'approved';
-    purchase.grantedAt = purchase.grantedAt || new Date();
+    purchase.status = 'paid';
+    purchase.grantedAt = new Date();
 
     await player.save();
     await purchase.save();
-    emitPlayerUpdate(player);
 
-    return res.json({ ok: true, status: 'approved', granted: true });
+    return res.json({ ok: true, granted: true });
   } catch (error) {
     console.error('[MP_WEBHOOK]', error);
-    return res.status(error.status || 500).json({
-      error: error.message || 'Erro ao processar webhook Mercado Pago',
-      reason: error.reason || 'mp_webhook_error',
-      details: error.details,
-    });
+    return res.status(500).json({ error: 'webhook_error' });
   }
 }

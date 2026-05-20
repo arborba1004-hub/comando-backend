@@ -30,10 +30,7 @@ export async function createConvoyCheckout(req, res) {
     }
 
     if (!isRealMoneyConvoy(convoy)) {
-      return res.status(400).json({
-        error: 'Este comboio não é vendido por dinheiro real.',
-        reason: 'not_real_money_convoy',
-      });
+      return res.status(400).json({ error: 'Este comboio não é vendido por dinheiro real.', reason: 'not_real_money_convoy' });
     }
 
     if (playerOwnsConvoy(player, convoy.id)) {

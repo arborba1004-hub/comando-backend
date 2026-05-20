@@ -24,6 +24,7 @@ import factionRoutes from './routes/factionRoutes.js';
 import shopRoutes from './routes/shopRoutes.js';
 import arsenalRoutes from './routes/arsenalRoutes.js';
 import fugaRoutes from './routes/fugaRoutes.js';
+import convoyRoutes from './routes/convoyRoutes.js';
 
 import adminRoutes from './routes/adminRoutes.js';
 import factionHelpRoutes from './routes/factionHelpRoutes.js';
@@ -83,6 +84,7 @@ app.use('/faction', factionRoutes);
 app.use('/shop', shopRoutes);
 app.use('/arsenal', arsenalRoutes);
 app.use('/fuga', fugaRoutes);
+app.use('/convoys', convoyRoutes);
 app.use('/', briberyRoutes);
 
 app.use('/admin', adminRoutes);

@@ -224,6 +224,15 @@ export function mergePlayerState(incoming = {}) {
       ...ensureObject(incoming.accessories),
     },
 
+    convoys: {
+      ownedSkinIds: Array.isArray(incoming.convoys?.ownedSkinIds)
+        ? Array.from(new Set(['comboio_padrao', ...incoming.convoys.ownedSkinIds.map(String)]))
+        : defaults.convoys.ownedSkinIds,
+      equippedSkinId: incoming.convoys?.equippedSkinId
+        ? String(incoming.convoys.equippedSkinId)
+        : defaults.convoys.equippedSkinId,
+    },
+
     notifications: Array.isArray(incoming.notifications)
       ? incoming.notifications
       : defaults.notifications,

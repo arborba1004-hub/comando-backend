@@ -132,6 +132,11 @@ export function getDefaultPlayerState() {
       weapons: {},
     },
 
+    convoys: {
+      ownedSkinIds: ['comboio_padrao'],
+      equippedSkinId: 'comboio_padrao',
+    },
+
     notifications: [],
     attackHistory: [],
 

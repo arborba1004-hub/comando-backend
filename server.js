@@ -36,9 +36,40 @@ const server = createServer(app);
 initSocket(server);
 
 // Configuração de CORS
+// O jogo pode rodar no domínio final e também no preview/publicação do Wix Vibe.
+// Se o Render estiver preso a apenas um FRONTEND_URL, o clique de compra real falha no browser
+// antes mesmo de chegar no backend.
+function normalizeOrigin(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (env.FRONTEND_URL === '*') return true;
+
+  const cleanOrigin = normalizeOrigin(origin);
+  const configured = String(env.FRONTEND_URL || '')
+    .split(',')
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+  if (configured.includes(cleanOrigin)) return true;
+
+  // Preview/publicação padrão do Wix Vibe. Ex.: https://arborba81.wix-vibe-site.com
+  if (/^https:\/\/[a-z0-9-]+\.wix-vibe-site\.com$/i.test(cleanOrigin)) return true;
+
+  // Domínio final usado no teste da loja.
+  if (cleanOrigin === 'https://papoplay.com' || cleanOrigin === 'https://www.papoplay.com') return true;
+
+  return false;
+}
+
 app.use(
   cors({
-    origin: env.FRONTEND_URL === '*' ? true : env.FRONTEND_URL,
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      return callback(new Error(`Origem CORS não permitida: ${origin}`));
+    },
     credentials: true,
   })
 );

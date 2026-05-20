@@ -44,6 +44,20 @@ const purchasedAccessorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const convoysSchema = new mongoose.Schema(
+  {
+    ownedSkinIds: {
+      type: [String],
+      default: ['comboio_padrao'],
+    },
+    equippedSkinId: {
+      type: String,
+      default: 'comboio_padrao',
+    },
+  },
+  { _id: false }
+);
+
 const notificationSchema = new mongoose.Schema(
   {
     id: { type: String, required: true },
@@ -334,6 +348,15 @@ const playerSchema = new mongoose.Schema(
     accessories: {
       vehicles: { type: Object, default: {} },
       weapons: { type: Object, default: {} },
+    },
+
+    // Comboios visuais comprados/equipados para animação de ataque.
+    convoys: {
+      type: convoysSchema,
+      default: () => ({
+        ownedSkinIds: ['comboio_padrao'],
+        equippedSkinId: 'comboio_padrao',
+      }),
     },
 
     notifications: {

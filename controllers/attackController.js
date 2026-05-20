@@ -13,6 +13,7 @@ import {
   resolveSelectedMemberIdsForAttack,
 } from '../services/attack/resolveAttack.js';
 import { buildAttackReport } from '../services/attack/buildAttackReport.js';
+import { requireOwnedConvoy } from '../utils/convoyInventory.js';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // UTILS
@@ -684,6 +685,17 @@ export async function startBattle(req, res) {
       return res.status(400).json({ error: 'Seleção de ataque vazia' });
     }
 
+    let safeConvoySkinId = 'comboio_padrao';
+    try {
+      safeConvoySkinId = requireOwnedConvoy(attacker, convoySkinId || 'comboio_padrao').id;
+    } catch (convoyError) {
+      return res.status(convoyError.status || 403).json({
+        error: convoyError.message || 'Comboio não autorizado',
+        reason: convoyError.reason || 'convoy_not_allowed',
+        skinId: convoyError.skinId,
+      });
+    }
+
     const resolvedMemberIds = resolveSelectedMemberIdsForAttack({
       attacker:          attacker.toObject(),
       selection:         safeSelection,
@@ -734,10 +746,6 @@ export async function startBattle(req, res) {
     bumpVersion(attacker);
     await attacker.save();
     emitPlayerAndGangUpdate(attacker);
-
-    const safeConvoySkinId = (typeof convoySkinId === 'string' && convoySkinId.trim())
-      ? convoySkinId.trim()
-      : 'comboio_padrao';
 
     let attack;
     try {

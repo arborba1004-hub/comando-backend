@@ -25,5 +25,5 @@ export const env = {
   MP_PUBLIC_KEY: process.env.MP_PUBLIC_KEY || '',
   MP_ENV: process.env.MP_ENV || 'sandbox',
   MP_WEBHOOK_SECRET: process.env.MP_WEBHOOK_SECRET || '',
-  BACKEND_URL: process.env.BACKEND_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
+  BACKEND_URL: process.env.BACKEND_URL || '',
 };

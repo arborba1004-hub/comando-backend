@@ -6,7 +6,7 @@ const realMoneyPurchaseSchema = new mongoose.Schema({
   provider: { type: String, default: 'mercadopago', index: true },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'paid', 'rejected', 'cancelled', 'refunded', 'failed'],
+    enum: ['pending', 'approved', 'paid', 'rejected', 'cancelled', 'refunded', 'failed', 'in_process', 'authorized'],
     default: 'pending',
     index: true,
   },

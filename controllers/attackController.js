@@ -102,6 +102,7 @@ function buildResponse(attack) {
     report:             attack.report || null,
     memberCount:        getMemberCountFromAttack(attack),
     attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',
+    acceleratorUses: attack.acceleratorUses || 0,
   };
 }
 
@@ -483,6 +484,7 @@ async function resolveAttackDocument(attack) {
       attackerId:           String(attack.attackerId),
       attackerName:         String(attack.attackerName || ''),
       attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',
+    acceleratorUses: attack.acceleratorUses || 0,
       memberCount:          getMemberCountFromAttack(attack),
 
       // Onde o squad estava (centro do alvo)
@@ -985,6 +987,7 @@ export async function getActiveBattles(req, res) {
         routeDistanceTiles: attack.routeDistanceTiles,
         memberCount,
         attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',
+    acceleratorUses: attack.acceleratorUses || 0,
       };
     }));
   } catch (err) {

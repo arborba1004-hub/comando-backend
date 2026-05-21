@@ -44,6 +44,22 @@ const purchasedAccessorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+
+const convoyAcceleratorsSchema = new mongoose.Schema(
+  {
+    twoX: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const azideiaDailySchema = new mongoose.Schema(
+  {
+    date: { type: String, default: '' },
+    x9Kills: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
 const convoysSchema = new mongoose.Schema(
   {
     ownedSkinIds: {
@@ -54,13 +70,6 @@ const convoysSchema = new mongoose.Schema(
       type: String,
       default: 'comboio_padrao',
     },
-  },
-  { _id: false }
-);
-
-const convoyAcceleratorsSchema = new mongoose.Schema(
-  {
-    twoX: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -357,6 +366,16 @@ const playerSchema = new mongoose.Schema(
       weapons: { type: Object, default: {} },
     },
 
+    convoyAccelerators: {
+      type: convoyAcceleratorsSchema,
+      default: () => ({ twoX: 0 }),
+    },
+
+    azideiaDaily: {
+      type: azideiaDailySchema,
+      default: () => ({ date: '', x9Kills: 0 }),
+    },
+
     // Comboios visuais comprados/equipados para animação de ataque.
     convoys: {
       type: convoysSchema,
@@ -364,12 +383,6 @@ const playerSchema = new mongoose.Schema(
         ownedSkinIds: ['comboio_padrao'],
         equippedSkinId: 'comboio_padrao',
       }),
-    },
-
-    // Aceleradores consumíveis de comboio. twoX reduz pela metade o tempo restante da ida.
-    convoyAccelerators: {
-      type: convoyAcceleratorsSchema,
-      default: () => ({ twoX: 0 }),
     },
 
     notifications: {

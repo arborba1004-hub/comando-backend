@@ -24,7 +24,7 @@ const chatMessageSchema = new mongoose.Schema(
 
     messageType: {
       type: String,
-      enum: ['text', 'faction_help_request', 'faction_help_update'],
+      enum: ['text', 'faction_help_request', 'faction_help_update', 'azideia_reward'],
       default: 'text',
       index: true,
     },

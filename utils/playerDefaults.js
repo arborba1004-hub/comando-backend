@@ -132,13 +132,18 @@ export function getDefaultPlayerState() {
       weapons: {},
     },
 
+    convoyAccelerators: {
+      twoX: 0,
+    },
+
+    azideiaDaily: {
+      date: '',
+      x9Kills: 0,
+    },
+
     convoys: {
       ownedSkinIds: ['comboio_padrao'],
       equippedSkinId: 'comboio_padrao',
-    },
-
-    convoyAccelerators: {
-      twoX: 0,
     },
 
     notifications: [],

@@ -224,6 +224,15 @@ export function mergePlayerState(incoming = {}) {
       ...ensureObject(incoming.accessories),
     },
 
+    convoyAccelerators: {
+      twoX: Math.max(0, Math.floor(toNumber(incoming.convoyAccelerators?.twoX, defaults.convoyAccelerators?.twoX ?? 0))),
+    },
+
+    azideiaDaily: {
+      date: incoming.azideiaDaily?.date ? String(incoming.azideiaDaily.date) : defaults.azideiaDaily?.date ?? '',
+      x9Kills: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.x9Kills, defaults.azideiaDaily?.x9Kills ?? 0))),
+    },
+
     convoys: {
       ownedSkinIds: Array.isArray(incoming.convoys?.ownedSkinIds)
         ? Array.from(new Set(['comboio_padrao', ...incoming.convoys.ownedSkinIds.map(String)]))
@@ -231,10 +240,6 @@ export function mergePlayerState(incoming = {}) {
       equippedSkinId: incoming.convoys?.equippedSkinId
         ? String(incoming.convoys.equippedSkinId)
         : defaults.convoys.equippedSkinId,
-    },
-
-    convoyAccelerators: {
-      twoX: Math.max(0, Math.floor(Number(incoming.convoyAccelerators?.twoX ?? defaults.convoyAccelerators?.twoX ?? 0))),
     },
 
     notifications: Array.isArray(incoming.notifications)

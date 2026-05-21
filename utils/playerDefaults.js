@@ -137,6 +137,10 @@ export function getDefaultPlayerState() {
       equippedSkinId: 'comboio_padrao',
     },
 
+    convoyAccelerators: {
+      twoX: 0,
+    },
+
     notifications: [],
     attackHistory: [],
 

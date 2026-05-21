@@ -233,6 +233,10 @@ export function mergePlayerState(incoming = {}) {
         : defaults.convoys.equippedSkinId,
     },
 
+    convoyAccelerators: {
+      twoX: Math.max(0, Math.floor(Number(incoming.convoyAccelerators?.twoX ?? defaults.convoyAccelerators?.twoX ?? 0))),
+    },
+
     notifications: Array.isArray(incoming.notifications)
       ? incoming.notifications
       : defaults.notifications,

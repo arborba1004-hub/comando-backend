@@ -3,6 +3,7 @@ import Player from '../models/Player.js';
 import Faction from '../models/Faction.js';
 import ChatMessage from '../models/ChatMessage.js';
 import AzideiaTarget from '../models/AzideiaTarget.js';
+import AzideiaMission from '../models/AzideiaMission.js';
 import AzideiaRewardBatch from '../models/AzideiaRewardBatch.js';
 import { AZIDEIA_X9 } from '../data/azideiaCatalog.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
@@ -11,6 +12,7 @@ import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
 
 const GRID_WIDTH = 120;
 const GRID_HEIGHT = 120;
+const MAX_PARALLEL_AZIDEIA_CONVOYS = 3;
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
@@ -63,6 +65,7 @@ function normalizeTarget(target) {
     tileX: clampTile(target.tileX),
     tileY: clampTile(target.tileY),
     costDirtyMoney: AZIDEIA_X9.costDirtyMoney,
+    reserved: Boolean(target.reservedByPlayerId),
   };
 }
 
@@ -82,6 +85,32 @@ function normalizeMessage(message) {
     system: message.system ?? false,
     messageType: message.messageType ?? 'text',
     metadata: message.metadata ?? {},
+  };
+}
+
+function normalizeMission(mission) {
+  if (!mission) return null;
+  return {
+    missionId: String(mission._id),
+    status: mission.status,
+    targetId: String(mission.targetId),
+    targetType: mission.targetType || 'x9',
+    targetName: mission.targetName || 'X9',
+    targetModelUrl: mission.targetModelUrl || AZIDEIA_X9.modelUrl,
+    targetTileX: clampTile(mission.targetTileX),
+    targetTileY: clampTile(mission.targetTileY),
+    originTileX: clampTile(mission.originTileX),
+    originTileY: clampTile(mission.originTileY),
+    routeTiles: mission.routeTiles || [],
+    returnRouteTiles: mission.returnRouteTiles || [],
+    travelDurationMs: Math.max(0, Math.floor(toNumber(mission.travelDurationMs, 0))),
+    returnDurationMs: Math.max(0, Math.floor(toNumber(mission.returnDurationMs, 0))),
+    launchedAtIso: mission.launchedAtIso,
+    arriveAtIso: mission.arriveAtIso,
+    returnAtIso: mission.returnAtIso,
+    costDirtyMoney: Math.max(0, Math.floor(toNumber(mission.costDirtyMoney, 0))),
+    rewardType: mission.rewardType || AZIDEIA_X9.rewardType,
+    rewardQuantity: Math.max(0, Math.floor(toNumber(mission.rewardQuantity, AZIDEIA_X9.rewardQuantity))),
   };
 }
 
@@ -106,6 +135,32 @@ function buildDiagonalRoute(fromX, fromY, toX, toY) {
   }
 
   return route;
+}
+
+function reverseRoute(routeTiles = []) {
+  return [...routeTiles].reverse().map((step) => ({ tileX: clampTile(step.tileX), tileY: clampTile(step.tileY) }));
+}
+
+function getAzideiaTravelDuration(routeTiles, player) {
+  const tileCount = Math.max(1, (Array.isArray(routeTiles) ? routeTiles.length : 1) - 1);
+  const barracoLevel = Math.max(1, Math.floor(toNumber(player?.niveis?.barracoLevel, 1)));
+  const levelSpeedMultiplier = 1 + (barracoLevel - 1) * 0.025;
+  const msPerTile = Math.max(180, Math.round(520 / levelSpeedMultiplier));
+  return Math.max(1400, Math.min(18000, tileCount * msPerTile));
+}
+
+function getActiveGangMembers(player) {
+  return Array.isArray(player?.gang?.members)
+    ? player.gang.members.filter((member) => member?.status === 'ativo')
+    : [];
+}
+
+async function getActiveAzideiaMissionCounts(playerId) {
+  const [total, travelling] = await Promise.all([
+    AzideiaMission.countDocuments({ playerId: String(playerId), status: { $in: ['travelling', 'returning'] } }),
+    AzideiaMission.countDocuments({ playerId: String(playerId), status: 'travelling' }),
+  ]);
+  return { total, travelling };
 }
 
 async function usedTiles() {
@@ -140,6 +195,9 @@ async function createRandomX9Target(occupied = null) {
     tileX,
     tileY,
     active: true,
+    reservedByPlayerId: null,
+    reservedByMissionId: null,
+    reservedAt: null,
     spawnedAt: new Date().toISOString(),
   });
 }
@@ -154,13 +212,14 @@ async function ensureActiveX9Targets() {
   }
 }
 
-function buildDailyEnvelope(player) {
+function buildDailyEnvelope(player, travellingReservations = 0) {
   const daily = ensureAzideiaDaily(player);
   const dailyKills = Math.max(0, Math.floor(toNumber(daily.x9Kills, 0)));
+  const reserved = Math.max(0, Math.floor(toNumber(travellingReservations, 0)));
   return {
     dailyKills,
     dailyLimit: AZIDEIA_X9.dailyLimitPerPlayer,
-    remainingToday: Math.max(0, AZIDEIA_X9.dailyLimitPerPlayer - dailyKills),
+    remainingToday: Math.max(0, AZIDEIA_X9.dailyLimitPerPlayer - dailyKills - reserved),
   };
 }
 
@@ -172,15 +231,35 @@ export async function getX9Targets(req, res) {
       .limit(AZIDEIA_X9.activeCount)
       .lean();
 
-    const daily = buildDailyEnvelope(req.player);
+    const activeCounts = await getActiveAzideiaMissionCounts(req.player._id);
+    const daily = buildDailyEnvelope(req.player, activeCounts.travelling);
     return res.json({
       targets: targets.map(normalizeTarget),
       costDirtyMoney: AZIDEIA_X9.costDirtyMoney,
+      activeAzideiaConvoys: activeCounts.total,
+      maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
       ...daily,
     });
   } catch (error) {
     console.error('[AZIDEIA_X9_TARGETS]', error);
     return res.status(500).json({ error: 'Erro ao buscar X9 no mapa' });
+  }
+}
+
+export async function getActiveAzideiaMissions(req, res) {
+  try {
+    const player = req.player;
+    if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    const missions = await AzideiaMission.find({
+      playerId: String(player._id),
+      status: { $in: ['travelling', 'returning'] },
+    }).sort({ createdAt: 1 });
+
+    return res.json({ missions: missions.map(normalizeMission) });
+  } catch (error) {
+    console.error('[AZIDEIA_ACTIVE_MISSIONS]', error);
+    return res.status(500).json({ error: 'Erro ao buscar Azidéias ativas' });
   }
 }
 
@@ -194,12 +273,31 @@ export async function attackX9(req, res) {
       return res.status(400).json({ error: 'X9 inválido', reason: 'invalid_target_id' });
     }
 
+    const activeCounts = await getActiveAzideiaMissionCounts(player._id);
+    const activeMembers = getActiveGangMembers(player);
+
+    if (activeCounts.total >= MAX_PARALLEL_AZIDEIA_CONVOYS) {
+      return res.status(429).json({
+        error: 'Você já tem 3 comboios Azidéia em andamento.',
+        reason: 'max_parallel_azideia_convoys',
+        activeAzideiaConvoys: activeCounts.total,
+        maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
+      });
+    }
+
+    if (activeMembers.length <= 0) {
+      return res.status(400).json({
+        error: 'Você precisa de pelo menos 1 membro ativo da gangue para enviar um comboio Azidéia.',
+        reason: 'no_active_gang_member',
+      });
+    }
+
     const daily = ensureAzideiaDaily(player);
-    if (daily.x9Kills >= AZIDEIA_X9.dailyLimitPerPlayer) {
+    if (daily.x9Kills + activeCounts.travelling >= AZIDEIA_X9.dailyLimitPerPlayer) {
       return res.status(429).json({
         error: 'Limite diário de Azidéia atingido.',
         reason: 'daily_limit_reached',
-        ...buildDailyEnvelope(player),
+        ...buildDailyEnvelope(player, activeCounts.travelling),
       });
     }
 
@@ -214,119 +312,295 @@ export async function attackX9(req, res) {
       });
     }
 
-    const target = await AzideiaTarget.findOneAndUpdate(
-      { _id: targetId, type: 'x9', active: true },
-      {
-        $set: {
-          active: false,
-          killedByPlayerId: String(player._id),
-          killedByPlayerName: String(player.name || 'Jogador'),
-          killedAt: new Date().toISOString(),
-        },
-      },
-      { new: true }
-    );
+    const target = await AzideiaTarget.findOne({
+      _id: targetId,
+      type: 'x9',
+      active: true,
+      $or: [
+        { reservedByPlayerId: null },
+        { reservedByPlayerId: { $exists: false } },
+        { reservedByPlayerId: '' },
+      ],
+    });
 
     if (!target) {
       await ensureActiveX9Targets();
-      return res.status(409).json({ error: 'Esse X9 já foi eliminado.', reason: 'target_already_killed' });
+      return res.status(409).json({ error: 'Esse X9 já está na mira de outro comboio.', reason: 'target_already_reserved' });
     }
 
+    const originTileX = clampTile(player.mapPosition?.tileX ?? 0);
+    const originTileY = clampTile(player.mapPosition?.tileY ?? 0);
+    const routeTiles = buildDiagonalRoute(originTileX, originTileY, target.tileX, target.tileY);
+    const returnRouteTiles = reverseRoute(routeTiles);
+    const travelDurationMs = getAzideiaTravelDuration(routeTiles, player);
+    const returnDurationMs = travelDurationMs;
+    const launchedAt = Date.now();
+    const arriveAtIso = new Date(launchedAt + travelDurationMs).toISOString();
+    const returnAtIso = new Date(launchedAt + travelDurationMs + returnDurationMs).toISOString();
+    const selectedMember = activeMembers[0];
+
     player.balances.dirtyMoney = Math.max(0, dirtyMoney - AZIDEIA_X9.costDirtyMoney);
-    daily.x9Kills += 1;
-    const accelerators = ensureConvoyAccelerators(player);
-    accelerators.twoX += AZIDEIA_X9.rewardQuantity;
+
+    const mission = await AzideiaMission.create({
+      playerId: String(player._id),
+      playerName: String(player.name || 'Jogador'),
+      factionId: player.factionId ? String(player.factionId) : null,
+      targetId: String(target._id),
+      targetType: 'x9',
+      targetName: target.name || AZIDEIA_X9.name,
+      targetModelUrl: target.modelUrl || AZIDEIA_X9.modelUrl,
+      targetTileX: clampTile(target.tileX),
+      targetTileY: clampTile(target.tileY),
+      originTileX,
+      originTileY,
+      routeTiles,
+      returnRouteTiles,
+      travelDurationMs,
+      returnDurationMs,
+      costDirtyMoney: AZIDEIA_X9.costDirtyMoney,
+      rewardType: AZIDEIA_X9.rewardType,
+      rewardQuantity: AZIDEIA_X9.rewardQuantity,
+      selectedGangMemberId: selectedMember?.id || null,
+      status: 'travelling',
+      launchedAtIso: new Date(launchedAt).toISOString(),
+      arriveAtIso,
+      returnAtIso,
+    });
+
+    target.reservedByPlayerId = String(player._id);
+    target.reservedByMissionId = String(mission._id);
+    target.reservedAt = new Date(launchedAt).toISOString();
+    await target.save();
+
+    if (selectedMember) {
+      selectedMember.status = 'marchando';
+      selectedMember.activeAttackId = `azideia:${mission._id}`;
+      selectedMember.marchingUntil = returnAtIso;
+    }
 
     if (typeof player.markModified === 'function') {
       player.markModified('balances');
+      player.markModified('gang');
       player.markModified('azideiaDaily');
-      player.markModified('convoyAccelerators');
-    }
-
-    let factionReward = null;
-    if (player.factionId) {
-      const faction = await Faction.findOne({ id: String(player.factionId) });
-      if (faction && Array.isArray(faction.members) && faction.members.length > 0) {
-        const memberIds = Array.from(new Set(faction.members.map((member) => String(member.playerId)).filter(Boolean)));
-        if (memberIds.length > 0) {
-          const batch = await AzideiaRewardBatch.create({
-            factionId: String(faction.id),
-            rewardType: AZIDEIA_X9.rewardType,
-            quantityPerMember: AZIDEIA_X9.rewardQuantity,
-            memberIds,
-            sourceTargetType: 'x9',
-            sourceTargetId: String(target._id),
-            killerId: String(player._id),
-            killerName: String(player.name || 'Jogador'),
-          });
-
-          factionReward = {
-            factionId: String(faction.id),
-            rewardType: AZIDEIA_X9.rewardType,
-            quantityPerMember: AZIDEIA_X9.rewardQuantity,
-            memberCount: memberIds.length,
-            batchId: String(batch._id),
-          };
-
-          const message = await ChatMessage.create({
-            channel: 'faccao',
-            senderId: 'system:azideia',
-            senderName: 'Azidéia',
-            factionId: String(faction.id),
-            body: `${player.name || 'Jogador'} eliminou um X9. A facção recebeu aceleradores para coletar.`,
-            read: false,
-            system: true,
-            messageType: 'azideia_reward',
-            metadata: {
-              batchId: String(batch._id),
-              targetType: 'x9',
-              rewardType: AZIDEIA_X9.rewardType,
-              quantityPerMember: AZIDEIA_X9.rewardQuantity,
-              memberCount: memberIds.length,
-              killerId: String(player._id),
-              killerName: String(player.name || 'Jogador'),
-              iconUrl: AZIDEIA_X9.iconUrl,
-            },
-          });
-
-          emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
-        }
-      }
     }
 
     bumpVersion(player);
     await player.save();
     emitPlayerUpdate(player);
 
-    await ensureActiveX9Targets();
-
-    const routeTiles = buildDiagonalRoute(
-      player.mapPosition?.tileX ?? 0,
-      player.mapPosition?.tileY ?? 0,
-      target.tileX,
-      target.tileY
-    );
-
-    const travelDurationMs = Math.max(1400, Math.min(8000, (routeTiles.length - 1) * 280));
-
     return res.json({
       success: true,
+      phase: 'travelling',
+      ...normalizeMission(mission),
       targetId: String(target._id),
       targetType: 'x9',
       costDirtyMoney: AZIDEIA_X9.costDirtyMoney,
-      immediateReward: {
-        rewardType: AZIDEIA_X9.rewardType,
-        quantity: AZIDEIA_X9.rewardQuantity,
-      },
-      factionReward,
-      routeTiles,
-      travelDurationMs,
-      ...buildDailyEnvelope(player),
+      immediateReward: null,
+      factionReward: null,
+      activeAzideiaConvoys: activeCounts.total + 1,
+      maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
+      ...buildDailyEnvelope(player, activeCounts.travelling + 1),
       player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
     });
   } catch (error) {
     console.error('[AZIDEIA_ATTACK_X9]', error);
     return res.status(500).json({ error: 'Erro ao lançar Azidéia contra X9' });
+  }
+}
+
+async function grantAzideiaRewards({ player, mission }) {
+  const accelerators = ensureConvoyAccelerators(player);
+  accelerators.twoX += AZIDEIA_X9.rewardQuantity;
+
+  let factionReward = null;
+  if (player.factionId) {
+    const faction = await Faction.findOne({ id: String(player.factionId) });
+    if (faction && Array.isArray(faction.members) && faction.members.length > 0) {
+      const memberIds = Array.from(new Set(faction.members.map((member) => String(member.playerId)).filter(Boolean)));
+      if (memberIds.length > 0) {
+        const batch = await AzideiaRewardBatch.create({
+          factionId: String(faction.id),
+          rewardType: AZIDEIA_X9.rewardType,
+          quantityPerMember: AZIDEIA_X9.rewardQuantity,
+          memberIds,
+          sourceTargetType: 'x9',
+          sourceTargetId: String(mission.targetId),
+          killerId: String(player._id),
+          killerName: String(player.name || 'Jogador'),
+        });
+
+        mission.factionRewardBatchId = String(batch._id);
+        factionReward = {
+          factionId: String(faction.id),
+          rewardType: AZIDEIA_X9.rewardType,
+          quantityPerMember: AZIDEIA_X9.rewardQuantity,
+          memberCount: memberIds.length,
+          batchId: String(batch._id),
+        };
+
+        const message = await ChatMessage.create({
+          channel: 'faccao',
+          senderId: 'system:azideia',
+          senderName: 'Azidéia',
+          factionId: String(faction.id),
+          body: `${player.name || 'Jogador'} eliminou um X9. A facção recebeu aceleradores para coletar.`,
+          read: false,
+          system: true,
+          messageType: 'azideia_reward',
+          metadata: {
+            batchId: String(batch._id),
+            targetType: 'x9',
+            rewardType: AZIDEIA_X9.rewardType,
+            quantityPerMember: AZIDEIA_X9.rewardQuantity,
+            memberCount: memberIds.length,
+            killerId: String(player._id),
+            killerName: String(player.name || 'Jogador'),
+            iconUrl: AZIDEIA_X9.iconUrl,
+          },
+        });
+
+        emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
+      }
+    }
+  }
+
+  return factionReward;
+}
+
+export async function confirmAzideiaMissionArrival(req, res) {
+  try {
+    const player = req.player;
+    if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    const missionId = String(req.params?.missionId || req.body?.missionId || '').trim();
+    if (!mongoose.Types.ObjectId.isValid(missionId)) {
+      return res.status(400).json({ error: 'Missão Azidéia inválida', reason: 'invalid_mission_id' });
+    }
+
+    const mission = await AzideiaMission.findOne({ _id: missionId, playerId: String(player._id) });
+    if (!mission) return res.status(404).json({ error: 'Missão Azidéia não encontrada', reason: 'mission_not_found' });
+
+    if (mission.status === 'completed' || mission.status === 'returning') {
+      return res.json({
+        success: true,
+        phase: mission.status,
+        ...normalizeMission(mission),
+        player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
+      });
+    }
+
+    const now = Date.now();
+    const arriveAtMs = Date.parse(mission.arriveAtIso || '') || 0;
+    if (arriveAtMs && now + 1500 < arriveAtMs) {
+      return res.status(409).json({
+        error: 'O comboio ainda não chegou no X9.',
+        reason: 'convoy_not_arrived',
+        arriveAtIso: mission.arriveAtIso,
+      });
+    }
+
+    const target = await AzideiaTarget.findOne({
+      _id: mission.targetId,
+      type: 'x9',
+      reservedByMissionId: String(mission._id),
+    });
+
+    if (target && target.active) {
+      target.active = false;
+      target.killedByPlayerId = String(player._id);
+      target.killedByPlayerName = String(player.name || 'Jogador');
+      target.killedAt = new Date().toISOString();
+      await target.save();
+    }
+
+    const daily = ensureAzideiaDaily(player);
+    daily.x9Kills += 1;
+
+    const factionReward = mission.rewardGrantedAtIso
+      ? null
+      : await grantAzideiaRewards({ player, mission });
+
+    mission.status = 'returning';
+    mission.arrivedAtIso = new Date().toISOString();
+    mission.rewardGrantedAtIso = mission.rewardGrantedAtIso || new Date().toISOString();
+
+    if (typeof player.markModified === 'function') {
+      player.markModified('azideiaDaily');
+      player.markModified('convoyAccelerators');
+    }
+
+    bumpVersion(player);
+    await mission.save();
+    await player.save();
+    emitPlayerUpdate(player);
+    await ensureActiveX9Targets();
+
+    const travelling = await AzideiaMission.countDocuments({ playerId: String(player._id), status: 'travelling' });
+
+    return res.json({
+      success: true,
+      phase: 'returning',
+      ...normalizeMission(mission),
+      immediateReward: {
+        rewardType: AZIDEIA_X9.rewardType,
+        quantity: AZIDEIA_X9.rewardQuantity,
+      },
+      factionReward,
+      ...buildDailyEnvelope(player, travelling),
+      player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
+    });
+  } catch (error) {
+    console.error('[AZIDEIA_MISSION_ARRIVAL]', error);
+    return res.status(500).json({ error: 'Erro ao confirmar chegada da Azidéia' });
+  }
+}
+
+export async function confirmAzideiaMissionReturn(req, res) {
+  try {
+    const player = req.player;
+    if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    const missionId = String(req.params?.missionId || req.body?.missionId || '').trim();
+    if (!mongoose.Types.ObjectId.isValid(missionId)) {
+      return res.status(400).json({ error: 'Missão Azidéia inválida', reason: 'invalid_mission_id' });
+    }
+
+    const mission = await AzideiaMission.findOne({ _id: missionId, playerId: String(player._id) });
+    if (!mission) return res.status(404).json({ error: 'Missão Azidéia não encontrada', reason: 'mission_not_found' });
+
+    if (mission.status !== 'completed') {
+      mission.status = 'completed';
+      mission.completedAtIso = new Date().toISOString();
+    }
+
+    if (Array.isArray(player.gang?.members)) {
+      for (const member of player.gang.members) {
+        if (String(member?.activeAttackId || '') === `azideia:${mission._id}`) {
+          member.status = 'ativo';
+          member.activeAttackId = null;
+          member.marchingUntil = null;
+        }
+      }
+    }
+
+    if (typeof player.markModified === 'function') player.markModified('gang');
+    bumpVersion(player);
+    await mission.save();
+    await player.save();
+    emitPlayerUpdate(player);
+
+    const activeCounts = await getActiveAzideiaMissionCounts(player._id);
+
+    return res.json({
+      success: true,
+      phase: 'completed',
+      ...normalizeMission(mission),
+      activeAzideiaConvoys: activeCounts.total,
+      player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
+    });
+  } catch (error) {
+    console.error('[AZIDEIA_MISSION_RETURN]', error);
+    return res.status(500).json({ error: 'Erro ao confirmar retorno da Azidéia' });
   }
 }
 

@@ -104,6 +104,10 @@ const attackSchema = new mongoose.Schema(
     timePerTileMs: { type: Number, default: 0, min: 0 },
     totalDurationMs: { type: Number, default: 0, min: 0 },
 
+    // Quantas vezes o atacante consumiu acelerador 2x nesta ida.
+    acceleratorUses: { type: Number, default: 0, min: 0 },
+    acceleratedAtIso: { type: String, default: null },
+
     launchedAtIso: { type: String, default: () => new Date().toISOString() },
     arriveAtIso: { type: String, default: null },
     resolvedAtIso: { type: String, default: null },

@@ -58,6 +58,13 @@ const convoysSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const convoyAcceleratorsSchema = new mongoose.Schema(
+  {
+    twoX: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
 const notificationSchema = new mongoose.Schema(
   {
     id: { type: String, required: true },
@@ -357,6 +364,12 @@ const playerSchema = new mongoose.Schema(
         ownedSkinIds: ['comboio_padrao'],
         equippedSkinId: 'comboio_padrao',
       }),
+    },
+
+    // Aceleradores consumíveis de comboio. twoX reduz pela metade o tempo restante da ida.
+    convoyAccelerators: {
+      type: convoyAcceleratorsSchema,
+      default: () => ({ twoX: 0 }),
     },
 
     notifications: {

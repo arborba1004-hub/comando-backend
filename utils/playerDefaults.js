@@ -125,6 +125,8 @@ export function getDefaultPlayerState() {
       playerNameFont: 'oswald',
       playerNameFontSize: '1.875rem',
       playerNameColor: '#1a1205',
+      customName: '',
+      customAvatar: '',
     },
 
     ownedVehicles: [],

@@ -21,10 +21,13 @@ function clamp(value, min, max) {
 function projectPlayerForMap(player) {
   const tileX = player.mapPosition?.tileX ?? 0;
   const tileY = player.mapPosition?.tileY ?? 0;
+  const customName = player.headerCustomization?.customName;
+  const customAvatar = player.headerCustomization?.customAvatar;
 
   return {
     id: String(player._id),
-    name: player.name,
+    name: customName || player.name,
+    avatarUrl: customAvatar || player.avatar || null,
     factionId: player.factionId || null,
     tileX,
     tileY,
@@ -73,6 +76,8 @@ export async function getAllPlayers(req, res) {
       {
         _id: 1,
         name: 1,
+        avatar: 1,
+        headerCustomization: 1,
         factionId: 1,
         mapPosition: 1,
         power: 1,
@@ -115,6 +120,8 @@ export async function getMapPlayersSnapshot(req, res) {
       {
         _id: 1,
         name: 1,
+        avatar: 1,
+        headerCustomization: 1,
         factionId: 1,
         mapPosition: 1,
         power: 1,

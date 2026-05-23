@@ -225,7 +225,7 @@ export function initSocket(server) {
           if (!targetId) { send(ws, 'error', { code: 'INVALID_PLAYER' }); return; }
 
           const target = await Player.findById(targetId)
-            .select('_id name avatar niveis mapPosition power factionId hierarchyBadge attackHistory')
+            .select('_id name avatar headerCustomization niveis mapPosition power factionId hierarchyBadge attackHistory')
             .lean();
           if (!target) { send(ws, 'error', { code: 'PLAYER_NOT_FOUND' }); return; }
 
@@ -241,8 +241,8 @@ export function initSocket(server) {
 
           send(ws, 'barracoInfo', {
             playerId:       String(target._id),
-            playerName:     target.name || 'Jogador',
-            avatarUrl:      target.avatar || null,
+            playerName:     target.headerCustomization?.customName || target.name || 'Jogador',
+            avatarUrl:      target.headerCustomization?.customAvatar || target.avatar || null,
             barracoLevel:   target.niveis?.barracoLevel || 1,
             barracoName:    getBarracoName(target.niveis?.barracoLevel || 1),
             tileX:          target.mapPosition?.tileX || 0,

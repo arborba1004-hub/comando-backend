@@ -1,6 +1,11 @@
 import express from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import {
+  buildGangStatSnapshot,
+  removeGangStatSource,
+  upsertGangStatSource,
+} from '../services/gangStatisticsService.js';
+import {
   getOrCreateGangWar,
   handleApplyBattleLosses,
   handleCompleteTraining,
@@ -22,6 +27,76 @@ router.get('/me', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Erro em /gang-war/me:', error);
     return res.status(500).json({ error: error instanceof Error ? error.message : 'Erro ao carregar gangue' });
+  }
+});
+
+
+router.get('/stats', authMiddleware, async (req, res) => {
+  try {
+    const members = Array.isArray(req.player?.gang?.members) ? req.player.gang.members : [];
+    const statSources = Array.isArray(req.player?.gang?.statSources) ? req.player.gang.statSources : [];
+    const statSnapshot = buildGangStatSnapshot(members, statSources);
+
+    req.player.gang = req.player.gang || {};
+    req.player.gang.statSnapshot = statSnapshot;
+    req.player.gang.updatedAtIso = new Date().toISOString();
+    req.player.markModified('gang');
+    await req.player.save();
+
+    return res.json({
+      statSources,
+      statSnapshot,
+      gang: {
+        members: statSnapshot.members,
+        statSources,
+        statSnapshot,
+      },
+    });
+  } catch (error) {
+    console.error('Erro em /gang-war/stats:', error);
+    return res.status(500).json({ error: error instanceof Error ? error.message : 'Erro ao carregar estatísticas da gangue' });
+  }
+});
+
+router.post('/stats/source', authMiddleware, async (req, res) => {
+  try {
+    const { source, statSnapshot } = upsertGangStatSource(req.player, req.body || {});
+    await req.player.save();
+
+    return res.json({
+      source,
+      statSources: req.player.gang.statSources || [],
+      statSnapshot,
+      gang: {
+        members: statSnapshot.members,
+        statSources: req.player.gang.statSources || [],
+        statSnapshot,
+      },
+    });
+  } catch (error) {
+    console.error('Erro em /gang-war/stats/source:', error);
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Erro ao salvar fonte de estatística' });
+  }
+});
+
+router.delete('/stats/source/:sourceId', authMiddleware, async (req, res) => {
+  try {
+    const { removed, statSnapshot } = removeGangStatSource(req.player, req.params.sourceId);
+    await req.player.save();
+
+    return res.json({
+      removed,
+      statSources: req.player.gang.statSources || [],
+      statSnapshot,
+      gang: {
+        members: statSnapshot.members,
+        statSources: req.player.gang.statSources || [],
+        statSnapshot,
+      },
+    });
+  } catch (error) {
+    console.error('Erro em /gang-war/stats/source/:sourceId:', error);
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Erro ao remover fonte de estatística' });
   }
 });
 

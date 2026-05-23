@@ -1,5 +1,10 @@
 // services/attack/resolveAttack.js
 
+import {
+  buildGangStatSnapshot,
+  buildMemberStatSnapshot,
+} from '../gangStatisticsService.js';
+
 const MEMBER_TYPES = [
   'capanga', 'frente', 'executor', 'assassino',
   'muralha', 'certeiro', 'motorista', 'nitro',
@@ -326,42 +331,8 @@ export function resolveSelectedMemberIdsForAttack({ attacker, selection, selecte
 
 // ─── STATS DE GANGUE ─────────────────────────────────────────────────────────
 
-function computeGangStats(members) {
-  const active  = (members || []).filter((m) => m.status === 'ativo');
-  const feridos = (members || []).filter((m) => m.status === 'ferido').length;
-  const mortos  = (members || []).filter((m) => m.status === 'morto').length;
-
-  let rajada = 0, blindagem = 0, folego = 0, quebra = 0;
-
-  for (const m of active) {
-    const safeType  = MEMBER_TYPES.includes(String(m.type)) ? String(m.type) : 'capanga';
-    const safeLevel = clamp(toPositiveInt(m.level, 1), 1, 10);
-    const attr      = ATRIBUTOS_GANG[safeType][safeLevel];
-    rajada    += attr.rajada;
-    blindagem += attr.blindagem;
-    folego    += attr.folego;
-    quebra    += attr.quebra;
-  }
-
-  // Poder total — mesmo peso do frontend gangStore
-  const totalPower = Math.round(
-    rajada    * 1.35 +
-    blindagem * 1.10 +
-    folego    * 1.05 +
-    quebra    * 1.20
-  );
-
-  return {
-    totalMembers: (members || []).length,
-    ativos:       active.length,
-    feridos,
-    mortos,
-    rajada:    Math.round(rajada),
-    blindagem: Math.round(blindagem),
-    folego:    Math.round(folego),
-    quebra:    Math.round(quebra),
-    totalPower,
-  };
+function computeGangStats(members, statSources = []) {
+  return buildGangStatSnapshot(members, statSources).summary;
 }
 
 // ─── BAIXAS ───────────────────────────────────────────────────────────────────
@@ -430,9 +401,10 @@ function getAtributos(type, level) {
   return ATRIBUTOS_GANG[safeType][safeLevel];
 }
 
-function buildBattleUnits(side, members) {
+function buildBattleUnits(side, members, statSources = []) {
   return members.map((m, i) => {
-    const a = getAtributos(m.type, m.level);
+    const snapshot = buildMemberStatSnapshot(m, statSources);
+    const a = snapshot.effectiveStats;
     return {
       battleId:    `${side}_${m.id}_${i}`,
       persistedId: String(m.id),
@@ -444,6 +416,10 @@ function buildBattleUnits(side, members) {
       quebra:      Math.max(0, a.quebra),
       folegoBase:  Math.max(1, a.folego),
       folegoAtual: Math.max(1, a.folego),
+      baseAttributes: snapshot.baseAttributes,
+      bonusPercent: snapshot.bonusPercent,
+      bonusFlat: snapshot.bonusFlat,
+      activeStatSources: snapshot.activeStatSources,
       damageDealt: 0,
     };
   });
@@ -540,8 +516,11 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
     .map(asBattleActive);
 
   // Stats pré-batalha (para winChance e relatório)
-  const attackerGangStats = computeGangStats(attackerMarch);
-  const defenderGangStats = computeGangStats(defenderMarch);
+  const attackerStatSources = Array.isArray(attacker?.gang?.statSources) ? attacker.gang.statSources : [];
+  const defenderStatSources = Array.isArray(defender?.gang?.statSources) ? defender.gang.statSources : [];
+
+  const attackerGangStats = computeGangStats(attackerMarch, attackerStatSources);
+  const defenderGangStats = computeGangStats(defenderMarch, defenderStatSources);
 
   // WinChance: poder ofensivo do atacante vs poder defensivo do defensor
   const attackPower  = attackerGangStats.rajada * 1.20 + attackerGangStats.quebra  * 1.10;
@@ -550,8 +529,8 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
   const winChance    = clamp(rawChance, 0.15, 0.85);
 
   // ── Round-by-round ──────────────────────────────────────────────────────
-  const attackerUnits = buildBattleUnits('atacante', attackerMarch);
-  const defenderUnits = buildBattleUnits('defensor', defenderMarch);
+  const attackerUnits = buildBattleUnits('atacante', attackerMarch, attackerStatSources);
+  const defenderUnits = buildBattleUnits('defensor', defenderMarch, defenderStatSources);
 
   const atkFolegoTotal = attackerUnits.reduce((s, u) => s + u.folegoBase, 0);
   const defFolegoTotal = defenderUnits.reduce((s, u) => s + u.folegoBase, 0);
@@ -649,19 +628,13 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
     defenderUnitsMap
   );
 
-  function recalcStats(members) {
+  function recalcStats(members, statSources = []) {
     const safeMembers = Array.isArray(members) ? members : [];
+    const snapshot = buildGangStatSnapshot(safeMembers, statSources);
     const totalLevels = safeMembers.reduce(
       (sum, member) => sum + clamp(toPositiveInt(member?.level, 1), 1, 10),
       0
     );
-
-    const totalPower = safeMembers.reduce((sum, member) => {
-      const type = MEMBER_TYPES.includes(String(member?.type)) ? String(member.type) : 'capanga';
-      const level = clamp(toPositiveInt(member?.level, 1), 1, 10);
-      const attr = ATRIBUTOS_GANG[type][level];
-      return sum + Math.round(attr.rajada * 1.35 + attr.blindagem * 1.10 + attr.folego * 1.05 + attr.quebra * 1.20);
-    }, 0);
 
     return {
       totalMembers:    safeMembers.length,
@@ -670,7 +643,7 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
       deadMembers:     safeMembers.filter((m) => m.status === 'morto').length,
       trainingMembers: safeMembers.filter((m) => m.status === 'treinando').length,
       marchingMembers: safeMembers.filter((m) => m.status === 'marchando').length,
-      totalPower,
+      totalPower:      snapshot.summary.totalPower,
       averageLevel: safeMembers.length > 0 ? Number((totalLevels / safeMembers.length).toFixed(2)) : 0,
     };
   }
@@ -727,12 +700,16 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
     defender: defenderReport,
     nextAttackerGang: {
       members:  nextAttackerMembers,
-      stats:    recalcStats(nextAttackerMembers),
+      stats:    recalcStats(nextAttackerMembers, attackerStatSources),
+      statSources: attackerStatSources,
+      statSnapshot: buildGangStatSnapshot(nextAttackerMembers, attackerStatSources),
       updatedAtIso: new Date().toISOString(),
     },
     nextDefenderGang: {
       members:  nextDefenderMembers,
-      stats:    recalcStats(nextDefenderMembers),
+      stats:    recalcStats(nextDefenderMembers, defenderStatSources),
+      statSources: defenderStatSources,
+      statSnapshot: buildGangStatSnapshot(nextDefenderMembers, defenderStatSources),
       updatedAtIso: new Date().toISOString(),
     },
     attackerDeadMemberIds,

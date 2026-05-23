@@ -1,5 +1,6 @@
 import GangWar from '../models/GangWar.js';
 import { generateId } from '../utils/gameHelpers.js';
+import { buildGangStatSnapshot } from './gangStatisticsService.js';
 
 export const VALID_FORMATIONS = [
   'pressao_total',
@@ -363,6 +364,11 @@ export function serializeGang(doc, player) {
   const ctState = getCTStateFromLevel(doc?.ct?.level || 1);
   const byType = countByType(doc.members || [], (m) => m.status !== 'morto');
   const activeByType = countByType(doc.members || [], (m) => m.status === 'ativo');
+  const playerGangMembers = Array.isArray(player?.gang?.members) ? player.gang.members : [];
+  const statMembers = playerGangMembers.length ? playerGangMembers : (doc.members || []);
+  const statSources = Array.isArray(player?.gang?.statSources) ? player.gang.statSources : [];
+  const statSnapshot = buildGangStatSnapshot(statMembers, statSources);
+  const statMemberById = new Map((statSnapshot.members || []).map((member) => [String(member.id), member]));
 
   return {
     gang: {
@@ -375,7 +381,10 @@ export function serializeGang(doc, player) {
         trainingEndsAt: member.trainingEndsAt ? new Date(member.trainingEndsAt).toISOString() : null,
         injuryEndsAt: member.injuryEndsAt ? new Date(member.injuryEndsAt).toISOString() : null,
         lastBattleAt: member.lastBattleAt ? new Date(member.lastBattleAt).toISOString() : null,
+        ...(statMemberById.get(String(member.id)) || {}),
       })),
+      statSources,
+      statSnapshot,
       ct: ctState,
       trainingJobs: buildTrainingSummary(doc),
       formation: doc.formation || 'pressao_total',

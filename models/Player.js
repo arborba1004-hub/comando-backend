@@ -391,6 +391,8 @@ const playerSchema = new mongoose.Schema(
       playerNameFont: { type: String, default: 'oswald' },
       playerNameFontSize: { type: String, default: '1.875rem' },
       playerNameColor: { type: String, default: '#1a1205' },
+      customName: { type: String, default: '', trim: true, maxlength: 30 },
+      customAvatar: { type: String, default: '' },
     },
 
     ownedVehicles: {

@@ -19,6 +19,21 @@ const GANG_MEMBER_TYPES = [
 ];
 
 const TRAINING_CT_KEYS = ['ct_nw', 'ct_ne', 'ct_sw', 'ct_se'];
+const GANG_STAT_SOURCES = [
+  'formacao',
+  'ct',
+  'arsenal',
+  'suborno',
+  'investimento',
+  'faccao',
+  'evento',
+  'manual',
+  'barraco',
+  'loja',
+  'item',
+];
+const GANG_STAT_TARGET_SCOPES = ['global', 'type', 'member'];
+const GANG_STAT_KEYS = ['rajada', 'blindagem', 'folego', 'quebra'];
 
 function ensureObject(value, fallback = {}) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
@@ -121,6 +136,51 @@ function sanitizeGangMember(member, index = 0) {
   };
 }
 
+
+function sanitizeStatNumbers(input) {
+  const raw = ensureObject(input);
+  return GANG_STAT_KEYS.reduce((acc, key) => {
+    acc[key] = toNumber(raw[key], 0);
+    return acc;
+  }, {});
+}
+
+function sanitizeGangStatSource(source, index = 0) {
+  const raw = ensureObject(source);
+  const safeSource = GANG_STAT_SOURCES.includes(String(raw.source))
+    ? String(raw.source)
+    : 'manual';
+  const safeTargetScope = GANG_STAT_TARGET_SCOPES.includes(String(raw.targetScope))
+    ? String(raw.targetScope)
+    : 'global';
+
+  return {
+    id: String(raw.id || `${safeSource}_${safeTargetScope}_${index}`),
+    source: safeSource,
+    label: String(raw.label || safeSource),
+    targetScope: safeTargetScope,
+    targetType:
+      safeTargetScope === 'type' && GANG_MEMBER_TYPES.includes(String(raw.targetType))
+        ? String(raw.targetType)
+        : null,
+    targetMemberId:
+      safeTargetScope === 'member' && raw.targetMemberId
+        ? String(raw.targetMemberId)
+        : null,
+    percent: sanitizeStatNumbers(raw.percent),
+    flat: sanitizeStatNumbers(raw.flat),
+    enabled: raw.enabled !== false,
+    expiresAt: raw.expiresAt ? String(raw.expiresAt) : null,
+    updatedAtIso: raw.updatedAtIso ? String(raw.updatedAtIso) : new Date().toISOString(),
+  };
+}
+
+function sanitizeGangStatSources(input) {
+  return Array.isArray(input)
+    ? input.map((item, index) => sanitizeGangStatSource(item, index))
+    : [];
+}
+
 function sanitizeGangState(input) {
   const defaults = createEmptyGangState();
   const raw = ensureObject(input);
@@ -136,6 +196,8 @@ function sanitizeGangState(input) {
     members,
     trainingSlots,
     stats: recalculateGangStats(members),
+    statSources: sanitizeGangStatSources(raw.statSources),
+    statSnapshot: raw.statSnapshot && typeof raw.statSnapshot === 'object' ? raw.statSnapshot : null,
     updatedAtIso: raw.updatedAtIso ? String(raw.updatedAtIso) : null,
   };
 }

@@ -19,6 +19,8 @@ export function createEmptyGangState() {
     members: [],
     trainingSlots: [],
     stats: createEmptyGangStats(),
+    statSources: [],
+    statSnapshot: null,
     updatedAtIso: null,
   };
 }

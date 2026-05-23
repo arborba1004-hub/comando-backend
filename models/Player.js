@@ -155,6 +155,46 @@ const trainingSlotSchema = new mongoose.Schema(
   { _id: false }
 );
 
+
+const gangStatNumbersSchema = new mongoose.Schema(
+  {
+    rajada: { type: Number, default: 0 },
+    blindagem: { type: Number, default: 0 },
+    folego: { type: Number, default: 0 },
+    quebra: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
+const gangStatSourceSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    source: {
+      type: String,
+      enum: ['formacao', 'ct', 'arsenal', 'suborno', 'investimento', 'faccao', 'evento', 'manual', 'barraco', 'loja', 'item'],
+      default: 'manual',
+    },
+    label: { type: String, default: '' },
+    targetScope: {
+      type: String,
+      enum: ['global', 'type', 'member'],
+      default: 'global',
+    },
+    targetType: {
+      type: String,
+      enum: ['capanga', 'frente', 'executor', 'assassino', 'muralha', 'certeiro', 'motorista', 'nitro', null],
+      default: null,
+    },
+    targetMemberId: { type: String, default: null },
+    percent: { type: gangStatNumbersSchema, default: () => ({}) },
+    flat: { type: gangStatNumbersSchema, default: () => ({}) },
+    enabled: { type: Boolean, default: true },
+    expiresAt: { type: String, default: null },
+    updatedAtIso: { type: String, default: () => new Date().toISOString() },
+  },
+  { _id: false }
+);
+
 const gangStatsSchema = new mongoose.Schema(
   {
     totalMembers: { type: Number, default: createEmptyGangStats().totalMembers, min: 0 },
@@ -174,6 +214,8 @@ const gangStateSchema = new mongoose.Schema(
     members: { type: [gangMemberSchema], default: createEmptyGangState().members },
     trainingSlots: { type: [trainingSlotSchema], default: createEmptyGangState().trainingSlots },
     stats: { type: gangStatsSchema, default: createEmptyGangState().stats },
+    statSources: { type: [gangStatSourceSchema], default: createEmptyGangState().statSources },
+    statSnapshot: { type: mongoose.Schema.Types.Mixed, default: createEmptyGangState().statSnapshot },
     updatedAtIso: { type: String, default: null },
   },
   { _id: false }

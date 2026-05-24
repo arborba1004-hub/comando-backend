@@ -600,7 +600,11 @@ export async function getAzideiaTargets(req, res) {
 export async function getX9Targets(req, res) {
   try {
     if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
-    await ensureActiveAzideiaTargets();
+    const _now = Date.now();
+    if (_now - _lastEnsureAtMs >= ENSURE_THROTTLE_MS) {
+      _lastEnsureAtMs = _now;
+      await ensureActiveAzideiaTargets();
+    }
     const targets = await getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY);
 
     const activeCounts = await getActiveAzideiaMissionCounts(req.player._id);

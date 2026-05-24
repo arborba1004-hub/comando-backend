@@ -17,6 +17,16 @@ const PLAYER_SPACE_WIDTH = 6;
 const PLAYER_SPACE_HEIGHT = 6;
 const X9_SPAWN_PADDING_TILES = 1;
 
+const AVAILABLE_X9_QUERY = {
+  type: 'x9',
+  active: true,
+  $or: [
+    { reservedByPlayerId: null },
+    { reservedByPlayerId: { $exists: false } },
+    { reservedByPlayerId: '' },
+  ],
+};
+
 function toNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -378,8 +388,11 @@ async function createRandomX9Target(occupied = null) {
 }
 
 async function ensureActiveX9Targets() {
-  const activeCount = await AzideiaTarget.countDocuments({ type: 'x9', active: true });
-  const missing = Math.max(0, AZIDEIA_X9.activeCount - activeCount);
+  // Conta apenas X9 realmente disponíveis no mapa. X9 reservado por comboio
+  // não deve entrar nessa conta; caso contrário, com 3 comboios em andamento
+  // o mapa fica com 17 X9 clicáveis e o backend acha que ainda há 20.
+  const availableCount = await AzideiaTarget.countDocuments(AVAILABLE_X9_QUERY);
+  const missing = Math.max(0, AZIDEIA_X9.activeCount - availableCount);
   if (missing <= 0) return;
   const occupied = await usedTiles();
   for (let i = 0; i < missing; i += 1) {
@@ -402,7 +415,7 @@ export async function getX9Targets(req, res) {
   try {
     if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
     await ensureActiveX9Targets();
-    const targets = await AzideiaTarget.find({ type: 'x9', active: true })
+    const targets = await AzideiaTarget.find(AVAILABLE_X9_QUERY)
       .sort({ createdAt: 1 })
       .limit(AZIDEIA_X9.activeCount)
       .lean();
@@ -552,6 +565,11 @@ export async function attackX9(req, res) {
     target.reservedByMissionId = String(mission._id);
     target.reservedAt = new Date(launchedAt).toISOString();
     await target.save();
+
+    // Assim que um X9 é reservado por um comboio, ele deixa de ser disponível
+    // para os demais jogadores. Já repõe outro X9 aleatório disponível para
+    // manter sempre AZIDEIA_X9.activeCount alvos clicáveis no mapa.
+    await ensureActiveX9Targets();
 
     if (selectedMember) {
       selectedMember.status = 'marchando';

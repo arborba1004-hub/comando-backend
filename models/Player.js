@@ -4,6 +4,7 @@ import {
   createEmptyGangState,
   createEmptyGangStats,
 } from '../utils/playerDefaults.js';
+import { ECONOMY } from '../config/economyConfig.js';
 
 const activeOperationSchema = new mongoose.Schema(
   {
@@ -73,6 +74,65 @@ const convoysSchema = new mongoose.Schema(
   },
   { _id: false }
 );
+
+const dailyCorreSchema = new mongoose.Schema(
+  {
+    streak: { type: Number, default: 0, min: 0 },
+    lastClaimDate: { type: String, default: '' },
+    totalClaims: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const prisonHistorySchema = new mongoose.Schema(
+  {
+    windowStart: { type: Number, default: 0, min: 0 },
+    countInWindow: { type: Number, default: 0, min: 0 },
+    lastPrisonAt: { type: Number, default: 0, min: 0 },
+    cooldownUntil: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const spinRateLimitSchema = new mongoose.Schema(
+  {
+    windowStart: { type: Number, default: 0, min: 0 },
+    spinCount: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const giroCardSchema = new mongoose.Schema(
+  {
+    cardId: { type: String, required: true },
+    setId: { type: String, required: true },
+    name: { type: String, default: '' },
+    rarity: {
+      type: String,
+      enum: ['common', 'rare', 'epic', 'legendary'],
+      default: 'common',
+    },
+    quantity: { type: Number, default: 0, min: 0 },
+    isGolden: { type: Boolean, default: false },
+    firstCollectedAt: { type: String, default: '' },
+  },
+  { _id: false }
+);
+
+const giroCardCollectionSchema = new mongoose.Schema(
+  {
+    cards: { type: [giroCardSchema], default: [] },
+    completedSets: { type: [String], default: [] },
+    totalCardsCollected: { type: Number, default: 0, min: 0 },
+    chests: {
+      common: { type: Number, default: 0, min: 0 },
+      rare: { type: Number, default: 0, min: 0 },
+      epic: { type: Number, default: 0, min: 0 },
+    },
+  },
+  { _id: false }
+);
+
 
 const notificationSchema = new mongoose.Schema(
   {
@@ -276,9 +336,34 @@ const playerSchema = new mongoose.Schema(
     },
 
     balances: {
-      dirtyMoney: { type: Number, default: 1000, min: 0 },
-      cleanMoney: { type: Number, default: 0, min: 0 },
-      corre: { type: Number, default: 1000, min: 0 },
+      dirtyMoney: { type: Number, default: ECONOMY.STARTER.dirtyMoney, min: 0 },
+      cleanMoney: { type: Number, default: ECONOMY.STARTER.cleanMoney, min: 0 },
+      corre: { type: Number, default: ECONOMY.STARTER.corre, min: 0 },
+    },
+
+    dailyCorre: {
+      type: dailyCorreSchema,
+      default: () => ({ streak: 0, lastClaimDate: '', totalClaims: 0 }),
+    },
+
+    prisonHistory: {
+      type: prisonHistorySchema,
+      default: () => ({ windowStart: 0, countInWindow: 0, lastPrisonAt: 0, cooldownUntil: 0 }),
+    },
+
+    spinRateLimit: {
+      type: spinRateLimitSchema,
+      default: () => ({ windowStart: 0, spinCount: 0 }),
+    },
+
+    cardCollection: {
+      type: giroCardCollectionSchema,
+      default: () => ({
+        cards: [],
+        completedSets: [],
+        totalCardsCollected: 0,
+        chests: { common: 0, rare: 0, epic: 0 },
+      }),
     },
 
     inventory: {

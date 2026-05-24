@@ -3,11 +3,13 @@ import { env } from '../config/env.js';
 import Player from '../models/Player.js';
 import RealMoneyPurchase from '../models/RealMoneyPurchase.js';
 import { getConvoySkin } from '../data/convoyCatalog.js';
+import { getCorrePackage } from '../data/correPackageCatalog.js';
 import { playerOwnsConvoy } from '../utils/convoyInventory.js';
 import { grantRealMoneyConvoy } from '../utils/grantRealMoneyConvoy.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { createMercadoPagoPayment } from '../services/mercadopago/createPayment.js';
+import { emitToPlayer } from '../services/socketEmitter.js';
 
 function isRealMoneyConvoy(convoy) {
   return convoy?.currency === 'realMoney' || convoy?.purchaseType === 'realMoney';
@@ -48,6 +50,40 @@ function publicPlayer(player) {
   return mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player);
 }
 
+function ensureBalances(player) {
+  if (!player.balances || typeof player.balances !== 'object') {
+    player.balances = { dirtyMoney: 0, cleanMoney: 0, corre: 0 };
+  }
+  player.balances.dirtyMoney = Number(player.balances.dirtyMoney || 0);
+  player.balances.cleanMoney = Number(player.balances.cleanMoney || 0);
+  player.balances.corre = Number(player.balances.corre || 0);
+}
+
+function grantCorrePackage(player, pack) {
+  ensureBalances(player);
+  player.balances.corre += Math.max(0, Math.floor(Number(pack.correAmount || 0)));
+}
+
+function emitPlayerUpdate(player) {
+  const payload = { player: publicPlayer(player) };
+  emitToPlayer(String(player._id), 'playerUpdate', payload);
+  return payload.player;
+}
+
+function validateBrickForm(form, res) {
+  if (!form.payment_method_id) {
+    res.status(400).json({ error: 'Meio de pagamento ausente.', reason: 'missing_payment_method' });
+    return false;
+  }
+
+  if (!form.payer.email) {
+    res.status(400).json({ error: 'E-mail do pagador ausente.', reason: 'missing_payer_email' });
+    return false;
+  }
+
+  return true;
+}
+
 export async function getMercadoPagoBrickConfig(req, res) {
   if (!env.MP_PUBLIC_KEY) {
     return res.status(500).json({ error: 'MP_PUBLIC_KEY ausente no Render.', reason: 'mp_public_key_missing' });
@@ -85,7 +121,7 @@ export async function createConvoyBrickPayment(req, res) {
         amount: Number(convoy.price || 0),
         currency: convoy.realCurrency || 'BRL',
         alreadyOwned: true,
-        player: publicPlayer(player),
+        player: emitPlayerUpdate(player),
       });
     }
 
@@ -95,16 +131,11 @@ export async function createConvoyBrickPayment(req, res) {
     }
 
     const form = normalizePaymentData(req.body?.paymentData);
-    if (!form.payment_method_id) {
-      return res.status(400).json({ error: 'Meio de pagamento ausente.', reason: 'missing_payment_method' });
-    }
-
-    if (!form.payer.email) {
-      return res.status(400).json({ error: 'E-mail do pagador ausente.', reason: 'missing_payer_email' });
-    }
+    if (!validateBrickForm(form, res)) return;
 
     const purchase = await RealMoneyPurchase.create({
       playerId: player._id,
+      productType: 'convoy',
       convoySkinId: convoy.id,
       amount,
       currency: convoy.realCurrency || 'BRL',
@@ -127,6 +158,7 @@ export async function createConvoyBrickPayment(req, res) {
       metadata: {
         purchase_id: purchaseId,
         player_id: String(player._id),
+        product_type: 'convoy',
         convoy_skin_id: convoy.id,
         source: 'commandia_convoy_payment_brick',
       },
@@ -140,7 +172,6 @@ export async function createConvoyBrickPayment(req, res) {
     purchase.rawPayment = payment;
     purchase.status = isApproved(payment?.status) ? 'paid' : String(payment?.status || 'pending');
 
-    let granted = false;
     if (isApproved(payment?.status)) {
       const savedPlayer = await Player.findById(player._id);
       if (!savedPlayer) {
@@ -153,7 +184,6 @@ export async function createConvoyBrickPayment(req, res) {
       bumpVersion(savedPlayer);
       purchase.grantedAt = new Date();
       await savedPlayer.save();
-      granted = true;
       await purchase.save();
 
       return res.json({
@@ -166,8 +196,8 @@ export async function createConvoyBrickPayment(req, res) {
         convoySkinId: convoy.id,
         amount,
         currency: purchase.currency,
-        granted,
-        player: publicPlayer(savedPlayer),
+        granted: true,
+        player: emitPlayerUpdate(savedPlayer),
       });
     }
 
@@ -195,6 +225,128 @@ export async function createConvoyBrickPayment(req, res) {
     return res.status(error.status || 500).json({
       error: error.message || 'Erro ao processar pagamento Mercado Pago',
       reason: error.reason || 'mp_brick_payment_error',
+      details: error.details,
+    });
+  }
+}
+
+export async function createCorrePackageBrickPayment(req, res) {
+  try {
+    const player = req.player;
+    if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    const packageId = String(req.body?.packageId || 'corre_10_099').trim();
+    const pack = getCorrePackage(packageId);
+
+    if (!pack) {
+      return res.status(404).json({ error: 'Pacote de Corres não encontrado', reason: 'corre_package_not_found' });
+    }
+
+    const amount = Number(Number(pack.price || 0).toFixed(2));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Valor inválido para pagamento.', reason: 'invalid_amount' });
+    }
+
+    const correAmount = Math.max(1, Math.floor(Number(pack.correAmount || 0)));
+    const form = normalizePaymentData(req.body?.paymentData);
+    if (!validateBrickForm(form, res)) return;
+
+    const purchase = await RealMoneyPurchase.create({
+      playerId: player._id,
+      productType: 'corre_package',
+      packageId: pack.id,
+      correAmount,
+      amount,
+      currency: pack.currency || 'BRL',
+      status: 'pending',
+      provider: 'mercadopago',
+    });
+
+    const purchaseId = String(purchase._id);
+    const idempotencyKey = crypto.randomUUID();
+
+    const payload = {
+      transaction_amount: amount,
+      token: form.token,
+      description: `${pack.name} - ${correAmount} Corres`,
+      installments: Number.isFinite(form.installments) && form.installments > 0 ? form.installments : 1,
+      payment_method_id: form.payment_method_id,
+      issuer_id: form.issuer_id,
+      payer: form.payer,
+      external_reference: purchaseId,
+      metadata: {
+        purchase_id: purchaseId,
+        player_id: String(player._id),
+        product_type: 'corre_package',
+        package_id: pack.id,
+        corre_amount: correAmount,
+        source: 'commandia_corre_package_payment_brick',
+      },
+      notification_url: buildBackendUrl('/payments/webhooks/mercadopago'),
+      statement_descriptor: 'COMMANDIA',
+    };
+
+    const payment = await createMercadoPagoPayment(payload, idempotencyKey);
+
+    purchase.mpPaymentId = payment?.id ? String(payment.id) : '';
+    purchase.rawPayment = payment;
+    purchase.status = isApproved(payment?.status) ? 'paid' : String(payment?.status || 'pending');
+
+    if (isApproved(payment?.status)) {
+      const savedPlayer = await Player.findById(player._id);
+      if (!savedPlayer) {
+        purchase.status = 'failed';
+        await purchase.save();
+        return res.status(404).json({ error: 'Jogador não encontrado', reason: 'player_not_found' });
+      }
+
+      grantCorrePackage(savedPlayer, pack);
+      bumpVersion(savedPlayer);
+      purchase.grantedAt = new Date();
+      await savedPlayer.save();
+      await purchase.save();
+
+      return res.json({
+        purchaseId,
+        paymentId: payment?.id,
+        status: 'approved',
+        statusDetail: payment?.status_detail,
+        paymentTypeId: payment?.payment_type_id,
+        paymentMethodId: payment?.payment_method_id,
+        packageId: pack.id,
+        correAmount,
+        amount,
+        currency: purchase.currency,
+        granted: true,
+        player: emitPlayerUpdate(savedPlayer),
+      });
+    }
+
+    await purchase.save();
+
+    const transactionData = payment?.point_of_interaction?.transaction_data || {};
+
+    return res.json({
+      purchaseId,
+      paymentId: payment?.id,
+      status: payment?.status || 'pending',
+      statusDetail: payment?.status_detail,
+      paymentTypeId: payment?.payment_type_id,
+      paymentMethodId: payment?.payment_method_id,
+      packageId: pack.id,
+      correAmount,
+      amount,
+      currency: purchase.currency,
+      qrCode: transactionData.qr_code,
+      qrCodeBase64: transactionData.qr_code_base64,
+      ticketUrl: transactionData.ticket_url || payment?.transaction_details?.external_resource_url,
+      message: 'Pagamento criado e aguardando aprovação.',
+    });
+  } catch (error) {
+    console.error('[MP_BRICK_CORRE_PAYMENT]', error);
+    return res.status(error.status || 500).json({
+      error: error.message || 'Erro ao processar pacote de Corres no Mercado Pago',
+      reason: error.reason || 'mp_brick_corre_payment_error',
       details: error.details,
     });
   }

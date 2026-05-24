@@ -2,7 +2,15 @@ import mongoose from 'mongoose';
 
 const realMoneyPurchaseSchema = new mongoose.Schema({
   playerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', required: true, index: true },
-  convoySkinId: { type: String, required: true, index: true },
+  productType: {
+    type: String,
+    enum: ['convoy', 'correPackage'],
+    default: 'convoy',
+    index: true,
+  },
+  productId: { type: String, default: '', index: true },
+  convoySkinId: { type: String, default: '', index: true },
+  correAmount: { type: Number, default: 0, min: 0 },
   provider: { type: String, default: 'mercadopago', index: true },
   status: {
     type: String,
@@ -23,5 +31,6 @@ const realMoneyPurchaseSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 realMoneyPurchaseSchema.index({ playerId: 1, convoySkinId: 1, status: 1 });
+realMoneyPurchaseSchema.index({ playerId: 1, productType: 1, productId: 1, status: 1 });
 
 export default mongoose.model('RealMoneyPurchase', realMoneyPurchaseSchema);

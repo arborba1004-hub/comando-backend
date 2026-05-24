@@ -1,21 +1,22 @@
-export const CORRE_PACKAGES = Object.freeze([
+export const CORRE_PACKAGE_CATALOG = [
   {
-    id: 'corre_10_brl_099',
+    id: 'corre_10_099',
     name: 'Pacote Relâmpago de Corres',
-    description: '10 Corres para colocar a atividade na rua no Giro no Asfalto.',
+    description: '10 Corres para rodar no Giro no Asfalto e manter o movimento sem gastar Commands.',
     correAmount: 10,
     price: 0.99,
     currency: 'BRL',
     featured: true,
-    highlightLabel: 'OFERTA DE TESTE',
+    badge: 'OFERTA DE ENTRADA',
   },
-]);
+];
 
-export function getCorrePackage(packageId) {
-  const id = String(packageId || '').trim();
-  return CORRE_PACKAGES.find((item) => item.id === id) || CORRE_PACKAGES[0];
-}
+export const CORRE_PACKAGE_BY_ID = CORRE_PACKAGE_CATALOG.reduce((acc, item) => {
+  acc[item.id] = item;
+  return acc;
+}, {});
 
-export function listCorrePackages() {
-  return CORRE_PACKAGES.map((item) => ({ ...item }));
+export function getCorrePackage(packageId = 'corre_10_099') {
+  const id = String(packageId || 'corre_10_099').trim();
+  return CORRE_PACKAGE_BY_ID[id] || null;
 }

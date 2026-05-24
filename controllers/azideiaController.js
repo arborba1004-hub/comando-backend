@@ -8,7 +8,7 @@ import AzideiaRewardBatch from '../models/AzideiaRewardBatch.js';
 import { AZIDEIA_X9 } from '../data/azideiaCatalog.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
-import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
+import { broadcastToAll, emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
 
 const GRID_WIDTH = 120;
 const GRID_HEIGHT = 120;
@@ -122,6 +122,22 @@ function normalizeMessage(message) {
   };
 }
 
+function emitAzideiaMapChanged(reason, extra = {}) {
+  broadcastToAll('azideia:x9Changed', {
+    reason,
+    atIso: new Date().toISOString(),
+    ...extra,
+  });
+}
+
+function emitAzideiaMissionChanged(reason, mission) {
+  broadcastToAll('azideia:missionChanged', {
+    reason,
+    atIso: new Date().toISOString(),
+    mission: normalizeMission(mission),
+  });
+}
+
 function normalizeMission(mission) {
   if (!mission) return null;
   return {
@@ -219,6 +235,7 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
     target.killedByPlayerName = String(player.name || 'Jogador');
     target.killedAt = new Date(nowMs).toISOString();
     await target.save();
+    emitAzideiaMapChanged('x9_killed', { targetId: String(target._id), missionId: String(mission._id) });
   }
 
   let changedPlayer = false;
@@ -394,7 +411,7 @@ async function cleanupStaleX9Reservations() {
   // Se um comboio travou/foi perdido por refresh, o X9 pode ficar ativo e
   // reservado para sempre. Ele não aparece para ninguém e ainda ocupa tile.
   // Como uma missão Azidéia dura segundos, 10 minutos é margem segura.
-  await AzideiaTarget.updateMany(
+  const result = await AzideiaTarget.updateMany(
     {
       type: 'x9',
       active: true,
@@ -412,21 +429,33 @@ async function cleanupStaleX9Reservations() {
       },
     },
   );
+
+  return Math.max(0, Number(result.modifiedCount ?? result.nModified ?? 0));
 }
 
 async function ensureActiveX9Targets() {
-  await cleanupStaleX9Reservations();
+  const cleaned = await cleanupStaleX9Reservations();
 
   // Conta apenas X9 realmente disponíveis no mapa. X9 reservado por comboio
   // não deve entrar nessa conta; caso contrário, com 3 comboios em andamento
   // o mapa fica com 17 X9 clicáveis e o backend acha que ainda há 20.
   const availableCount = await AzideiaTarget.countDocuments(AVAILABLE_X9_QUERY);
   const missing = Math.max(0, AZIDEIA_X9.activeCount - availableCount);
-  if (missing <= 0) return;
-  const occupied = await usedTiles();
-  for (let i = 0; i < missing; i += 1) {
-    await createRandomX9Target(occupied);
+  let created = 0;
+
+  if (missing > 0) {
+    const occupied = await usedTiles();
+    for (let i = 0; i < missing; i += 1) {
+      await createRandomX9Target(occupied);
+      created += 1;
+    }
   }
+
+  if (cleaned > 0 || created > 0) {
+    emitAzideiaMapChanged('ensure_x9_pool', { cleaned, created, activeCount: AZIDEIA_X9.activeCount });
+  }
+
+  return { cleaned, created };
 }
 
 function buildDailyEnvelope(player, travellingReservations = 0) {
@@ -594,6 +623,8 @@ export async function attackX9(req, res) {
     target.reservedByMissionId = String(mission._id);
     target.reservedAt = new Date(launchedAt).toISOString();
     await target.save();
+    emitAzideiaMapChanged('x9_reserved', { targetId: String(target._id), missionId: String(mission._id) });
+    emitAzideiaMissionChanged('mission_started', mission);
 
     // Assim que um X9 é reservado por um comboio, ele deixa de ser disponível
     // para os demais jogadores. Já repõe outro X9 aleatório disponível para
@@ -739,6 +770,7 @@ export async function confirmAzideiaMissionArrival(req, res) {
     await mission.save();
     await player.save();
     emitPlayerUpdate(player);
+    emitAzideiaMissionChanged('mission_arrived', mission);
     await ensureActiveX9Targets();
 
     const travelling = await AzideiaMission.countDocuments({ playerId: String(player._id), status: 'travelling' });
@@ -803,6 +835,7 @@ export async function confirmAzideiaMissionReturn(req, res) {
     await mission.save();
     await player.save();
     emitPlayerUpdate(player);
+    emitAzideiaMissionChanged('mission_completed', mission);
 
     const activeCounts = await getActiveAzideiaMissionCounts(player._id);
 

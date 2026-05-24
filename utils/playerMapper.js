@@ -293,6 +293,8 @@ export function mergePlayerState(incoming = {}) {
     azideiaDaily: {
       date: incoming.azideiaDaily?.date ? String(incoming.azideiaDaily.date) : defaults.azideiaDaily?.date ?? '',
       x9Kills: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.x9Kills, defaults.azideiaDaily?.x9Kills ?? 0))),
+      correriaNegotiations: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.correriaNegotiations, defaults.azideiaDaily?.correriaNegotiations ?? 0))),
+      correriaFactionCorreReceived: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.correriaFactionCorreReceived, defaults.azideiaDaily?.correriaFactionCorreReceived ?? 0))),
     },
 
     convoys: {

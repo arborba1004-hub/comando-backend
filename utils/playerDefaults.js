@@ -145,6 +145,8 @@ export function getDefaultPlayerState() {
     azideiaDaily: {
       date: '',
       x9Kills: 0,
+      correriaNegotiations: 0,
+      correriaFactionCorreReceived: 0,
     },
 
     convoys: {

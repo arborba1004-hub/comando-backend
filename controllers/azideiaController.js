@@ -10,6 +10,10 @@ import { bumpVersion } from '../utils/gameHelpers.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { broadcastToAll, emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
 
+// ── Adicionar logo após os imports ─────────────────────────────────────────
+let _lastEnsureAtMs = 0;
+const ENSURE_THROTTLE_MS = 20_000; // 20s entre runs automáticos de poll
+
 const GRID_WIDTH = 120;
 const GRID_HEIGHT = 120;
 const MAX_PARALLEL_AZIDEIA_CONVOYS = 3;
@@ -565,7 +569,11 @@ function buildDailyEnvelope(player, travellingReservations = 0, correriaTravelli
 export async function getAzideiaTargets(req, res) {
   try {
     if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
-    await ensureActiveAzideiaTargets();
+    const _now = Date.now();
+    if (_now - _lastEnsureAtMs >= ENSURE_THROTTLE_MS) {
+      _lastEnsureAtMs = _now;
+      await ensureActiveAzideiaTargets();
+    }
     const [x9Targets, correriaTargets] = await Promise.all([
       getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY),
       getVisibleTargetsForType('correria', AZIDEIA_CORRERIA, AVAILABLE_CORRERIA_QUERY),

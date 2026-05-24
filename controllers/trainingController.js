@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { emitToPlayer } from '../services/socketEmitter.js';
 import { recalculateGangStats } from '../utils/playerMapper.js';
+import { ECONOMY } from '../config/economyConfig.js';
 
 const VALID_CT_KEYS = ['ct_nw', 'ct_ne', 'ct_sw', 'ct_se'];
 const VALID_MEMBER_TYPES = [
@@ -9,16 +10,16 @@ const VALID_MEMBER_TYPES = [
   'muralha', 'certeiro', 'motorista', 'nitro',
 ];
 
-// Custo base de treinamento por tipo (dinheiro sujo, por unidade, antes do multiplicador de nível)
-const TRAINING_COST_PER_UNIT = {
-  capanga: 700,
-  frente: 950,
-  executor: 1400,
-  assassino: 1700,
-  muralha: 1600,
-  certeiro: 1500,
-  motorista: 1300,
-  nitro: 1350,
+// Multiplicador de custo por tipo. O custo base vem de config/economyConfig.js.
+const TROOP_COST_MULTIPLIER = {
+  capanga: 1.0,
+  frente: 1.1,
+  muralha: 1.25,
+  motorista: 1.35,
+  nitro: 1.4,
+  certeiro: 1.5,
+  assassino: 1.65,
+  executor: 1.8,
 };
 
 // Duração em minutos por nível treinado (independente do barraco)
@@ -35,7 +36,7 @@ const TRAINING_DURATION_MIN_BY_LEVEL = {
   10: 1440,
 };
 
-const LEVEL_COST_MULTIPLIER_BASE = 1.4;
+const LEVEL_COST_MULTIPLIER_BASE = 1.32;
 
 function ensureGang(player) {
   if (!player.gang) {
@@ -64,11 +65,16 @@ function calculateTrainingConfig(player, troopType, troopLevel) {
   const maxLevel = getMaxTroopLevel(barracoLevel);
   const level = Math.max(1, Math.min(maxLevel, Math.floor(Number(troopLevel) || 1)));
 
-  const quantity = Math.max(1, Math.floor((barracoLevel * 10) / level));
+  const quantity = Math.max(1, Math.floor(barracoLevel * ECONOMY.TRAINING.quantityPerBarracoLevel));
 
-  const baseCost = TRAINING_COST_PER_UNIT[troopType] ?? 1000;
+  const troopMultiplier = TROOP_COST_MULTIPLIER[troopType] ?? 1;
   const levelMultiplier = Math.pow(LEVEL_COST_MULTIPLIER_BASE, level - 1);
-  const cost = Math.floor(baseCost * quantity * levelMultiplier);
+  const cost = Math.floor(
+    ECONOMY.TRAINING.baseCostDirty
+      * Math.pow(barracoLevel, ECONOMY.TRAINING.levelExponent)
+      * troopMultiplier
+      * levelMultiplier
+  );
 
   const durationMinutes = TRAINING_DURATION_MIN_BY_LEVEL[level] ?? 2;
   const durationMs = durationMinutes * 60 * 1000;

@@ -2,15 +2,23 @@ import mongoose from 'mongoose';
 
 const realMoneyPurchaseSchema = new mongoose.Schema({
   playerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Player', required: true, index: true },
+
+  // Tipo de produto comprado com dinheiro real.
+  // Mantém compatibilidade com comboios e permite pacotes de Corre sem criar outro fluxo de pagamento.
   productType: {
     type: String,
-    enum: ['convoy', 'correPackage'],
+    enum: ['convoy', 'corre_package'],
     default: 'convoy',
     index: true,
   },
-  productId: { type: String, default: '', index: true },
+
+  // Comboio legado/premium. Não é obrigatório para pacote de Corre.
   convoySkinId: { type: String, default: '', index: true },
+
+  // Pacotes consumíveis, ex: 10 Corres por R$ 0,99.
+  packageId: { type: String, default: '', index: true },
   correAmount: { type: Number, default: 0, min: 0 },
+
   provider: { type: String, default: 'mercadopago', index: true },
   status: {
     type: String,
@@ -31,6 +39,6 @@ const realMoneyPurchaseSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 realMoneyPurchaseSchema.index({ playerId: 1, convoySkinId: 1, status: 1 });
-realMoneyPurchaseSchema.index({ playerId: 1, productType: 1, productId: 1, status: 1 });
+realMoneyPurchaseSchema.index({ playerId: 1, productType: 1, packageId: 1, status: 1 });
 
 export default mongoose.model('RealMoneyPurchase', realMoneyPurchaseSchema);

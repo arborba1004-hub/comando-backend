@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
-import { createConvoyCheckout, getPurchaseStatus } from '../controllers/mercadoPagoCheckoutController.js';
+import { createConvoyCheckout, createCorreCheckout, getPurchaseStatus } from '../controllers/mercadoPagoCheckoutController.js';
 import { handleMercadoPagoWebhook } from '../controllers/mercadoPagoWebhookController.js';
 import { getMercadoPagoBrickConfig, createConvoyBrickPayment } from '../controllers/mercadoPagoBrickController.js';
 
 const router = Router();
 
 router.post('/checkout/convoy', authMiddleware, createConvoyCheckout);
+router.post('/checkout/corre', authMiddleware, createCorreCheckout);
 router.get('/brick/config', authMiddleware, getMercadoPagoBrickConfig);
 router.post('/brick/convoy', authMiddleware, createConvoyBrickPayment);
 router.get('/purchases/:purchaseId', authMiddleware, getPurchaseStatus);

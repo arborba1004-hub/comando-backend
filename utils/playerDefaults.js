@@ -1,3 +1,5 @@
+import { ECONOMY } from '../config/economyConfig.js';
+
 export const GRID_WIDTH = 120;
 export const GRID_HEIGHT = 120;
 
@@ -44,9 +46,9 @@ export function getDefaultPlayerState() {
     },
 
     balances: {
-      dirtyMoney: 1000,
-      cleanMoney: 0,
-      corre: 1000,
+      dirtyMoney: ECONOMY.STARTER.dirtyMoney,
+      cleanMoney: ECONOMY.STARTER.cleanMoney,
+      corre: ECONOMY.STARTER.corre,
     },
 
     inventory: {
@@ -158,6 +160,35 @@ export function getDefaultPlayerState() {
     version: 0,
     lastPassiveIncomeAt: Date.now(),
     lastSpinAt: 0,
+
+    dailyCorre: {
+      streak: 0,
+      lastClaimDate: '',
+      totalClaims: 0,
+    },
+
+    prisonHistory: {
+      windowStart: 0,
+      countInWindow: 0,
+      lastPrisonAt: 0,
+      cooldownUntil: 0,
+    },
+
+    spinRateLimit: {
+      windowStart: 0,
+      spinCount: 0,
+    },
+
+    cardCollection: {
+      cards: [],
+      completedSets: [],
+      totalCardsCollected: 0,
+      chests: {
+        common: 0,
+        rare: 0,
+        epic: 0,
+      },
+    },
 
     // Campos de combate PvP (preenchidos no fluxo real; defaults aqui só pra forma)
     shieldExpiresAt: 0,

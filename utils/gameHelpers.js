@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { ECONOMY } from '../config/economyConfig.js';
 import { GRID_WIDTH, GRID_HEIGHT } from './playerDefaults.js';
 import Player from '../models/Player.js';
 import {
@@ -30,17 +31,32 @@ export function bumpVersion(player) {
 }
 
 export function applyPassiveIncome(player) {
+  // Economia oficial: Corre = atividade criminosa/energia do Giro.
+  // Regenera automaticamente apenas até o soft cap. Corres ganhos por facção,
+  // eventos, calendário e loja podem passar do cap sem serem removidos.
   const now = Date.now();
-  const last = player.lastPassiveIncomeAt || now;
-  const minutesPassed = Math.floor((now - last) / 60000);
+  const last = Number(player.lastPassiveIncomeAt || now);
+  const currentCorre = Math.max(0, Number(player.balances?.corre || 0));
+  const softCap = ECONOMY.CORRE.regenSoftCap;
 
-  if (minutesPassed <= 0) return;
+  if (!player.balances) player.balances = {};
 
-  const level = player.niveis?.playerLevel || 1;
-  const ganho = minutesPassed * level;
+  if (currentCorre >= softCap) {
+    player.lastPassiveIncomeAt = now;
+    return;
+  }
 
-  player.balances.corre += ganho;
-  player.lastPassiveIncomeAt = now;
+  const intervalMs = Math.floor(60 * 60 * 1000 / ECONOMY.CORRE.regenPerHour);
+  const earned = Math.floor((now - last) / intervalMs);
+
+  if (earned <= 0) return;
+
+  player.balances.corre = Math.min(softCap, currentCorre + earned);
+  player.lastPassiveIncomeAt = last + earned * intervalMs;
+
+  if (player.balances.corre >= softCap) {
+    player.lastPassiveIncomeAt = now;
+  }
 }
 
 export function tileToWorld(tileX, tileY) {

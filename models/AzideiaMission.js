@@ -15,7 +15,7 @@ const azideiaMissionSchema = new mongoose.Schema(
     factionId: { type: String, default: null, index: true },
 
     targetId: { type: String, required: true, index: true },
-    targetType: { type: String, enum: ['x9'], default: 'x9', index: true },
+    targetType: { type: String, enum: ['x9', 'correria'], default: 'x9', index: true },
     targetName: { type: String, default: 'X9' },
     targetModelUrl: { type: String, default: '' },
     targetTileX: { type: Number, required: true, min: 0, max: 119 },
@@ -30,7 +30,7 @@ const azideiaMissionSchema = new mongoose.Schema(
     returnDurationMs: { type: Number, default: 0, min: 0 },
 
     costDirtyMoney: { type: Number, default: 0, min: 0 },
-    rewardType: { type: String, enum: ['convoy_2x'], default: 'convoy_2x' },
+    rewardType: { type: String, enum: ['convoy_2x', 'corre'], default: 'convoy_2x' },
     rewardQuantity: { type: Number, default: 1, min: 0 },
 
     selectedGangMemberId: { type: String, default: null },

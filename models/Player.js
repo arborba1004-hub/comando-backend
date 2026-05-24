@@ -57,6 +57,8 @@ const azideiaDailySchema = new mongoose.Schema(
   {
     date: { type: String, default: '' },
     x9Kills: { type: Number, default: 0, min: 0 },
+    correriaNegotiations: { type: Number, default: 0, min: 0 },
+    correriaFactionCorreReceived: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -502,7 +504,7 @@ const playerSchema = new mongoose.Schema(
 
     azideiaDaily: {
       type: azideiaDailySchema,
-      default: () => ({ date: '', x9Kills: 0 }),
+      default: () => ({ date: '', x9Kills: 0, correriaNegotiations: 0, correriaFactionCorreReceived: 0 }),
     },
 
     // Comboios visuais comprados/equipados para animação de ataque.

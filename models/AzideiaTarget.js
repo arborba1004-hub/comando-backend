@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const azideiaTargetSchema = new mongoose.Schema(
   {
-    type: { type: String, enum: ['x9'], required: true, index: true },
+    type: { type: String, enum: ['x9', 'correria'], required: true, index: true },
     name: { type: String, default: 'X9' },
     modelUrl: { type: String, default: '' },
     tileX: { type: Number, required: true, min: 0, max: 119 },

@@ -16,6 +16,7 @@ const MAX_PARALLEL_AZIDEIA_CONVOYS = 3;
 const PLAYER_SPACE_WIDTH = 6;
 const PLAYER_SPACE_HEIGHT = 6;
 const X9_SPAWN_PADDING_TILES = 1;
+const X9_STALE_RESERVATION_MS = 10 * 60 * 1000;
 
 const AVAILABLE_X9_QUERY = {
   type: 'x9',
@@ -387,7 +388,35 @@ async function createRandomX9Target(occupied = null) {
   });
 }
 
+async function cleanupStaleX9Reservations() {
+  const staleIso = new Date(Date.now() - X9_STALE_RESERVATION_MS).toISOString();
+
+  // Se um comboio travou/foi perdido por refresh, o X9 pode ficar ativo e
+  // reservado para sempre. Ele não aparece para ninguém e ainda ocupa tile.
+  // Como uma missão Azidéia dura segundos, 10 minutos é margem segura.
+  await AzideiaTarget.updateMany(
+    {
+      type: 'x9',
+      active: true,
+      reservedByPlayerId: { $nin: [null, ''] },
+      $or: [
+        { reservedAt: { $lte: staleIso } },
+        { reservedAt: null },
+        { reservedAt: { $exists: false } },
+      ],
+    },
+    {
+      $set: {
+        active: false,
+        killedAt: staleIso,
+      },
+    },
+  );
+}
+
 async function ensureActiveX9Targets() {
+  await cleanupStaleX9Reservations();
+
   // Conta apenas X9 realmente disponíveis no mapa. X9 reservado por comboio
   // não deve entrar nessa conta; caso contrário, com 3 comboios em andamento
   // o mapa fica com 17 X9 clicáveis e o backend acha que ainda há 20.

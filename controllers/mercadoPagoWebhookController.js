@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import RealMoneyPurchase from '../models/RealMoneyPurchase.js';
 import Player from '../models/Player.js';
 import { getConvoySkin } from '../data/convoyCatalog.js';
+import { getCorrePackage } from '../data/correPackageCatalog.js';
 import { getMercadoPagoPayment } from '../services/mercadopago/getPayment.js';
 import { grantRealMoneyConvoy } from '../utils/grantRealMoneyConvoy.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
@@ -33,6 +34,10 @@ function verifyMercadoPagoSignature(req) {
 
 function paymentApproved(status) {
   return ['approved', 'accredited'].includes(String(status || '').toLowerCase());
+}
+
+function getPurchaseType(purchase) {
+  return String(purchase.productType || (purchase.convoySkinId ? 'convoy' : '') || '').trim();
 }
 
 export async function handleMercadoPagoWebhook(req, res) {
@@ -72,13 +77,6 @@ export async function handleMercadoPagoWebhook(req, res) {
       return res.status(400).json({ error: 'invalid_amount', expectedAmount, paidAmount });
     }
 
-    const convoy = getConvoySkin(purchase.convoySkinId);
-    if (convoy.id !== purchase.convoySkinId) {
-      purchase.status = 'failed';
-      await purchase.save();
-      return res.status(400).json({ error: 'invalid_convoy' });
-    }
-
     if (purchase.grantedAt) {
       purchase.status = 'paid';
       await purchase.save();
@@ -92,6 +90,37 @@ export async function handleMercadoPagoWebhook(req, res) {
       return res.status(404).json({ error: 'player_not_found' });
     }
 
+    const purchaseType = getPurchaseType(purchase);
+
+    if (purchaseType === 'correPackage') {
+      const packageItem = getCorrePackage(purchase.productId);
+      if (!packageItem || packageItem.id !== purchase.productId) {
+        purchase.status = 'failed';
+        await purchase.save();
+        return res.status(400).json({ error: 'invalid_corre_package' });
+      }
+
+      const correAmount = Math.max(1, Math.floor(Number(purchase.correAmount || packageItem.correAmount || 0)));
+      player.balances = player.balances || { dirtyMoney: 0, cleanMoney: 0, corre: 0 };
+      player.balances.corre = Math.max(0, Number(player.balances.corre || 0)) + correAmount;
+      bumpVersion(player);
+
+      purchase.status = 'paid';
+      purchase.grantedAt = new Date();
+
+      await player.save();
+      await purchase.save();
+
+      return res.json({ ok: true, granted: true, productType: 'correPackage', correAmount });
+    }
+
+    const convoy = getConvoySkin(purchase.convoySkinId);
+    if (convoy.id !== purchase.convoySkinId) {
+      purchase.status = 'failed';
+      await purchase.save();
+      return res.status(400).json({ error: 'invalid_convoy' });
+    }
+
     grantRealMoneyConvoy(player, purchase.convoySkinId, { equip: true });
     bumpVersion(player);
 
@@ -101,7 +130,7 @@ export async function handleMercadoPagoWebhook(req, res) {
     await player.save();
     await purchase.save();
 
-    return res.json({ ok: true, granted: true });
+    return res.json({ ok: true, granted: true, productType: 'convoy' });
   } catch (error) {
     console.error('[MP_WEBHOOK]', error);
     return res.status(500).json({ error: 'webhook_error' });

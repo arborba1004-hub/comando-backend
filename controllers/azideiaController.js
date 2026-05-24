@@ -13,6 +13,9 @@ import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
 const GRID_WIDTH = 120;
 const GRID_HEIGHT = 120;
 const MAX_PARALLEL_AZIDEIA_CONVOYS = 3;
+const PLAYER_SPACE_WIDTH = 6;
+const PLAYER_SPACE_HEIGHT = 6;
+const X9_SPAWN_PADDING_TILES = 1;
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
@@ -25,6 +28,26 @@ function todayKey() {
 
 function clampTile(value) {
   return Math.max(0, Math.min(119, Math.floor(toNumber(value, 0))));
+}
+
+function addOccupiedRect(set, startX, startY, width = 1, height = 1, padding = 0) {
+  const minX = Math.max(0, Math.floor(toNumber(startX, 0)) - padding);
+  const minY = Math.max(0, Math.floor(toNumber(startY, 0)) - padding);
+  const maxX = Math.min(GRID_WIDTH - 1, Math.floor(toNumber(startX, 0)) + Math.max(1, width) - 1 + padding);
+  const maxY = Math.min(GRID_HEIGHT - 1, Math.floor(toNumber(startY, 0)) + Math.max(1, height) - 1 + padding);
+
+  for (let x = minX; x <= maxX; x += 1) {
+    for (let y = minY; y <= maxY; y += 1) {
+      set.add(`${x},${y}`);
+    }
+  }
+}
+
+function getPlayerSpaceCenterTile(tileX, tileY) {
+  return {
+    tileX: clampTile(toNumber(tileX, 0) + Math.floor(PLAYER_SPACE_WIDTH / 2)),
+    tileY: clampTile(toNumber(tileY, 0) + Math.floor(PLAYER_SPACE_HEIGHT / 2)),
+  };
 }
 
 function ensureConvoyAccelerators(player) {
@@ -149,6 +172,131 @@ function getAzideiaTravelDuration(routeTiles, player) {
   return Math.max(1400, Math.min(18000, tileCount * msPerTile));
 }
 
+function releaseAzideiaGangMember(player, mission) {
+  let changed = false;
+  if (!Array.isArray(player?.gang?.members)) return false;
+
+  for (const member of player.gang.members) {
+    if (String(member?.activeAttackId || '') === `azideia:${mission._id}`) {
+      member.status = 'ativo';
+      member.activeAttackId = null;
+      member.marchingUntil = null;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
+  if (!mission || mission.status !== 'travelling') return { changedPlayer: false, changedMission: false, factionReward: null };
+
+  const arriveAtMs = Date.parse(mission.arriveAtIso || '') || 0;
+  if (arriveAtMs && nowMs + 1500 < arriveAtMs) {
+    return { changedPlayer: false, changedMission: false, factionReward: null };
+  }
+
+  const target = await AzideiaTarget.findOne({
+    _id: mission.targetId,
+    type: 'x9',
+    reservedByMissionId: String(mission._id),
+  });
+
+  if (target && target.active) {
+    target.active = false;
+    target.killedByPlayerId = String(player._id);
+    target.killedByPlayerName = String(player.name || 'Jogador');
+    target.killedAt = new Date(nowMs).toISOString();
+    await target.save();
+  }
+
+  let changedPlayer = false;
+  const daily = ensureAzideiaDaily(player);
+  if (!mission.rewardGrantedAtIso) {
+    daily.x9Kills += 1;
+    changedPlayer = true;
+  }
+
+  const factionReward = mission.rewardGrantedAtIso
+    ? null
+    : await grantAzideiaRewards({ player, mission });
+
+  mission.status = 'returning';
+  mission.arrivedAtIso = mission.arrivedAtIso || new Date(nowMs).toISOString();
+  mission.rewardGrantedAtIso = mission.rewardGrantedAtIso || new Date(nowMs).toISOString();
+
+  return { changedPlayer: true, changedMission: true, factionReward };
+}
+
+async function resolveAzideiaMissionReturn({ player, mission, nowMs, force = false }) {
+  if (!mission || mission.status === 'completed' || mission.status === 'cancelled') {
+    return { changedPlayer: false, changedMission: false };
+  }
+
+  const returnAtMs = Date.parse(mission.returnAtIso || '') || 0;
+  if (!force && returnAtMs && nowMs + 1500 < returnAtMs) {
+    return { changedPlayer: false, changedMission: false };
+  }
+
+  mission.status = 'completed';
+  mission.completedAtIso = mission.completedAtIso || new Date(nowMs).toISOString();
+
+  const changedPlayer = releaseAzideiaGangMember(player, mission);
+  return { changedPlayer, changedMission: true };
+}
+
+async function reconcileAzideiaMissionsForPlayer(player) {
+  if (!player?._id) return { changedPlayer: false, changedMissionCount: 0 };
+
+  const nowMs = Date.now();
+  const missions = await AzideiaMission.find({
+    playerId: String(player._id),
+    status: { $in: ['travelling', 'returning'] },
+    $or: [
+      { arriveAtIso: { $lte: new Date(nowMs + 1500).toISOString() } },
+      { returnAtIso: { $lte: new Date(nowMs + 1500).toISOString() } },
+    ],
+  }).sort({ createdAt: 1 });
+
+  let changedPlayer = false;
+  let changedMissionCount = 0;
+
+  for (const mission of missions) {
+    let missionChanged = false;
+
+    if (mission.status === 'travelling') {
+      const arrival = await resolveAzideiaMissionArrival({ player, mission, nowMs });
+      changedPlayer = changedPlayer || arrival.changedPlayer;
+      missionChanged = missionChanged || arrival.changedMission;
+    }
+
+    if (mission.status === 'returning') {
+      const returned = await resolveAzideiaMissionReturn({ player, mission, nowMs });
+      changedPlayer = changedPlayer || returned.changedPlayer;
+      missionChanged = missionChanged || returned.changedMission;
+    }
+
+    if (missionChanged) {
+      changedMissionCount += 1;
+      await mission.save();
+    }
+  }
+
+  if (changedPlayer) {
+    if (typeof player.markModified === 'function') {
+      player.markModified('gang');
+      player.markModified('azideiaDaily');
+      player.markModified('convoyAccelerators');
+    }
+    bumpVersion(player);
+    await player.save();
+    emitPlayerUpdate(player);
+    await ensureActiveX9Targets();
+  }
+
+  return { changedPlayer, changedMissionCount };
+}
+
 function getActiveGangMembers(player) {
   return Array.isArray(player?.gang?.members)
     ? player.gang.members.filter((member) => member?.status === 'ativo')
@@ -167,26 +315,53 @@ async function usedTiles() {
   const activeTargets = await AzideiaTarget.find({ active: true }).select('tileX tileY').lean();
   const players = await Player.find({}, { 'mapPosition.tileX': 1, 'mapPosition.tileY': 1 }).lean();
   const set = new Set();
-  for (const target of activeTargets) set.add(`${target.tileX},${target.tileY}`);
-  for (const player of players) {
-    if (player.mapPosition) set.add(`${player.mapPosition.tileX},${player.mapPosition.tileY}`);
+
+  for (const target of activeTargets) {
+    addOccupiedRect(set, target.tileX, target.tileY, 1, 1, X9_SPAWN_PADDING_TILES);
   }
+
+  for (const player of players) {
+    if (!player.mapPosition) continue;
+    addOccupiedRect(
+      set,
+      player.mapPosition.tileX,
+      player.mapPosition.tileY,
+      PLAYER_SPACE_WIDTH,
+      PLAYER_SPACE_HEIGHT,
+      X9_SPAWN_PADDING_TILES,
+    );
+  }
+
   return set;
+}
+
+function pickFreeX9Tile(used) {
+  for (let attempt = 0; attempt < 350; attempt += 1) {
+    const tileX = Math.floor(Math.random() * GRID_WIDTH);
+    const tileY = Math.floor(Math.random() * GRID_HEIGHT);
+    const key = `${tileX},${tileY}`;
+    if (!used.has(key)) {
+      addOccupiedRect(used, tileX, tileY, 1, 1, X9_SPAWN_PADDING_TILES);
+      return { tileX, tileY };
+    }
+  }
+
+  for (let tileX = 0; tileX < GRID_WIDTH; tileX += 1) {
+    for (let tileY = 0; tileY < GRID_HEIGHT; tileY += 1) {
+      const key = `${tileX},${tileY}`;
+      if (!used.has(key)) {
+        addOccupiedRect(used, tileX, tileY, 1, 1, X9_SPAWN_PADDING_TILES);
+        return { tileX, tileY };
+      }
+    }
+  }
+
+  return { tileX: 0, tileY: 0 };
 }
 
 async function createRandomX9Target(occupied = null) {
   const used = occupied || await usedTiles();
-  let tileX = 0;
-  let tileY = 0;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    tileX = Math.floor(Math.random() * GRID_WIDTH);
-    tileY = Math.floor(Math.random() * GRID_HEIGHT);
-    const key = `${tileX},${tileY}`;
-    if (!used.has(key)) {
-      used.add(key);
-      break;
-    }
-  }
+  const { tileX, tileY } = pickFreeX9Tile(used);
 
   return AzideiaTarget.create({
     type: 'x9',
@@ -225,6 +400,7 @@ function buildDailyEnvelope(player, travellingReservations = 0) {
 
 export async function getX9Targets(req, res) {
   try {
+    if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
     await ensureActiveX9Targets();
     const targets = await AzideiaTarget.find({ type: 'x9', active: true })
       .sort({ createdAt: 1 })
@@ -251,6 +427,8 @@ export async function getActiveAzideiaMissions(req, res) {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
+    await reconcileAzideiaMissionsForPlayer(player);
+
     const missions = await AzideiaMission.find({
       playerId: String(player._id),
       status: { $in: ['travelling', 'returning'] },
@@ -272,6 +450,8 @@ export async function attackX9(req, res) {
     if (!mongoose.Types.ObjectId.isValid(targetId)) {
       return res.status(400).json({ error: 'X9 inválido', reason: 'invalid_target_id' });
     }
+
+    await reconcileAzideiaMissionsForPlayer(player);
 
     const activeCounts = await getActiveAzideiaMissionCounts(player._id);
     const activeMembers = getActiveGangMembers(player);
@@ -330,7 +510,8 @@ export async function attackX9(req, res) {
 
     const originTileX = clampTile(player.mapPosition?.tileX ?? 0);
     const originTileY = clampTile(player.mapPosition?.tileY ?? 0);
-    const routeTiles = buildDiagonalRoute(originTileX, originTileY, target.tileX, target.tileY);
+    const routeStart = getPlayerSpaceCenterTile(originTileX, originTileY);
+    const routeTiles = buildDiagonalRoute(routeStart.tileX, routeStart.tileY, target.tileX, target.tileY);
     const returnRouteTiles = reverseRoute(routeTiles);
     const travelDurationMs = getAzideiaTravelDuration(routeTiles, player);
     const returnDurationMs = travelDurationMs;
@@ -499,30 +680,8 @@ export async function confirmAzideiaMissionArrival(req, res) {
       });
     }
 
-    const target = await AzideiaTarget.findOne({
-      _id: mission.targetId,
-      type: 'x9',
-      reservedByMissionId: String(mission._id),
-    });
-
-    if (target && target.active) {
-      target.active = false;
-      target.killedByPlayerId = String(player._id);
-      target.killedByPlayerName = String(player.name || 'Jogador');
-      target.killedAt = new Date().toISOString();
-      await target.save();
-    }
-
-    const daily = ensureAzideiaDaily(player);
-    daily.x9Kills += 1;
-
-    const factionReward = mission.rewardGrantedAtIso
-      ? null
-      : await grantAzideiaRewards({ player, mission });
-
-    mission.status = 'returning';
-    mission.arrivedAtIso = new Date().toISOString();
-    mission.rewardGrantedAtIso = mission.rewardGrantedAtIso || new Date().toISOString();
+    const arrival = await resolveAzideiaMissionArrival({ player, mission, nowMs: now });
+    const factionReward = arrival.factionReward;
 
     if (typeof player.markModified === 'function') {
       player.markModified('azideiaDaily');
@@ -568,22 +727,31 @@ export async function confirmAzideiaMissionReturn(req, res) {
     const mission = await AzideiaMission.findOne({ _id: missionId, playerId: String(player._id) });
     if (!mission) return res.status(404).json({ error: 'Missão Azidéia não encontrada', reason: 'mission_not_found' });
 
-    if (mission.status !== 'completed') {
-      mission.status = 'completed';
-      mission.completedAtIso = new Date().toISOString();
-    }
-
-    if (Array.isArray(player.gang?.members)) {
-      for (const member of player.gang.members) {
-        if (String(member?.activeAttackId || '') === `azideia:${mission._id}`) {
-          member.status = 'ativo';
-          member.activeAttackId = null;
-          member.marchingUntil = null;
-        }
+    if (mission.status === 'travelling') {
+      const arrival = await resolveAzideiaMissionArrival({ player, mission, nowMs: Date.now() });
+      if (!arrival.changedMission && mission.status === 'travelling') {
+        return res.status(409).json({
+          error: 'O comboio ainda não chegou no X9.',
+          reason: 'convoy_not_arrived',
+          arriveAtIso: mission.arriveAtIso,
+        });
       }
     }
 
-    if (typeof player.markModified === 'function') player.markModified('gang');
+    const returned = await resolveAzideiaMissionReturn({ player, mission, nowMs: Date.now() });
+    if (!returned.changedMission && mission.status !== 'completed') {
+      return res.status(409).json({
+        error: 'O comboio ainda está retornando.',
+        reason: 'convoy_not_returned',
+        returnAtIso: mission.returnAtIso,
+      });
+    }
+
+    if (typeof player.markModified === 'function') {
+      player.markModified('gang');
+      player.markModified('azideiaDaily');
+      player.markModified('convoyAccelerators');
+    }
     bumpVersion(player);
     await mission.save();
     await player.save();

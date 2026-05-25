@@ -27,10 +27,13 @@ import fugaRoutes from './routes/fugaRoutes.js';
 import convoyRoutes from './routes/convoyRoutes.js';
 import mercadoPagoRoutes from './routes/mercadoPagoRoutes.js';
 import azideiaRoutes from './routes/azideiaRoutes.js';
+import { ensureAzideiaSystemHealth } from './controllers/azideiaController.js';
 
 import adminRoutes from './routes/adminRoutes.js';
 import factionHelpRoutes from './routes/factionHelpRoutes.js';
 import factionInviteRoutes from './routes/factionInviteRoutes.js';
+
+const AZIDEIA_HEALTH_INTERVAL_MS = 30 * 1000;
 
 const app = express();
 const server = createServer(app);
@@ -143,9 +146,17 @@ async function startServer() {
   try {
     await connectDB();
 
+    // Garante que Azidéia/X9/Correria não dependam do frontend para ressuscitar.
+    // Na prática: ao subir o Render e depois a cada 30s, o backend reconcilia
+    // missões vencidas, solta reservas órfãs e recompõe o pool 20 X9 / 10 Correria.
+    await ensureAzideiaSystemHealth();
+    setInterval(() => {
+      void ensureAzideiaSystemHealth();
+    }, AZIDEIA_HEALTH_INTERVAL_MS);
+
     server.listen(env.PORT, () => {
-  console.log('Servidor rodando com WebSocket');
-});
+      console.log('Servidor rodando com WebSocket');
+    });
   } catch (error) {
     console.error('❌ Não foi possível iniciar o servidor:', error);
     process.exit(1);

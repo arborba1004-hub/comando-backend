@@ -10,28 +10,30 @@ import { bumpVersion } from '../utils/gameHelpers.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { broadcastToAll, emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
 
-// ── Adicionar logo após os imports ─────────────────────────────────────────
-let _lastEnsureAtMs = 0;
-const ENSURE_THROTTLE_MS = 20_000; // 20s entre runs automáticos de poll
-
 const GRID_WIDTH = 120;
 const GRID_HEIGHT = 120;
 const MAX_PARALLEL_AZIDEIA_CONVOYS = 3;
 const PLAYER_SPACE_WIDTH = 6;
 const PLAYER_SPACE_HEIGHT = 6;
 const X9_SPAWN_PADDING_TILES = 1;
-const X9_STALE_RESERVATION_MS = 10 * 60 * 1000;
+const X9_STALE_RESERVATION_MS = 90 * 1000;
+const AZIDEIA_MISSION_GRACE_MS = 2500;
+const AZIDEIA_RESCUE_OVERDUE_MS = 45 * 1000;
 
 function availableTargetQuery(type) {
   return {
     type,
-  active: true,
-  $or: [
-    { reservedByPlayerId: null },
-    { reservedByPlayerId: { $exists: false } },
-    { reservedByPlayerId: '' },
-  ],
+    active: true,
+    $or: [
+      { reservedByPlayerId: null },
+      { reservedByPlayerId: { $exists: false } },
+      { reservedByPlayerId: '' },
+    ],
   };
+}
+
+function activeTargetQuery(type) {
+  return { type, active: true };
 }
 
 const AVAILABLE_X9_QUERY = availableTargetQuery('x9');
@@ -248,20 +250,27 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
   if (!mission || mission.status !== 'travelling') return { changedPlayer: false, changedMission: false, factionReward: null };
 
   const arriveAtMs = Date.parse(mission.arriveAtIso || '') || 0;
-  if (arriveAtMs && nowMs + 1500 < arriveAtMs) {
+  if (arriveAtMs && nowMs + AZIDEIA_MISSION_GRACE_MS < arriveAtMs) {
     return { changedPlayer: false, changedMission: false, factionReward: null };
   }
 
   const targetType = mission.targetType || 'x9';
-  const targetConfig = getTargetConfig(targetType);
   const target = await AzideiaTarget.findOne({
     _id: mission.targetId,
     type: targetType,
-    reservedByMissionId: String(mission._id),
+    $or: [
+      { reservedByMissionId: String(mission._id) },
+      { reservedByMissionId: { $exists: false } },
+      { reservedByMissionId: null },
+      { reservedByMissionId: '' },
+    ],
   });
 
   if (target && target.active) {
     target.active = false;
+    target.reservedByPlayerId = null;
+    target.reservedByMissionId = null;
+    target.reservedAt = null;
     target.killedByPlayerId = String(player._id);
     target.killedByPlayerName = String(player.name || 'Jogador');
     target.killedAt = new Date(nowMs).toISOString();
@@ -273,22 +282,27 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
     });
   }
 
-  let changedPlayer = false;
   const daily = ensureAzideiaDaily(player);
+  let factionReward = null;
+
   if (!mission.rewardGrantedAtIso) {
     if (targetType === 'correria') {
       daily.correriaNegotiations += 1;
     } else {
       daily.x9Kills += 1;
     }
-    changedPlayer = true;
-  }
 
-  const factionReward = mission.rewardGrantedAtIso
-    ? null
-    : targetType === 'correria'
-      ? await grantCorreriaRewards({ player, mission })
-      : await grantAzideiaRewards({ player, mission });
+    try {
+      factionReward = targetType === 'correria'
+        ? await grantCorreriaRewards({ player, mission })
+        : await grantAzideiaRewards({ player, mission });
+    } catch (rewardError) {
+      // A missão e a reposição do mapa nunca podem travar porque o lote de
+      // facção/chat falhou. O jogador recebe a recompensa imediata e o comboio
+      // segue para retorno; o erro fica no log para auditoria.
+      console.error('[AZIDEIA_REWARD_NON_BLOCKING]', rewardError);
+    }
+  }
 
   mission.status = 'returning';
   mission.arrivedAtIso = mission.arrivedAtIso || new Date(nowMs).toISOString();
@@ -322,8 +336,9 @@ async function reconcileAzideiaMissionsForPlayer(player) {
     playerId: String(player._id),
     status: { $in: ['travelling', 'returning'] },
     $or: [
-      { arriveAtIso: { $lte: new Date(nowMs + 1500).toISOString() } },
-      { returnAtIso: { $lte: new Date(nowMs + 1500).toISOString() } },
+      { arriveAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
+      { returnAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
+      { updatedAt: { $lte: new Date(nowMs - AZIDEIA_RESCUE_OVERDUE_MS) } },
     ],
   }).sort({ createdAt: 1 });
 
@@ -333,21 +348,29 @@ async function reconcileAzideiaMissionsForPlayer(player) {
   for (const mission of missions) {
     let missionChanged = false;
 
-    if (mission.status === 'travelling') {
-      const arrival = await resolveAzideiaMissionArrival({ player, mission, nowMs });
-      changedPlayer = changedPlayer || arrival.changedPlayer;
-      missionChanged = missionChanged || arrival.changedMission;
-    }
+    try {
+      if (mission.status === 'travelling') {
+        const arrival = await resolveAzideiaMissionArrival({ player, mission, nowMs });
+        changedPlayer = changedPlayer || arrival.changedPlayer;
+        missionChanged = missionChanged || arrival.changedMission;
+      }
 
-    if (mission.status === 'returning') {
-      const returned = await resolveAzideiaMissionReturn({ player, mission, nowMs });
-      changedPlayer = changedPlayer || returned.changedPlayer;
-      missionChanged = missionChanged || returned.changedMission;
-    }
+      if (mission.status === 'returning') {
+        const returned = await resolveAzideiaMissionReturn({ player, mission, nowMs });
+        changedPlayer = changedPlayer || returned.changedPlayer;
+        missionChanged = missionChanged || returned.changedMission;
+      }
 
-    if (missionChanged) {
-      changedMissionCount += 1;
-      await mission.save();
+      if (missionChanged) {
+        changedMissionCount += 1;
+        await mission.save();
+      }
+    } catch (missionError) {
+      console.error('[AZIDEIA_MISSION_RECONCILE_NON_BLOCKING]', {
+        missionId: String(mission._id),
+        status: mission.status,
+        error: missionError,
+      });
     }
   }
 
@@ -361,8 +384,9 @@ async function reconcileAzideiaMissionsForPlayer(player) {
     bumpVersion(player);
     await player.save();
     emitPlayerUpdate(player);
-    await ensureActiveAzideiaTargets();
   }
+
+  await ensureActiveAzideiaTargets();
 
   return { changedPlayer, changedMissionCount };
 }
@@ -460,35 +484,47 @@ async function createRandomCorreriaTarget(occupied = null) {
 
 async function cleanupStaleX9Reservations() {
   const staleIso = new Date(Date.now() - X9_STALE_RESERVATION_MS).toISOString();
+  const reservedTargets = await AzideiaTarget.find({
+    type: { $in: ['x9', 'correria'] },
+    active: true,
+    reservedByPlayerId: { $nin: [null, ''] },
+    $or: [
+      { reservedAt: { $lte: staleIso } },
+      { reservedAt: null },
+      { reservedAt: { $exists: false } },
+    ],
+  });
 
-  // Se um comboio travou/foi perdido por refresh, o X9 pode ficar ativo e
-  // reservado para sempre. Ele não aparece para ninguém e ainda ocupa tile.
-  // Como uma missão Azidéia dura segundos, 10 minutos é margem segura.
-  const result = await AzideiaTarget.updateMany(
-    {
-      type: { $in: ['x9', 'correria'] },
-      active: true,
-      reservedByPlayerId: { $nin: [null, ''] },
-      $or: [
-        { reservedAt: { $lte: staleIso } },
-        { reservedAt: null },
-        { reservedAt: { $exists: false } },
-      ],
-    },
-    {
-      $set: {
-        active: false,
-        killedAt: staleIso,
-      },
-    },
-  );
+  let cleaned = 0;
 
-  return Math.max(0, Number(result.modifiedCount ?? result.nModified ?? 0));
+  for (const target of reservedTargets) {
+    const missionId = String(target.reservedByMissionId || '').trim();
+    const mission = mongoose.Types.ObjectId.isValid(missionId)
+      ? await AzideiaMission.findById(missionId).select('status returnAtIso').lean()
+      : null;
+
+    // Se a missão ainda existe e está em andamento, mantém o alvo reservado.
+    // Se a missão sumiu, completou, cancelou ou ficou sem id real, solta o alvo.
+    if (mission && ['travelling', 'returning'].includes(mission.status)) {
+      continue;
+    }
+
+    target.reservedByPlayerId = null;
+    target.reservedByMissionId = null;
+    target.reservedAt = null;
+    await target.save();
+    cleaned += 1;
+  }
+
+  return cleaned;
 }
 
-async function ensureActiveTargetPool(type, config, query) {
-  const availableCount = await AzideiaTarget.countDocuments(query);
-  const missing = Math.max(0, config.activeCount - availableCount);
+async function ensureActiveTargetPool(type, config) {
+  // A regra de produto é mapa sempre vivo: 20 X9 e 10 Correria ativos no mapa.
+  // Reservado por comboio ainda conta como ativo/visível até a chegada.
+  // A reposição acontece quando o alvo realmente some do mapa (active=false).
+  const activeCount = await AzideiaTarget.countDocuments(activeTargetQuery(type));
+  const missing = Math.max(0, config.activeCount - activeCount);
   let created = 0;
 
   if (missing > 0) {
@@ -499,13 +535,13 @@ async function ensureActiveTargetPool(type, config, query) {
     }
   }
 
-  return { created };
+  return { created, activeCount: activeCount + created };
 }
 
 async function ensureActiveAzideiaTargets() {
   const cleaned = await cleanupStaleX9Reservations();
-  const x9 = await ensureActiveTargetPool('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY);
-  const correria = await ensureActiveTargetPool('correria', AZIDEIA_CORRERIA, AVAILABLE_CORRERIA_QUERY);
+  const x9 = await ensureActiveTargetPool('x9', AZIDEIA_X9);
+  const correria = await ensureActiveTargetPool('correria', AZIDEIA_CORRERIA);
   const created = x9.created + correria.created;
 
   if (cleaned > 0 || created > 0) {
@@ -528,24 +564,30 @@ async function ensureActiveX9Targets() {
 
 
 async function getVisibleTargetsForType(type, config, query) {
-  // Retorna os alvos disponíveis + alvos reservados por comboios em andamento.
-  // O pool disponível continua sempre com 20 X9 / 10 Correria; os reservados
-  // ficam visíveis no mapa até o comboio chegar, mas não ficam clicáveis.
-  const [available, reserved] = await Promise.all([
-    AzideiaTarget.find(query).sort({ createdAt: 1 }).limit(config.activeCount).lean(),
-    AzideiaTarget.find({
-      type,
-      active: true,
-      reservedByPlayerId: { $exists: true, $nin: [null, ''] },
-      reservedByMissionId: { $exists: true, $nin: [null, ''] },
-    }).sort({ reservedAt: 1 }).limit(30).lean(),
-  ]);
+  // Exibe sempre os alvos ativos do tipo. Reservado continua visível, mas o
+  // frontend bloqueia clique; disponível completa o mapa até o alvo ser removido.
+  const reserved = await AzideiaTarget.find({
+    type,
+    active: true,
+    reservedByPlayerId: { $exists: true, $nin: [null, ''] },
+    reservedByMissionId: { $exists: true, $nin: [null, ''] },
+  }).sort({ reservedAt: 1 }).limit(Math.max(10, config.activeCount)).lean();
+
+  const reservedIds = new Set(reserved.map((target) => String(target._id)));
+  const availableLimit = Math.max(0, config.activeCount - reserved.length);
+  const available = availableLimit > 0
+    ? await AzideiaTarget.find(query).sort({ createdAt: 1 }).limit(availableLimit).lean()
+    : [];
 
   const byId = new Map();
-  for (const target of [...available, ...reserved]) {
+  for (const target of [...reserved, ...available]) {
     byId.set(String(target._id), target);
   }
-  return Array.from(byId.values());
+
+  // Se sobrou alvo disponível por overpop legado, não joga tudo no mapa; o pool
+  // se estabiliza naturalmente conforme os alvos antigos forem eliminados.
+  return Array.from(byId.values())
+    .sort((a, b) => Number(reservedIds.has(String(b._id))) - Number(reservedIds.has(String(a._id))));
 }
 
 function buildDailyEnvelope(player, travellingReservations = 0, correriaTravellingReservations = 0) {
@@ -569,11 +611,7 @@ function buildDailyEnvelope(player, travellingReservations = 0, correriaTravelli
 export async function getAzideiaTargets(req, res) {
   try {
     if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
-    const _now = Date.now();
-    if (_now - _lastEnsureAtMs >= ENSURE_THROTTLE_MS) {
-      _lastEnsureAtMs = _now;
-      await ensureActiveAzideiaTargets();
-    }
+    await ensureActiveAzideiaTargets();
     const [x9Targets, correriaTargets] = await Promise.all([
       getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY),
       getVisibleTargetsForType('correria', AZIDEIA_CORRERIA, AVAILABLE_CORRERIA_QUERY),
@@ -600,11 +638,7 @@ export async function getAzideiaTargets(req, res) {
 export async function getX9Targets(req, res) {
   try {
     if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
-    const _now = Date.now();
-    if (_now - _lastEnsureAtMs >= ENSURE_THROTTLE_MS) {
-      _lastEnsureAtMs = _now;
-      await ensureActiveAzideiaTargets();
-    }
+    await ensureActiveAzideiaTargets();
     const targets = await getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY);
 
     const activeCounts = await getActiveAzideiaMissionCounts(req.player._id);
@@ -692,16 +726,27 @@ export async function attackX9(req, res) {
       });
     }
 
-    const target = await AzideiaTarget.findOne({
-      _id: targetId,
-      type: 'x9',
-      active: true,
-      $or: [
-        { reservedByPlayerId: null },
-        { reservedByPlayerId: { $exists: false } },
-        { reservedByPlayerId: '' },
-      ],
-    });
+    const reservationKey = `pending:${String(player._id)}:${Date.now()}`;
+    const target = await AzideiaTarget.findOneAndUpdate(
+      {
+        _id: targetId,
+        type: 'x9',
+        active: true,
+        $or: [
+          { reservedByPlayerId: null },
+          { reservedByPlayerId: { $exists: false } },
+          { reservedByPlayerId: '' },
+        ],
+      },
+      {
+        $set: {
+          reservedByPlayerId: String(player._id),
+          reservedByMissionId: reservationKey,
+          reservedAt: new Date().toISOString(),
+        },
+      },
+      { new: true },
+    );
 
     if (!target) {
       await ensureActiveAzideiaTargets();
@@ -748,16 +793,14 @@ export async function attackX9(req, res) {
       returnAtIso,
     });
 
-    target.reservedByPlayerId = String(player._id);
     target.reservedByMissionId = String(mission._id);
     target.reservedAt = new Date(launchedAt).toISOString();
     await target.save();
     emitAzideiaMapChanged('x9_reserved', { targetId: String(target._id), missionId: String(mission._id), targetType: 'x9' });
     emitAzideiaMissionChanged('mission_started', mission);
 
-    // Assim que um X9 é reservado por um comboio, ele deixa de ser disponível
-    // para os demais jogadores. Já repõe outro X9 aleatório disponível para
-    // manter sempre AZIDEIA_X9.activeCount alvos clicáveis no mapa.
+    // Não cria X9 extra na reserva: o X9 continua visível até o comboio chegar.
+    // A reposição é feita quando ele é eliminado (active=false).
     await ensureActiveAzideiaTargets();
 
     if (selectedMember) {
@@ -968,16 +1011,27 @@ export async function negotiateCorreria(req, res) {
       });
     }
 
-    const target = await AzideiaTarget.findOne({
-      _id: targetId,
-      type: 'correria',
-      active: true,
-      $or: [
-        { reservedByPlayerId: null },
-        { reservedByPlayerId: { $exists: false } },
-        { reservedByPlayerId: '' },
-      ],
-    });
+    const reservationKey = `pending:${String(player._id)}:${Date.now()}`;
+    const target = await AzideiaTarget.findOneAndUpdate(
+      {
+        _id: targetId,
+        type: 'correria',
+        active: true,
+        $or: [
+          { reservedByPlayerId: null },
+          { reservedByPlayerId: { $exists: false } },
+          { reservedByPlayerId: '' },
+        ],
+      },
+      {
+        $set: {
+          reservedByPlayerId: String(player._id),
+          reservedByMissionId: reservationKey,
+          reservedAt: new Date().toISOString(),
+        },
+      },
+      { new: true },
+    );
 
     if (!target) {
       await ensureActiveAzideiaTargets();
@@ -1022,7 +1076,6 @@ export async function negotiateCorreria(req, res) {
       returnAtIso,
     });
 
-    target.reservedByPlayerId = String(player._id);
     target.reservedByMissionId = String(mission._id);
     target.reservedAt = new Date(launchedAt).toISOString();
     await target.save();

@@ -6,6 +6,7 @@ export const AZIDEIA_X9 = {
   costDirtyMoney: 5000,
   activeCount: 20,
   dailyLimitPerPlayer: 20,
+  factionDailyRewardLimit: 100,
   rewardType: 'convoy_2x',
   rewardQuantity: 1,
 };

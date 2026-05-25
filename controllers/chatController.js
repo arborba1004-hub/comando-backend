@@ -1,5 +1,21 @@
+import mongoose from 'mongoose';
 import ChatMessage    from '../models/ChatMessage.js';
+import Faction from '../models/Faction.js';
 import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
+
+function uniqueStrings(values = []) {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+async function getFactionAliases(factionId) {
+  const safe = String(factionId || '').trim();
+  if (!safe) return [];
+  const query = mongoose.Types.ObjectId.isValid(safe)
+    ? { $or: [{ id: safe }, { _id: safe }] }
+    : { id: safe };
+  const faction = await Faction.findOne(query).select('_id id').lean();
+  return uniqueStrings([safe, faction?.id, faction?._id ? String(faction._id) : '']);
+}
 
 function normalizeMessage(message) {
   return {
@@ -76,7 +92,8 @@ export async function sendChatMessage(req, res) {
       if (!effectiveFactionId) {
         return res.status(400).json({ error: 'factionId obrigatório no chat da facção' });
       }
-      messagePayload.factionId = String(effectiveFactionId);
+      const factionAliases = await getFactionAliases(effectiveFactionId);
+      messagePayload.factionId = String(factionAliases[0] || effectiveFactionId);
     }
 
     const message = await ChatMessage.create(messagePayload);
@@ -119,7 +136,8 @@ export async function getChatMessages(req, res) {
 
     if (channel === 'faccao') {
       if (!factionId) return res.json([]);
-      filters.factionId = String(factionId);
+      const factionAliases = await getFactionAliases(factionId);
+      filters.factionId = { $in: factionAliases.length ? factionAliases : [String(factionId)] };
     }
 
     const messages = await ChatMessage.find(filters)

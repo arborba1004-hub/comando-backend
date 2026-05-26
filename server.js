@@ -9,6 +9,7 @@ import { connectDB } from './config/db.js';
 // Import das rotas
 import authRoutes from './routes/authRoutes.js';
 import playerRoutes from './routes/playerRoutes.js';
+import barracoRoutes from './routes/barracoRoutes.js';
 import playersRoutes from './routes/playersRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
 import emojiRoutes from './routes/emojiRoutes.js';
@@ -98,6 +99,7 @@ app.get('/health', (req, res) => {
 // Rotas principais
 app.use('/auth', authRoutes);
 app.use('/player', playerRoutes);
+app.use('/barraco', barracoRoutes);
 app.use('/players', playersRoutes);
 app.use('/chat', chatRoutes);
 app.use('/emojis', emojiSystemRoutes);

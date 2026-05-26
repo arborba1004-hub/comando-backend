@@ -1,6 +1,7 @@
 // services/attack/resolveAttack.js
 
 import {
+  applyBarracoGangStatSourceToList,
   buildGangStatSnapshot,
   buildMemberStatSnapshot,
 } from '../gangStatisticsService.js';
@@ -516,8 +517,14 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
     .map(asBattleActive);
 
   // Stats pré-batalha (para winChance e relatório)
-  const attackerStatSources = Array.isArray(attacker?.gang?.statSources) ? attacker.gang.statSources : [];
-  const defenderStatSources = Array.isArray(defender?.gang?.statSources) ? defender.gang.statSources : [];
+  const attackerStatSources = applyBarracoGangStatSourceToList(
+    Array.isArray(attacker?.gang?.statSources) ? attacker.gang.statSources : [],
+    attacker?.niveis?.barracoLevel || 1
+  );
+  const defenderStatSources = applyBarracoGangStatSourceToList(
+    Array.isArray(defender?.gang?.statSources) ? defender.gang.statSources : [],
+    defender?.niveis?.barracoLevel || 1
+  );
 
   const attackerGangStats = computeGangStats(attackerMarch, attackerStatSources);
   const defenderGangStats = computeGangStats(defenderMarch, defenderStatSources);

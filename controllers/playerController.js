@@ -38,6 +38,8 @@ const SERVER_CONTROLLED_FIELDS = new Set([
   'niveis',
   'balances',
   'pageLevels',
+  'barracoUpgrade',
+  'barracoAccelerators',
 ]);
 
 function pickAllowedFields(payload = {}) {

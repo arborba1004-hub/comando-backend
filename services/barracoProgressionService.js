@@ -49,8 +49,6 @@ export function getBarracoName(level) {
 export function getBarracoUpgradeRequirements(player = {}) {
   const barracoLevel = toLevel(player?.niveis?.barracoLevel, 1);
   const cleanMoney = Math.max(0, toNumber(player?.balances?.cleanMoney, 0));
-  const power = Math.max(0, toNumber(player?.power, 0));
-
   const lavagemLevel = toLevel(
     player?.pageLevels?.lavagem ?? player?.niveis?.lavagemLevel,
     1
@@ -67,7 +65,10 @@ export function getBarracoUpgradeRequirements(player = {}) {
   const cost = getBarracoUpgradeCost(barracoLevel);
   const nextLevel = Math.min(MAX_BARRACO_LEVEL, barracoLevel + 1);
 
-  const powerRequirement = Math.max(50, Math.floor(barracoLevel * 25));
+  // Power continua existindo no player para mapa, ranking e batalha,
+  // mas não deve bloquear a evolução do barraco.
+  // O barraco é limitado por economia e progressão lateral.
+
   const lavagemRequirement = Math.max(1, Math.floor(barracoLevel / 10));
   const luxuryRequirement = Math.max(1, Math.floor(barracoLevel / 12));
   const hierarchyRequirement = Math.max(1, Math.floor(barracoLevel / 15));
@@ -87,11 +88,6 @@ export function getBarracoUpgradeRequirements(player = {}) {
       key: 'cleanMoney',
       ok: cleanMoney >= cost,
       reason: `Você precisa de ${cost.toLocaleString('pt-BR')} de dinheiro limpo.`,
-    },
-    {
-      key: 'power',
-      ok: power >= powerRequirement,
-      reason: `Você precisa de poder mínimo ${powerRequirement}. Atual: ${power}.`,
     },
     {
       key: 'lavagem',
@@ -121,7 +117,6 @@ export function getBarracoUpgradeRequirements(player = {}) {
     nextLevel,
     maxLevel: MAX_BARRACO_LEVEL,
     requirements: {
-      power: powerRequirement,
       lavagem: lavagemRequirement,
       luxury: luxuryRequirement,
       hierarchy: hierarchyRequirement,

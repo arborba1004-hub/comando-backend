@@ -89,6 +89,8 @@ const azideiaDailySchema = new mongoose.Schema(
     x9FactionAcceleratorsReceived: { type: Number, default: 0, min: 0 },
     correriaNegotiations: { type: Number, default: 0, min: 0 },
     correriaFactionCorreReceived: { type: Number, default: 0, min: 0 },
+    mestreObrasPayments: { type: Number, default: 0, min: 0 },
+    mestreObrasFactionBarracoAcceleratorsReceived: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -555,7 +557,15 @@ const playerSchema = new mongoose.Schema(
 
     azideiaDaily: {
       type: azideiaDailySchema,
-      default: () => ({ date: '', x9Kills: 0, x9FactionAcceleratorsReceived: 0, correriaNegotiations: 0, correriaFactionCorreReceived: 0 }),
+      default: () => ({
+        date: '',
+        x9Kills: 0,
+        x9FactionAcceleratorsReceived: 0,
+        correriaNegotiations: 0,
+        correriaFactionCorreReceived: 0,
+        mestreObrasPayments: 0,
+        mestreObrasFactionBarracoAcceleratorsReceived: 0,
+      }),
     },
 
     // Comboios visuais comprados/equipados para animação de ataque.

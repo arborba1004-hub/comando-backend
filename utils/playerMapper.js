@@ -290,6 +290,25 @@ export function mergePlayerState(incoming = {}) {
       twoX: Math.max(0, Math.floor(toNumber(incoming.convoyAccelerators?.twoX, defaults.convoyAccelerators?.twoX ?? 0))),
     },
 
+    barracoAccelerators: {
+      seconds: Math.max(0, Math.floor(toNumber(incoming.barracoAccelerators?.seconds, defaults.barracoAccelerators?.seconds ?? 0))),
+    },
+
+    barracoUpgrade: {
+      active: incoming.barracoUpgrade?.active === true,
+      status: ['idle', 'building', 'ready', 'completed'].includes(String(incoming.barracoUpgrade?.status))
+        ? String(incoming.barracoUpgrade.status)
+        : 'idle',
+      fromLevel: Math.max(1, Math.floor(toNumber(incoming.barracoUpgrade?.fromLevel, defaults.barracoUpgrade?.fromLevel ?? 1))),
+      toLevel: Math.max(1, Math.floor(toNumber(incoming.barracoUpgrade?.toLevel, defaults.barracoUpgrade?.toLevel ?? 1))),
+      cost: Math.max(0, Math.floor(toNumber(incoming.barracoUpgrade?.cost, defaults.barracoUpgrade?.cost ?? 0))),
+      durationMs: Math.max(0, Math.floor(toNumber(incoming.barracoUpgrade?.durationMs, defaults.barracoUpgrade?.durationMs ?? 0))),
+      startedAt: incoming.barracoUpgrade?.startedAt ? String(incoming.barracoUpgrade.startedAt) : null,
+      endsAt: incoming.barracoUpgrade?.endsAt ? String(incoming.barracoUpgrade.endsAt) : null,
+      completedAt: incoming.barracoUpgrade?.completedAt ? String(incoming.barracoUpgrade.completedAt) : null,
+      acceleratedMs: Math.max(0, Math.floor(toNumber(incoming.barracoUpgrade?.acceleratedMs, defaults.barracoUpgrade?.acceleratedMs ?? 0))),
+    },
+
     azideiaDaily: {
       date: incoming.azideiaDaily?.date ? String(incoming.azideiaDaily.date) : defaults.azideiaDaily?.date ?? '',
       x9Kills: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.x9Kills, defaults.azideiaDaily?.x9Kills ?? 0))),

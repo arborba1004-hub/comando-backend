@@ -142,6 +142,23 @@ export function getDefaultPlayerState() {
       twoX: 0,
     },
 
+    barracoAccelerators: {
+      seconds: 0,
+    },
+
+    barracoUpgrade: {
+      active: false,
+      status: 'idle',
+      fromLevel: 1,
+      toLevel: 1,
+      cost: 0,
+      durationMs: 0,
+      startedAt: null,
+      endsAt: null,
+      completedAt: null,
+      acceleratedMs: 0,
+    },
+
     azideiaDaily: {
       date: '',
       x9Kills: 0,

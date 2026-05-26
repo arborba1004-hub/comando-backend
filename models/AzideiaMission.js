@@ -47,14 +47,7 @@ const azideiaMissionSchema = new mongoose.Schema(
     arrivedAtIso: { type: String, default: null },
     returnAtIso: { type: String, required: true, index: true },
     completedAtIso: { type: String, default: null },
-    // Legado: mantido para não quebrar missões antigas.
     rewardGrantedAtIso: { type: String, default: null },
-    // Controle separado para tornar a recompensa idempotente e recuperável.
-    individualRewardGrantedAtIso: { type: String, default: null },
-    factionRewardGrantedAtIso: { type: String, default: null },
-    factionRewardSkippedAtIso: { type: String, default: null },
-    factionRewardLastError: { type: String, default: null },
-    factionRewardRetryCount: { type: Number, default: 0, min: 0 },
     factionRewardBatchId: { type: String, default: null },
   },
   { timestamps: true, versionKey: false }

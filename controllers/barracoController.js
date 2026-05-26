@@ -7,6 +7,7 @@ import {
   getBarracoUpgradeRequirements,
   MAX_BARRACO_LEVEL,
 } from '../services/barracoProgressionService.js';
+import { syncBarracoGangStatBonus } from '../services/gangStatisticsService.js';
 
 function buildPlayerResponse(playerDocument) {
   return mergePlayerState(playerDocument.toObject());
@@ -82,6 +83,8 @@ export async function upgradeBarraco(req, res) {
         requirements: freshRequirements,
       });
     }
+
+    syncBarracoGangStatBonus(updatedPlayer);
 
     const recalculatedView = buildPlayerResponse(updatedPlayer);
     updatedPlayer.power = calculatePlayerPower(recalculatedView);

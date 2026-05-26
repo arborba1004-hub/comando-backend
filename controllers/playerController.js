@@ -1,4 +1,5 @@
 import { emitToPlayer } from '../services/socketEmitter.js';
+import { syncBarracoGangStatBonus } from '../services/gangStatisticsService.js';
 import Faction from '../models/Faction.js';
 import { mergePlayerState, sanitizePlayerState } from '../utils/playerMapper.js';
 import {
@@ -149,6 +150,12 @@ async function getFactionContextForPlayer(player) {
 export async function getMe(req, res) {
   try {
     const player = req.player;
+    const barracoBonusSync = syncBarracoGangStatBonus(player);
+    if (barracoBonusSync.changed) {
+      bumpVersion(player);
+      await player.save();
+    }
+
     const playerView = player.toObject();
 
     applyPassiveIncome(playerView);

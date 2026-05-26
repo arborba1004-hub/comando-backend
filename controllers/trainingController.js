@@ -3,6 +3,10 @@ import { bumpVersion } from '../utils/gameHelpers.js';
 import { emitToPlayer } from '../services/socketEmitter.js';
 import { recalculateGangStats } from '../utils/playerMapper.js';
 import { ECONOMY } from '../config/economyConfig.js';
+import {
+  applyBarracoGangStatSourceToList,
+  buildGangStatSnapshot,
+} from '../services/gangStatisticsService.js';
 
 const VALID_CT_KEYS = ['ct_nw', 'ct_ne', 'ct_sw', 'ct_se'];
 const VALID_MEMBER_TYPES = [
@@ -44,11 +48,14 @@ function ensureGang(player) {
       members: [],
       trainingSlots: [],
       stats: recalculateGangStats([]),
+      statSources: [],
+      statSnapshot: null,
       updatedAtIso: null,
     };
   }
   if (!Array.isArray(player.gang.members)) player.gang.members = [];
   if (!Array.isArray(player.gang.trainingSlots)) player.gang.trainingSlots = [];
+  if (!Array.isArray(player.gang.statSources)) player.gang.statSources = [];
   return player.gang;
 }
 
@@ -135,6 +142,11 @@ function buildTrainingPayload(player) {
 async function saveAndBroadcastTrainingState(player, event = 'training:updated') {
   ensureGang(player);
   player.gang.stats = recalculateGangStats(player.gang.members);
+  player.gang.statSources = applyBarracoGangStatSourceToList(
+    player.gang.statSources || [],
+    getBarracoLevel(player)
+  );
+  player.gang.statSnapshot = buildGangStatSnapshot(player.gang.members || [], player.gang.statSources);
   player.gang.updatedAtIso = new Date().toISOString();
   bumpVersion(player);
 

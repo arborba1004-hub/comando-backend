@@ -1,7 +1,7 @@
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { emitToPlayer } from '../services/socketEmitter.js';
-import { buildGangStatSnapshot } from '../services/gangStatisticsService.js';
+import { applyBarracoGangStatSourceToList, buildGangStatSnapshot } from '../services/gangStatisticsService.js';
 
 const MAX_BRIBERY_LEVEL = 100;
 const SUBORNO_TARGET_ROTATION = ['assassino', 'certeiro', 'muralha', 'frente'];
@@ -72,7 +72,10 @@ function rebuildSubornoBlindagemSources(player, briberyLevel) {
       updatedAtIso: nowIso,
     }));
 
-  player.gang.statSources = [...preservedSources, ...subornoSources];
+  player.gang.statSources = applyBarracoGangStatSourceToList(
+    [...preservedSources, ...subornoSources],
+    player?.niveis?.barracoLevel || 1
+  );
   player.gang.statSnapshot = buildGangStatSnapshot(player.gang.members || [], player.gang.statSources);
   player.gang.updatedAtIso = nowIso;
 

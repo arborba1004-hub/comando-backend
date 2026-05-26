@@ -53,6 +53,35 @@ const convoyAcceleratorsSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const barracoAcceleratorsSchema = new mongoose.Schema(
+  {
+    // Saldo genérico de aceleradores de construção do barraco em segundos.
+    // Futuras lojas/eventos podem conceder +300, +900, +3600 etc. sem mudar o schema.
+    seconds: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const barracoUpgradeSchema = new mongoose.Schema(
+  {
+    active: { type: Boolean, default: false },
+    status: {
+      type: String,
+      enum: ['idle', 'building', 'ready', 'completed'],
+      default: 'idle',
+    },
+    fromLevel: { type: Number, default: 1, min: 1, max: 100 },
+    toLevel: { type: Number, default: 1, min: 1, max: 100 },
+    cost: { type: Number, default: 0, min: 0 },
+    durationMs: { type: Number, default: 0, min: 0 },
+    startedAt: { type: String, default: null },
+    endsAt: { type: String, default: null },
+    completedAt: { type: String, default: null },
+    acceleratedMs: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
 const azideiaDailySchema = new mongoose.Schema(
   {
     date: { type: String, default: '' },
@@ -501,6 +530,27 @@ const playerSchema = new mongoose.Schema(
     convoyAccelerators: {
       type: convoyAcceleratorsSchema,
       default: () => ({ twoX: 0 }),
+    },
+
+    barracoAccelerators: {
+      type: barracoAcceleratorsSchema,
+      default: () => ({ seconds: 0 }),
+    },
+
+    barracoUpgrade: {
+      type: barracoUpgradeSchema,
+      default: () => ({
+        active: false,
+        status: 'idle',
+        fromLevel: 1,
+        toLevel: 1,
+        cost: 0,
+        durationMs: 0,
+        startedAt: null,
+        endsAt: null,
+        completedAt: null,
+        acceleratedMs: 0,
+      }),
     },
 
     azideiaDaily: {

@@ -410,9 +410,11 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
   }
 
   const daily = ensureAzideiaDaily(player);
+  const nowIso = new Date(nowMs).toISOString();
   let factionReward = null;
+  let changedPlayer = false;
 
-  if (!mission.rewardGrantedAtIso) {
+  if (!isImmediateRewardAlreadyGranted(mission)) {
     if (targetType === 'correria') {
       daily.correriaNegotiations += 1;
     } else if (targetType === 'mestre_obras') {
@@ -421,25 +423,40 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
       daily.x9Kills += 1;
     }
 
+    grantImmediateAzideiaReward({ player, mission });
+    markImmediateRewardGranted(mission, nowIso);
+    changedPlayer = true;
+  }
+
+  if (missionNeedsFactionReward(mission)) {
     try {
-      factionReward = targetType === 'correria'
-        ? await grantCorreriaRewards({ player, mission })
-        : targetType === 'mestre_obras'
-          ? await grantMestreObrasRewards({ player, mission })
-          : await grantAzideiaRewards({ player, mission });
+      const result = await ensureFactionRewardBatchForMission({ player, mission });
+      factionReward = result.factionReward;
+      if (result.skipped) {
+        mission.factionRewardSkippedAtIso = mission.factionRewardSkippedAtIso || nowIso;
+      } else {
+        mission.factionRewardGrantedAtIso = mission.factionRewardGrantedAtIso || nowIso;
+      }
+      mission.factionRewardLastError = null;
     } catch (rewardError) {
-      // A missão e a reposição do mapa nunca podem travar porque o lote de
-      // facção/chat falhou. O jogador recebe a recompensa imediata e o comboio
-      // segue para retorno; o erro fica no log para auditoria.
-      console.error('[AZIDEIA_REWARD_NON_BLOCKING]', rewardError);
+      // A recompensa individual não pode ser duplicada nem o comboio ficar preso,
+      // mas o lote de facção precisa continuar recuperável. Por isso NÃO marcamos
+      // factionRewardGrantedAtIso quando o batch falha. A próxima reconciliação
+      // ou abertura do modal Coleta Azidéia tenta novamente.
+      mission.factionRewardRetryCount = Math.max(0, Math.floor(toNumber(mission.factionRewardRetryCount, 0))) + 1;
+      mission.factionRewardLastError = rewardError?.message || String(rewardError);
+      console.error('[AZIDEIA_FACTION_REWARD_RETRYABLE]', {
+        missionId: String(mission._id),
+        targetType,
+        error: rewardError,
+      });
     }
   }
 
   mission.status = 'returning';
-  mission.arrivedAtIso = mission.arrivedAtIso || new Date(nowMs).toISOString();
-  mission.rewardGrantedAtIso = mission.rewardGrantedAtIso || new Date(nowMs).toISOString();
+  mission.arrivedAtIso = mission.arrivedAtIso || nowIso;
 
-  return { changedPlayer: true, changedMission: true, factionReward };
+  return { changedPlayer, changedMission: true, factionReward };
 }
 
 async function resolveAzideiaMissionReturn({ player, mission, nowMs, force = false }) {
@@ -452,8 +469,32 @@ async function resolveAzideiaMissionReturn({ player, mission, nowMs, force = fal
     return { changedPlayer: false, changedMission: false };
   }
 
+  const nowIso = new Date(nowMs).toISOString();
+
+  if (missionNeedsFactionReward(mission)) {
+    try {
+      const result = await ensureFactionRewardBatchForMission({ player, mission });
+      if (result.skipped) {
+        mission.factionRewardSkippedAtIso = mission.factionRewardSkippedAtIso || nowIso;
+      } else {
+        mission.factionRewardGrantedAtIso = mission.factionRewardGrantedAtIso || nowIso;
+      }
+      mission.factionRewardLastError = null;
+    } catch (rewardError) {
+      // Não trava retorno/comboio. O modal de coleta e a reconciliação global
+      // continuarão tentando criar o lote até conseguir.
+      mission.factionRewardRetryCount = Math.max(0, Math.floor(toNumber(mission.factionRewardRetryCount, 0))) + 1;
+      mission.factionRewardLastError = rewardError?.message || String(rewardError);
+      console.error('[AZIDEIA_FACTION_REWARD_RETURN_RETRYABLE]', {
+        missionId: String(mission._id),
+        targetType: getMissionTargetType(mission),
+        error: rewardError,
+      });
+    }
+  }
+
   mission.status = 'completed';
-  mission.completedAtIso = mission.completedAtIso || new Date(nowMs).toISOString();
+  mission.completedAtIso = mission.completedAtIso || nowIso;
 
   const changedPlayer = releaseAzideiaGangMember(player, mission);
   return { changedPlayer, changedMission: true };
@@ -465,11 +506,24 @@ async function reconcileAzideiaMissionsForPlayer(player) {
   const nowMs = Date.now();
   const missions = await AzideiaMission.find({
     playerId: String(player._id),
-    status: { $in: ['travelling', 'returning'] },
     $or: [
-      { arriveAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
-      { returnAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
-      { updatedAt: { $lte: new Date(nowMs - AZIDEIA_RESCUE_OVERDUE_MS) } },
+      {
+        status: { $in: ['travelling', 'returning'] },
+        $or: [
+          { arriveAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
+          { returnAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
+          { updatedAt: { $lte: new Date(nowMs - AZIDEIA_RESCUE_OVERDUE_MS) } },
+        ],
+      },
+      {
+        // Recupera missões já concluídas em que a recompensa individual saiu,
+        // mas o lote de facção não foi criado por falha temporária.
+        status: 'completed',
+        factionRewardBatchId: { $in: [null, ''] },
+        factionRewardGrantedAtIso: { $in: [null, ''] },
+        factionRewardSkippedAtIso: { $in: [null, ''] },
+        updatedAt: { $gte: new Date(nowMs - 7 * 24 * 60 * 60 * 1000) },
+      },
     ],
   }).sort({ createdAt: 1 });
 
@@ -490,6 +544,29 @@ async function reconcileAzideiaMissionsForPlayer(player) {
         const returned = await resolveAzideiaMissionReturn({ player, mission, nowMs });
         changedPlayer = changedPlayer || returned.changedPlayer;
         missionChanged = missionChanged || returned.changedMission;
+      }
+
+      if (mission.status === 'completed' && missionNeedsFactionReward(mission)) {
+        try {
+          const result = await ensureFactionRewardBatchForMission({ player, mission });
+          const nowIso = new Date(nowMs).toISOString();
+          if (result.skipped) {
+            mission.factionRewardSkippedAtIso = mission.factionRewardSkippedAtIso || nowIso;
+          } else {
+            mission.factionRewardGrantedAtIso = mission.factionRewardGrantedAtIso || nowIso;
+          }
+          mission.factionRewardLastError = null;
+          missionChanged = true;
+        } catch (rewardError) {
+          mission.factionRewardRetryCount = Math.max(0, Math.floor(toNumber(mission.factionRewardRetryCount, 0))) + 1;
+          mission.factionRewardLastError = rewardError?.message || String(rewardError);
+          missionChanged = true;
+          console.error('[AZIDEIA_COMPLETED_FACTION_REWARD_RETRYABLE]', {
+            missionId: String(mission._id),
+            targetType: getMissionTargetType(mission),
+            error: rewardError,
+          });
+        }
       }
 
       if (missionChanged) {
@@ -1174,6 +1251,209 @@ function normalizeMestreObrasFactionRewardCap(value) {
   return Math.min(AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit, Math.max(0, Math.floor(toNumber(value, 0))));
 }
 
+function getMissionTargetType(mission) {
+  return mission?.targetType || 'x9';
+}
+
+function getMissionRewardConfig(mission) {
+  return getTargetConfig(getMissionTargetType(mission));
+}
+
+function isImmediateRewardAlreadyGranted(mission) {
+  // rewardGrantedAtIso é legado. Se ele já existe, não reabre recompensa
+  // individual antiga para evitar duplicação em jogadores publicados.
+  return Boolean(mission?.individualRewardGrantedAtIso || mission?.rewardGrantedAtIso);
+}
+
+function markImmediateRewardGranted(mission, nowIso) {
+  mission.individualRewardGrantedAtIso = mission.individualRewardGrantedAtIso || nowIso;
+  // Mantém compatibilidade com códigos publicados que ainda leem esse campo.
+  mission.rewardGrantedAtIso = mission.rewardGrantedAtIso || nowIso;
+}
+
+function missionNeedsFactionReward(mission) {
+  return Boolean(
+    mission &&
+      !mission.factionRewardBatchId &&
+      !mission.factionRewardGrantedAtIso &&
+      !mission.factionRewardSkippedAtIso
+  );
+}
+
+function grantImmediateAzideiaReward({ player, mission }) {
+  const targetType = getMissionTargetType(mission);
+  if (targetType === 'correria') {
+    player.balances = player.balances || {};
+    player.balances.corre = Math.max(0, Math.floor(toNumber(player.balances.corre, 0))) + AZIDEIA_CORRERIA.rewardQuantity;
+    return { rewardType: AZIDEIA_CORRERIA.rewardType, quantity: AZIDEIA_CORRERIA.rewardQuantity };
+  }
+
+  if (targetType === 'mestre_obras') {
+    const barracoAccelerators = ensureBarracoAccelerators(player);
+    const rewardSeconds = Math.max(0, Math.floor(toNumber(
+      AZIDEIA_MESTRE_OBRAS.rewardQuantitySeconds,
+      AZIDEIA_MESTRE_OBRAS.rewardQuantity,
+    )));
+    barracoAccelerators.seconds += rewardSeconds;
+    return { rewardType: AZIDEIA_MESTRE_OBRAS.rewardType, quantity: rewardSeconds };
+  }
+
+  const accelerators = ensureConvoyAccelerators(player);
+  accelerators.twoX += AZIDEIA_X9.rewardQuantity;
+  return { rewardType: AZIDEIA_X9.rewardType, quantity: AZIDEIA_X9.rewardQuantity };
+}
+
+function buildFactionRewardEnvelope({ targetType, rewardContext, batch, memberIds }) {
+  const config = getTargetConfig(targetType);
+  const quantityPerMember = targetType === 'mestre_obras'
+    ? AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds
+    : config.rewardQuantity;
+
+  return {
+    factionId: rewardContext.factionId,
+    rewardType: config.rewardType,
+    quantityPerMember,
+    memberCount: memberIds.length,
+    batchId: String(batch._id),
+    dailyLimit: config.factionDailyRewardLimit,
+  };
+}
+
+async function createAzideiaRewardChat({ targetType, player, rewardContext, batch, memberIds }) {
+  const config = getTargetConfig(targetType);
+  const baseMetadata = {
+    batchId: String(batch._id),
+    targetType,
+    rewardType: config.rewardType,
+    quantityPerMember: targetType === 'mestre_obras' ? AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds : config.rewardQuantity,
+    memberCount: memberIds.length,
+    dailyLimit: config.factionDailyRewardLimit,
+    killerId: String(player._id),
+    killerName: String(player.name || 'Jogador'),
+  };
+
+  const variants = {
+    x9: {
+      senderId: 'system:azideia',
+      senderName: 'Azidéia',
+      body: `${player.name || 'Jogador'} eliminou um X9. A facção recebeu aceleradores para coletar.`,
+      metadata: { ...baseMetadata, iconUrl: AZIDEIA_X9.iconUrl },
+    },
+    correria: {
+      senderId: 'system:azideia:correria',
+      senderName: 'Correria',
+      body: `${player.name || 'Jogador'} negociou com um Correria. A facção recebeu Corres para coletar.`,
+      metadata: {
+        ...baseMetadata,
+        negotiatorId: String(player._id),
+        negotiatorName: String(player.name || 'Jogador'),
+        iconUrl: AZIDEIA_CORRERIA.iconUrl,
+      },
+    },
+    mestre_obras: {
+      senderId: 'system:azideia:mestre_obras',
+      senderName: 'Mestre de Obras',
+      body: `${player.name || 'Jogador'} pagou um Mestre de Obras. A facção recebeu aceleradores de evolução do barraco para coletar.`,
+      metadata: {
+        ...baseMetadata,
+        payerId: String(player._id),
+        payerName: String(player.name || 'Jogador'),
+        modelUrl: AZIDEIA_MESTRE_OBRAS.modelUrl,
+      },
+    },
+  };
+
+  const variant = variants[targetType] || variants.x9;
+
+  try {
+    const message = await ChatMessage.create({
+      channel: 'faccao',
+      senderId: variant.senderId,
+      senderName: variant.senderName,
+      factionId: rewardContext.factionId,
+      body: variant.body,
+      read: false,
+      system: true,
+      messageType: 'azideia_reward',
+      metadata: variant.metadata,
+    });
+
+    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
+  } catch (chatError) {
+    // O chat é só vitrine. O lote já existe no banco e a coleta continua funcional.
+    console.error('[AZIDEIA_REWARD_CHAT_NON_BLOCKING]', { targetType, error: chatError });
+  }
+}
+
+async function ensureFactionRewardBatchForMission({ player, mission }) {
+  if (!mission || !player?._id) return { factionReward: null, skipped: true };
+
+  const targetType = getMissionTargetType(mission);
+  const rewardContext = await getFactionRewardContext(player);
+  if (!rewardContext || rewardContext.memberIds.length <= 0) {
+    return { factionReward: null, skipped: true };
+  }
+
+  const memberIds = uniqueStrings(rewardContext.memberIds);
+  const config = getTargetConfig(targetType);
+  const quantityPerMember = targetType === 'mestre_obras'
+    ? AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds
+    : config.rewardQuantity;
+
+  let batch = null;
+  if (mission.factionRewardBatchId && mongoose.Types.ObjectId.isValid(String(mission.factionRewardBatchId))) {
+    batch = await AzideiaRewardBatch.findById(mission.factionRewardBatchId);
+  }
+
+  if (!batch) {
+    batch = await AzideiaRewardBatch.findOne({
+      sourceTargetType: targetType,
+      sourceTargetId: String(mission.targetId),
+      killerId: String(player._id),
+      rewardType: config.rewardType,
+    }).sort({ createdAt: 1 });
+  }
+
+  let created = false;
+  if (!batch) {
+    batch = await AzideiaRewardBatch.create({
+      factionId: rewardContext.factionId,
+      rewardType: config.rewardType,
+      quantityPerMember,
+      memberIds,
+      sourceTargetType: targetType,
+      sourceTargetId: String(mission.targetId),
+      killerId: String(player._id),
+      killerName: String(player.name || 'Jogador'),
+    });
+    created = true;
+  } else {
+    const nextMemberIds = uniqueStrings([...(batch.memberIds || []), ...memberIds]);
+    const nextFactionId = rewardContext.factionId || batch.factionId;
+    let changed = false;
+    if (nextMemberIds.length !== (batch.memberIds || []).length) {
+      batch.memberIds = nextMemberIds;
+      changed = true;
+    }
+    if (String(batch.factionId || '') !== String(nextFactionId || '')) {
+      batch.factionId = String(nextFactionId || batch.factionId || '');
+      changed = true;
+    }
+    if (changed) await batch.save();
+  }
+
+  mission.factionRewardBatchId = String(batch._id);
+
+  if (created) {
+    await createAzideiaRewardChat({ targetType, player, rewardContext, batch, memberIds });
+  }
+
+  return {
+    factionReward: buildFactionRewardEnvelope({ targetType, rewardContext, batch, memberIds }),
+    skipped: false,
+  };
+}
+
 async function grantCorreriaRewards({ player, mission }) {
   // Recompensa imediata do jogador que negociou: +1 Corre.
   // Recompensa de facção: NÃO entra direto no saldo; vira lote coletável
@@ -1764,14 +2044,38 @@ async function getPendingBatchesForPlayer(player) {
   const playerId = String(player?._id || '').trim();
   if (!playerId) return [];
 
-  // O lote já salva memberIds explicitamente. Consultar por memberIds corrige
-  // casos legados em que factionId do jogador e factionId do lote usam ids
-  // diferentes (_id Mongo vs id público) ou o jogador está na lista de membros,
-  // mas ainda não recebeu player.factionId normalizado.
-  return AzideiaRewardBatch.find({
+  const directBatches = await AzideiaRewardBatch.find({
     memberIds: playerId,
     claimedBy: { $ne: playerId },
   }).sort({ createdAt: 1 });
+
+  const byId = new Map(directBatches.map((batch) => [String(batch._id), batch]));
+  const factionAliases = await getFactionAliasesForPlayer(player);
+
+  if (factionAliases.length > 0) {
+    const fallbackBatches = await AzideiaRewardBatch.find({
+      factionId: { $in: factionAliases },
+      claimedBy: { $ne: playerId },
+    }).sort({ createdAt: 1 });
+
+    for (const batch of fallbackBatches) {
+      const id = String(batch._id);
+      if (!Array.isArray(batch.memberIds)) batch.memberIds = [];
+      if (!batch.memberIds.includes(playerId)) {
+        // Repara lote legado ou lote criado com alias de facção, mas sem o
+        // player no memberIds. A coleta passa a enxergar e não perde saldo.
+        batch.memberIds.push(playerId);
+        await batch.save();
+      }
+      byId.set(id, batch);
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const aTime = new Date(a.createdAt || a.createdAtIso || 0).getTime();
+    const bTime = new Date(b.createdAt || b.createdAtIso || 0).getTime();
+    return aTime - bTime;
+  });
 }
 
 function getX9ClaimRemainingToday(player) {
@@ -1846,6 +2150,8 @@ export async function getMyAzideiaRewards(req, res) {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
+    await reconcileAzideiaMissionsForPlayer(player);
+
     const batches = await getPendingBatchesForPlayer(player);
     const factionAliases = await getFactionAliasesForPlayer(player);
     return res.json({
@@ -1862,6 +2168,8 @@ export async function claimMyAzideiaRewards(req, res) {
   try {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    await reconcileAzideiaMissionsForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const playerId = String(player._id);

@@ -5,7 +5,13 @@ import ChatMessage from '../models/ChatMessage.js';
 import AzideiaTarget from '../models/AzideiaTarget.js';
 import AzideiaMission from '../models/AzideiaMission.js';
 import AzideiaRewardBatch from '../models/AzideiaRewardBatch.js';
-import { AZIDEIA_X9, AZIDEIA_CORRERIA, AZIDEIA_TARGETS } from '../data/azideiaCatalog.js';
+import {
+  AZIDEIA_X9,
+  AZIDEIA_CORRERIA,
+  AZIDEIA_MESTRE_OBRAS,
+  AZIDEIA_TARGETS,
+  getMestreObrasCostDirtyMoney,
+} from '../data/azideiaCatalog.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { broadcastToAll, emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
@@ -38,6 +44,7 @@ function activeTargetQuery(type) {
 
 const AVAILABLE_X9_QUERY = availableTargetQuery('x9');
 const AVAILABLE_CORRERIA_QUERY = availableTargetQuery('correria');
+const AVAILABLE_MESTRE_OBRAS_QUERY = availableTargetQuery('mestre_obras');
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
@@ -80,6 +87,21 @@ function ensureConvoyAccelerators(player) {
   return player.convoyAccelerators;
 }
 
+function ensureBarracoAccelerators(player) {
+  const current = player.barracoAccelerators || {};
+  player.barracoAccelerators = {
+    seconds: Math.max(0, Math.floor(toNumber(current.seconds, 0))),
+  };
+  return player.barracoAccelerators;
+}
+
+function getTargetCostDirtyMoney(type = 'x9', player = null) {
+  if (type === 'mestre_obras') {
+    return getMestreObrasCostDirtyMoney(player?.niveis?.barracoLevel ?? 1);
+  }
+  return Math.max(0, Math.floor(toNumber(getTargetConfig(type).costDirtyMoney, 0)));
+}
+
 function ensureAzideiaDaily(player) {
   const key = todayKey();
   const current = player.azideiaDaily || {};
@@ -90,6 +112,8 @@ function ensureAzideiaDaily(player) {
       x9FactionAcceleratorsReceived: 0,
       correriaNegotiations: 0,
       correriaFactionCorreReceived: 0,
+      mestreObrasPayments: 0,
+      mestreObrasFactionBarracoAcceleratorsReceived: 0,
     };
   } else {
     player.azideiaDaily = {
@@ -98,6 +122,8 @@ function ensureAzideiaDaily(player) {
       x9FactionAcceleratorsReceived: Math.max(0, Math.floor(toNumber(current.x9FactionAcceleratorsReceived, 0))),
       correriaNegotiations: Math.max(0, Math.floor(toNumber(current.correriaNegotiations, 0))),
       correriaFactionCorreReceived: Math.max(0, Math.floor(toNumber(current.correriaFactionCorreReceived, 0))),
+      mestreObrasPayments: Math.max(0, Math.floor(toNumber(current.mestreObrasPayments, 0))),
+      mestreObrasFactionBarracoAcceleratorsReceived: Math.max(0, Math.floor(toNumber(current.mestreObrasFactionBarracoAcceleratorsReceived, 0))),
     };
   }
   return player.azideiaDaily;
@@ -138,11 +164,21 @@ function getFactionIdAliases(faction, fallbackFactionId = null) {
   ]);
 }
 
+async function findFactionByPlayerMembership(player) {
+  const playerId = String(player?._id || '').trim();
+  if (!playerId) return null;
+  return Faction.findOne({ 'members.playerId': playerId });
+}
+
 async function getFactionRewardContext(player) {
   const fallbackFactionId = String(player?.factionId || '').trim();
-  if (!player?._id || !fallbackFactionId) return null;
+  if (!player?._id) return null;
 
-  const faction = await findFactionByAnyId(fallbackFactionId);
+  const faction = fallbackFactionId
+    ? (await findFactionByAnyId(fallbackFactionId)) || (await findFactionByPlayerMembership(player))
+    : await findFactionByPlayerMembership(player);
+  if (!faction && !fallbackFactionId) return null;
+
   const factionAliases = getFactionIdAliases(faction, fallbackFactionId);
   const canonicalFactionId = String(faction?.id || fallbackFactionId).trim();
 
@@ -182,8 +218,9 @@ async function getFactionRewardContext(player) {
 
 async function getFactionAliasesForPlayer(player) {
   const fallbackFactionId = String(player?.factionId || '').trim();
-  if (!fallbackFactionId) return [];
-  const faction = await findFactionByAnyId(fallbackFactionId);
+  const faction = fallbackFactionId
+    ? (await findFactionByAnyId(fallbackFactionId)) || (await findFactionByPlayerMembership(player))
+    : await findFactionByPlayerMembership(player);
   return uniqueStrings([
     fallbackFactionId,
     faction?.id,
@@ -202,7 +239,7 @@ function getTargetConfig(type = 'x9') {
   return AZIDEIA_TARGETS[type] || AZIDEIA_X9;
 }
 
-function normalizeTarget(target) {
+function normalizeTarget(target, player = null) {
   const type = target.type || 'x9';
   const config = getTargetConfig(type);
   return {
@@ -212,7 +249,7 @@ function normalizeTarget(target) {
     modelUrl: target.modelUrl || config.modelUrl,
     tileX: clampTile(target.tileX),
     tileY: clampTile(target.tileY),
-    costDirtyMoney: config.costDirtyMoney,
+    costDirtyMoney: getTargetCostDirtyMoney(type, player),
     rewardType: config.rewardType,
     rewardQuantity: config.rewardQuantity,
     reserved: Boolean(target.reservedByPlayerId),
@@ -365,7 +402,7 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
     target.killedByPlayerName = String(player.name || 'Jogador');
     target.killedAt = new Date(nowMs).toISOString();
     await target.save();
-    emitAzideiaMapChanged(targetType === 'correria' ? 'correria_negotiated' : 'x9_killed', {
+    emitAzideiaMapChanged(targetType === 'correria' ? 'correria_negotiated' : targetType === 'mestre_obras' ? 'mestre_obras_paid' : 'x9_killed', {
       targetId: String(target._id),
       missionId: String(mission._id),
       targetType,
@@ -378,6 +415,8 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
   if (!mission.rewardGrantedAtIso) {
     if (targetType === 'correria') {
       daily.correriaNegotiations += 1;
+    } else if (targetType === 'mestre_obras') {
+      daily.mestreObrasPayments += 1;
     } else {
       daily.x9Kills += 1;
     }
@@ -385,7 +424,9 @@ async function resolveAzideiaMissionArrival({ player, mission, nowMs }) {
     try {
       factionReward = targetType === 'correria'
         ? await grantCorreriaRewards({ player, mission })
-        : await grantAzideiaRewards({ player, mission });
+        : targetType === 'mestre_obras'
+          ? await grantMestreObrasRewards({ player, mission })
+          : await grantAzideiaRewards({ player, mission });
     } catch (rewardError) {
       // A missão e a reposição do mapa nunca podem travar porque o lote de
       // facção/chat falhou. O jogador recebe a recompensa imediata e o comboio
@@ -469,6 +510,7 @@ async function reconcileAzideiaMissionsForPlayer(player) {
       player.markModified('gang');
       player.markModified('azideiaDaily');
       player.markModified('convoyAccelerators');
+      player.markModified('barracoAccelerators');
       player.markModified('balances');
     }
     bumpVersion(player);
@@ -594,13 +636,14 @@ function getActiveGangMembers(player) {
 }
 
 async function getActiveAzideiaMissionCounts(playerId) {
-  const [total, travelling, travellingX9, travellingCorreria] = await Promise.all([
+  const [total, travelling, travellingX9, travellingCorreria, travellingMestreObras] = await Promise.all([
     AzideiaMission.countDocuments({ playerId: String(playerId), status: { $in: ['travelling', 'returning'] } }),
     AzideiaMission.countDocuments({ playerId: String(playerId), status: 'travelling' }),
     AzideiaMission.countDocuments({ playerId: String(playerId), status: 'travelling', targetType: 'x9' }),
     AzideiaMission.countDocuments({ playerId: String(playerId), status: 'travelling', targetType: 'correria' }),
+    AzideiaMission.countDocuments({ playerId: String(playerId), status: 'travelling', targetType: 'mestre_obras' }),
   ]);
-  return { total, travelling, travellingX9, travellingCorreria };
+  return { total, travelling, travellingX9, travellingCorreria, travellingMestreObras };
 }
 
 async function usedTiles() {
@@ -681,7 +724,7 @@ async function createRandomCorreriaTarget(occupied = null) {
 async function cleanupStaleX9Reservations() {
   const staleIso = new Date(Date.now() - X9_STALE_RESERVATION_MS).toISOString();
   const reservedTargets = await AzideiaTarget.find({
-    type: { $in: ['x9', 'correria'] },
+    type: { $in: Object.keys(AZIDEIA_TARGETS) },
     active: true,
     reservedByPlayerId: { $nin: [null, ''] },
     $or: [
@@ -738,7 +781,8 @@ async function ensureActiveAzideiaTargets() {
   const cleaned = await cleanupStaleX9Reservations();
   const x9 = await ensureActiveTargetPool('x9', AZIDEIA_X9);
   const correria = await ensureActiveTargetPool('correria', AZIDEIA_CORRERIA);
-  const created = x9.created + correria.created;
+  const mestreObras = await ensureActiveTargetPool('mestre_obras', AZIDEIA_MESTRE_OBRAS);
+  const created = x9.created + correria.created + mestreObras.created;
 
   if (cleaned > 0 || created > 0) {
     emitAzideiaMapChanged('ensure_target_pool', {
@@ -746,12 +790,14 @@ async function ensureActiveAzideiaTargets() {
       created,
       x9Created: x9.created,
       correriaCreated: correria.created,
+      mestreObrasCreated: mestreObras.created,
       x9ActiveCount: AZIDEIA_X9.activeCount,
       correriaActiveCount: AZIDEIA_CORRERIA.activeCount,
+      mestreObrasActiveCount: AZIDEIA_MESTRE_OBRAS.activeCount,
     });
   }
 
-  return { cleaned, created, x9Created: x9.created, correriaCreated: correria.created };
+  return { cleaned, created, x9Created: x9.created, correriaCreated: correria.created, mestreObrasCreated: mestreObras.created };
 }
 
 async function ensureActiveX9Targets() {
@@ -786,12 +832,14 @@ async function getVisibleTargetsForType(type, config, query) {
     .sort((a, b) => Number(reservedIds.has(String(b._id))) - Number(reservedIds.has(String(a._id))));
 }
 
-function buildDailyEnvelope(player, travellingReservations = 0, correriaTravellingReservations = 0) {
+function buildDailyEnvelope(player, travellingReservations = 0, correriaTravellingReservations = 0, mestreObrasTravellingReservations = 0) {
   const daily = ensureAzideiaDaily(player);
   const dailyKills = Math.max(0, Math.floor(toNumber(daily.x9Kills, 0)));
   const dailyCorreriaNegotiations = Math.max(0, Math.floor(toNumber(daily.correriaNegotiations, 0)));
+  const dailyMestreObrasPayments = Math.max(0, Math.floor(toNumber(daily.mestreObrasPayments, 0)));
   const reserved = Math.max(0, Math.floor(toNumber(travellingReservations, 0)));
   const correriaReserved = Math.max(0, Math.floor(toNumber(correriaTravellingReservations, 0)));
+  const mestreObrasReserved = Math.max(0, Math.floor(toNumber(mestreObrasTravellingReservations, 0)));
   return {
     dailyKills,
     dailyLimit: AZIDEIA_X9.dailyLimitPerPlayer,
@@ -799,10 +847,16 @@ function buildDailyEnvelope(player, travellingReservations = 0, correriaTravelli
     dailyCorreriaNegotiations,
     correriaDailyLimit: AZIDEIA_CORRERIA.dailyLimitPerPlayer,
     correriaRemainingToday: Math.max(0, AZIDEIA_CORRERIA.dailyLimitPerPlayer - dailyCorreriaNegotiations - correriaReserved),
+    dailyMestreObrasPayments,
+    mestreObrasDailyLimit: AZIDEIA_MESTRE_OBRAS.dailyLimitPerPlayer,
+    mestreObrasRemainingToday: Math.max(0, AZIDEIA_MESTRE_OBRAS.dailyLimitPerPlayer - dailyMestreObrasPayments - mestreObrasReserved),
+    mestreObrasCostDirtyMoney: getTargetCostDirtyMoney('mestre_obras', player),
     x9FactionReceivedToday: normalizeX9FactionRewardCap(daily.x9FactionAcceleratorsReceived),
     x9FactionDailyLimit: AZIDEIA_X9.factionDailyRewardLimit,
     correriaFactionReceivedToday: normalizeCorreriaFactionRewardCap(daily.correriaFactionCorreReceived),
     correriaFactionDailyLimit: AZIDEIA_CORRERIA.factionDailyRewardLimit,
+    mestreObrasFactionReceivedToday: normalizeMestreObrasFactionRewardCap(daily.mestreObrasFactionBarracoAcceleratorsReceived),
+    mestreObrasFactionDailyLimit: AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit,
   };
 }
 
@@ -810,19 +864,27 @@ export async function getAzideiaTargets(req, res) {
   try {
     if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
     await ensureActiveAzideiaTargets();
-    const [x9Targets, correriaTargets] = await Promise.all([
+    const [x9Targets, correriaTargets, mestreObrasTargets] = await Promise.all([
       getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY),
       getVisibleTargetsForType('correria', AZIDEIA_CORRERIA, AVAILABLE_CORRERIA_QUERY),
+      getVisibleTargetsForType('mestre_obras', AZIDEIA_MESTRE_OBRAS, AVAILABLE_MESTRE_OBRAS_QUERY),
     ]);
 
     const activeCounts = await getActiveAzideiaMissionCounts(req.player._id);
-    const daily = buildDailyEnvelope(req.player, activeCounts.travellingX9, activeCounts.travellingCorreria);
+    const daily = buildDailyEnvelope(
+      req.player,
+      activeCounts.travellingX9,
+      activeCounts.travellingCorreria,
+      activeCounts.travellingMestreObras,
+    );
     return res.json({
-      targets: [...x9Targets, ...correriaTargets].map(normalizeTarget),
-      x9Targets: x9Targets.map(normalizeTarget),
-      correriaTargets: correriaTargets.map(normalizeTarget),
+      targets: [...x9Targets, ...correriaTargets, ...mestreObrasTargets].map((target) => normalizeTarget(target, req.player)),
+      x9Targets: x9Targets.map((target) => normalizeTarget(target, req.player)),
+      correriaTargets: correriaTargets.map((target) => normalizeTarget(target, req.player)),
+      mestreObrasTargets: mestreObrasTargets.map((target) => normalizeTarget(target, req.player)),
       costDirtyMoney: AZIDEIA_X9.costDirtyMoney,
       correriaCostDirtyMoney: AZIDEIA_CORRERIA.costDirtyMoney,
+      mestreObrasCostDirtyMoney: getTargetCostDirtyMoney('mestre_obras', req.player),
       activeAzideiaConvoys: activeCounts.total,
       maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
       ...daily,
@@ -840,9 +902,9 @@ export async function getX9Targets(req, res) {
     const targets = await getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY);
 
     const activeCounts = await getActiveAzideiaMissionCounts(req.player._id);
-    const daily = buildDailyEnvelope(req.player, activeCounts.travellingX9, activeCounts.travellingCorreria);
+    const daily = buildDailyEnvelope(req.player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras);
     return res.json({
-      targets: targets.map(normalizeTarget),
+      targets: targets.map((target) => normalizeTarget(target, req.player)),
       costDirtyMoney: AZIDEIA_X9.costDirtyMoney,
       activeAzideiaConvoys: activeCounts.total,
       maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
@@ -909,7 +971,7 @@ export async function attackX9(req, res) {
       return res.status(429).json({
         error: 'Limite diário de Azidéia atingido.',
         reason: 'daily_limit_reached',
-        ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria),
+        ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras),
       });
     }
 
@@ -1028,7 +1090,7 @@ export async function attackX9(req, res) {
       factionReward: null,
       activeAzideiaConvoys: activeCounts.total + 1,
       maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
-      ...buildDailyEnvelope(player, activeCounts.travellingX9 + 1, activeCounts.travellingCorreria),
+      ...buildDailyEnvelope(player, activeCounts.travellingX9 + 1, activeCounts.travellingCorreria, activeCounts.travellingMestreObras),
       player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
     });
   } catch (error) {
@@ -1108,6 +1170,10 @@ function normalizeCorreriaFactionRewardCap(value) {
   return Math.min(AZIDEIA_CORRERIA.factionDailyRewardLimit, Math.max(0, Math.floor(toNumber(value, 0))));
 }
 
+function normalizeMestreObrasFactionRewardCap(value) {
+  return Math.min(AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit, Math.max(0, Math.floor(toNumber(value, 0))));
+}
+
 async function grantCorreriaRewards({ player, mission }) {
   // Recompensa imediata do jogador que negociou: +1 Corre.
   // Recompensa de facção: NÃO entra direto no saldo; vira lote coletável
@@ -1175,6 +1241,75 @@ async function grantCorreriaRewards({ player, mission }) {
   return factionReward;
 }
 
+async function grantMestreObrasRewards({ player, mission }) {
+  // Recompensa imediata: 1h + 1min para acelerar evolução do barraco.
+  // A moeda oficial do sistema é barracoAccelerators.seconds.
+  const barracoAccelerators = ensureBarracoAccelerators(player);
+  const rewardSeconds = Math.max(0, Math.floor(toNumber(
+    AZIDEIA_MESTRE_OBRAS.rewardQuantitySeconds,
+    AZIDEIA_MESTRE_OBRAS.rewardQuantity,
+  )));
+  barracoAccelerators.seconds += rewardSeconds;
+
+  const rewardContext = await getFactionRewardContext(player);
+  if (!rewardContext || rewardContext.memberIds.length <= 0) return null;
+
+  const memberIds = rewardContext.memberIds;
+  const batch = await AzideiaRewardBatch.create({
+    factionId: rewardContext.factionId,
+    rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
+    quantityPerMember: AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds,
+    memberIds,
+    sourceTargetType: 'mestre_obras',
+    sourceTargetId: String(mission.targetId),
+    killerId: String(player._id),
+    killerName: String(player.name || 'Jogador'),
+  });
+
+  mission.factionRewardBatchId = String(batch._id);
+
+  const factionReward = {
+    factionId: rewardContext.factionId,
+    rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
+    quantityPerMember: AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds,
+    memberCount: memberIds.length,
+    batchId: String(batch._id),
+    dailyLimit: AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit,
+  };
+
+  try {
+    const message = await ChatMessage.create({
+      channel: 'faccao',
+      senderId: 'system:azideia:mestre_obras',
+      senderName: 'Mestre de Obras',
+      factionId: rewardContext.factionId,
+      body: `${player.name || 'Jogador'} pagou um Mestre de Obras. A facção recebeu aceleradores de evolução do barraco para coletar.`,
+      read: false,
+      system: true,
+      messageType: 'azideia_reward',
+      metadata: {
+        batchId: String(batch._id),
+        targetType: 'mestre_obras',
+        rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
+        quantityPerMember: AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds,
+        memberCount: memberIds.length,
+        dailyLimit: AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit,
+        payerId: String(player._id),
+        payerName: String(player.name || 'Jogador'),
+        killerId: String(player._id),
+        killerName: String(player.name || 'Jogador'),
+        modelUrl: AZIDEIA_MESTRE_OBRAS.modelUrl,
+      },
+    });
+
+    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
+  } catch (chatError) {
+    console.error('[MESTRE_OBRAS_REWARD_CHAT_NON_BLOCKING]', chatError);
+  }
+
+  return factionReward;
+}
+
 export async function negotiateCorreria(req, res) {
   try {
     const player = req.player;
@@ -1211,7 +1346,7 @@ export async function negotiateCorreria(req, res) {
       return res.status(429).json({
         error: 'Limite diário de negociação com Correria atingido.',
         reason: 'correria_daily_limit_reached',
-        ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria),
+        ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras),
       });
     }
 
@@ -1313,12 +1448,174 @@ export async function negotiateCorreria(req, res) {
       factionReward: null,
       activeAzideiaConvoys: activeCounts.total + 1,
       maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
-      ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria + 1),
+      ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria + 1, activeCounts.travellingMestreObras),
       player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
     });
   } catch (error) {
     console.error('[AZIDEIA_NEGOTIATE_CORRERIA]', error);
     return res.status(500).json({ error: 'Erro ao negociar com Correria' });
+  }
+}
+
+export async function payMestreObras(req, res) {
+  try {
+    const player = req.player;
+    if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    const targetId = String(req.params?.targetId || req.body?.targetId || '').trim();
+    if (!mongoose.Types.ObjectId.isValid(targetId)) {
+      return res.status(400).json({ error: 'Mestre de Obras inválido', reason: 'invalid_target_id' });
+    }
+
+    await reconcileAzideiaMissionsForPlayer(player);
+
+    const activeCounts = await getActiveAzideiaMissionCounts(player._id);
+    const activeMembers = getActiveGangMembers(player);
+
+    if (activeCounts.total >= MAX_PARALLEL_AZIDEIA_CONVOYS) {
+      return res.status(429).json({
+        error: 'Você já tem 3 comboios Azidéia em andamento.',
+        reason: 'max_parallel_azideia_convoys',
+        activeAzideiaConvoys: activeCounts.total,
+        maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
+      });
+    }
+
+    if (activeMembers.length <= 0) {
+      return res.status(400).json({
+        error: 'Você precisa de pelo menos 1 membro ativo da gangue para enviar o comboio ao Mestre de Obras.',
+        reason: 'no_active_gang_member',
+      });
+    }
+
+    const daily = ensureAzideiaDaily(player);
+    if (daily.mestreObrasPayments + activeCounts.travellingMestreObras >= AZIDEIA_MESTRE_OBRAS.dailyLimitPerPlayer) {
+      return res.status(429).json({
+        error: 'Limite diário de Mestre de Obras atingido.',
+        reason: 'daily_limit_reached',
+        ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras),
+      });
+    }
+
+    player.balances = player.balances || {};
+    const dirtyMoney = toNumber(player.balances.dirtyMoney, 0);
+    const costDirtyMoney = getTargetCostDirtyMoney('mestre_obras', player);
+    if (dirtyMoney < costDirtyMoney) {
+      return res.status(400).json({
+        error: 'Commands sujo insuficiente para pagar o Mestre de Obras.',
+        reason: 'insufficient_dirty_money',
+        costDirtyMoney,
+        currentDirtyMoney: dirtyMoney,
+      });
+    }
+
+    const reservationKey = `pending:${String(player._id)}:${Date.now()}`;
+    const target = await AzideiaTarget.findOneAndUpdate(
+      {
+        _id: targetId,
+        type: 'mestre_obras',
+        active: true,
+        $or: [
+          { reservedByPlayerId: null },
+          { reservedByPlayerId: { $exists: false } },
+          { reservedByPlayerId: '' },
+        ],
+      },
+      {
+        $set: {
+          reservedByPlayerId: String(player._id),
+          reservedByMissionId: reservationKey,
+          reservedAt: new Date().toISOString(),
+        },
+      },
+      { new: true },
+    );
+
+    if (!target) {
+      await ensureActiveAzideiaTargets();
+      return res.status(409).json({ error: 'Esse Mestre de Obras já foi pago por outro comboio.', reason: 'target_already_reserved' });
+    }
+
+    const originTileX = clampTile(player.mapPosition?.tileX ?? 0);
+    const originTileY = clampTile(player.mapPosition?.tileY ?? 0);
+    const routeStart = getPlayerSpaceCenterTile(originTileX, originTileY);
+    const routeTiles = buildDiagonalRoute(routeStart.tileX, routeStart.tileY, target.tileX, target.tileY);
+    const returnRouteTiles = reverseRoute(routeTiles);
+    const travelDurationMs = getAzideiaTravelDuration(routeTiles, player);
+    const returnDurationMs = travelDurationMs;
+    const launchedAt = Date.now();
+    const arriveAtIso = new Date(launchedAt + travelDurationMs).toISOString();
+    const returnAtIso = new Date(launchedAt + travelDurationMs + returnDurationMs).toISOString();
+    const selectedMember = activeMembers[0];
+
+    player.balances.dirtyMoney = Math.max(0, dirtyMoney - costDirtyMoney);
+
+    const mission = await AzideiaMission.create({
+      playerId: String(player._id),
+      playerName: String(player.name || 'Jogador'),
+      factionId: player.factionId ? String(player.factionId) : null,
+      targetId: String(target._id),
+      targetType: 'mestre_obras',
+      targetName: target.name || AZIDEIA_MESTRE_OBRAS.name,
+      targetModelUrl: target.modelUrl || AZIDEIA_MESTRE_OBRAS.modelUrl,
+      targetTileX: clampTile(target.tileX),
+      targetTileY: clampTile(target.tileY),
+      originTileX,
+      originTileY,
+      routeTiles,
+      returnRouteTiles,
+      travelDurationMs,
+      returnDurationMs,
+      costDirtyMoney,
+      rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
+      rewardQuantity: AZIDEIA_MESTRE_OBRAS.rewardQuantitySeconds,
+      selectedGangMemberId: selectedMember?.id || null,
+      status: 'travelling',
+      launchedAtIso: new Date(launchedAt).toISOString(),
+      arriveAtIso,
+      returnAtIso,
+    });
+
+    target.reservedByMissionId = String(mission._id);
+    target.reservedAt = new Date(launchedAt).toISOString();
+    await target.save();
+    emitAzideiaMapChanged('mestre_obras_reserved', { targetId: String(target._id), missionId: String(mission._id), targetType: 'mestre_obras' });
+    emitAzideiaMissionChanged('mission_started', mission);
+    await ensureActiveAzideiaTargets();
+
+    if (selectedMember) {
+      selectedMember.status = 'marchando';
+      selectedMember.activeAttackId = `azideia:${mission._id}`;
+      selectedMember.marchingUntil = returnAtIso;
+    }
+
+    if (typeof player.markModified === 'function') {
+      player.markModified('balances');
+      player.markModified('gang');
+      player.markModified('azideiaDaily');
+    }
+
+    bumpVersion(player);
+    await player.save();
+    emitPlayerUpdate(player);
+
+    return res.json({
+      success: true,
+      phase: 'travelling',
+      ...normalizeMission(mission),
+      targetId: String(target._id),
+      targetType: 'mestre_obras',
+      costDirtyMoney,
+      immediateReward: null,
+      factionReward: null,
+      activeAzideiaConvoys: activeCounts.total + 1,
+      maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
+      ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras + 1),
+      player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
+    });
+  } catch (error) {
+    console.error('[AZIDEIA_PAY_MESTRE_OBRAS]', error);
+    return res.status(500).json({ error: 'Erro ao pagar Mestre de Obras' });
   }
 }
 
@@ -1360,6 +1657,7 @@ export async function confirmAzideiaMissionArrival(req, res) {
     if (typeof player.markModified === 'function') {
       player.markModified('azideiaDaily');
       player.markModified('convoyAccelerators');
+      player.markModified('barracoAccelerators');
       player.markModified('balances');
     }
 
@@ -1381,7 +1679,7 @@ export async function confirmAzideiaMissionArrival(req, res) {
         quantity: Math.max(0, Math.floor(toNumber(mission.rewardQuantity, getTargetConfig(mission.targetType).rewardQuantity))),
       },
       factionReward,
-      ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria),
+      ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras),
       player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
     });
   } catch (error) {
@@ -1427,6 +1725,7 @@ export async function confirmAzideiaMissionReturn(req, res) {
       player.markModified('gang');
       player.markModified('azideiaDaily');
       player.markModified('convoyAccelerators');
+      player.markModified('barracoAccelerators');
       player.markModified('balances');
     }
     bumpVersion(player);
@@ -1462,13 +1761,14 @@ function normalizeRewardBatch(batch) {
 }
 
 async function getPendingBatchesForPlayer(player) {
-  if (!player?.factionId) return [];
-  const playerId = String(player._id);
-  const factionAliases = await getFactionAliasesForPlayer(player);
-  if (factionAliases.length <= 0) return [];
+  const playerId = String(player?._id || '').trim();
+  if (!playerId) return [];
 
+  // O lote já salva memberIds explicitamente. Consultar por memberIds corrige
+  // casos legados em que factionId do jogador e factionId do lote usam ids
+  // diferentes (_id Mongo vs id público) ou o jogador está na lista de membros,
+  // mas ainda não recebeu player.factionId normalizado.
   return AzideiaRewardBatch.find({
-    factionId: { $in: factionAliases },
     memberIds: playerId,
     claimedBy: { $ne: playerId },
   }).sort({ createdAt: 1 });
@@ -1486,19 +1786,40 @@ function getCorreriaClaimRemainingToday(player) {
   return Math.max(0, AZIDEIA_CORRERIA.factionDailyRewardLimit - already);
 }
 
+function getMestreObrasClaimRemainingToday(player) {
+  const daily = ensureAzideiaDaily(player);
+  const already = normalizeMestreObrasFactionRewardCap(daily.mestreObrasFactionBarracoAcceleratorsReceived);
+  return Math.max(0, AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit - already);
+}
+
+function normalizeBatchRewardType(batch) {
+  if (batch.rewardType === 'corre') return 'corre';
+  if (batch.rewardType === 'barraco_time' || batch.sourceTargetType === 'mestre_obras') return 'barraco_time';
+  return 'convoy_2x';
+}
+
 function summarizeRewardBatches(player, batches) {
   let x9Remaining = getX9ClaimRemainingToday(player);
   let correRemaining = getCorreriaClaimRemainingToday(player);
-  const available = { convoy_2x: 0, corre: 0 };
+  let mestreObrasRemaining = getMestreObrasClaimRemainingToday(player);
+  const available = { convoy_2x: 0, corre: 0, barraco_time: 0 };
 
   for (const batch of batches) {
-    const rewardType = batch.rewardType === 'corre' ? 'corre' : 'convoy_2x';
+    const rewardType = normalizeBatchRewardType(batch);
     const quantity = Math.max(0, Math.floor(toNumber(batch.quantityPerMember, 1)));
+    if (quantity <= 0) continue;
 
     if (rewardType === 'corre') {
       const allowed = Math.min(quantity, correRemaining);
       available.corre += allowed;
       correRemaining -= allowed;
+    } else if (rewardType === 'barraco_time') {
+      // Cada lote de Mestre de Obras vale 1 acelerador de 5 minutos por membro.
+      // O limite diário é em quantidade de aceleradores, não em segundos.
+      if (mestreObrasRemaining > 0) {
+        available.barraco_time += quantity;
+        mestreObrasRemaining -= 1;
+      }
     } else {
       const allowed = Math.min(quantity, x9Remaining);
       available.convoy_2x += allowed;
@@ -1509,11 +1830,13 @@ function summarizeRewardBatches(player, batches) {
   const daily = ensureAzideiaDaily(player);
   return {
     available,
-    totalAvailable: available.convoy_2x + available.corre,
+    totalAvailable: available.convoy_2x + available.corre + available.barraco_time,
     x9FactionReceivedToday: normalizeX9FactionRewardCap(daily.x9FactionAcceleratorsReceived),
     x9FactionDailyLimit: AZIDEIA_X9.factionDailyRewardLimit,
     correriaFactionReceivedToday: normalizeCorreriaFactionRewardCap(daily.correriaFactionCorreReceived),
     correriaFactionDailyLimit: AZIDEIA_CORRERIA.factionDailyRewardLimit,
+    mestreObrasFactionReceivedToday: normalizeMestreObrasFactionRewardCap(daily.mestreObrasFactionBarracoAcceleratorsReceived),
+    mestreObrasFactionDailyLimit: AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit,
     batches: batches.map(normalizeRewardBatch),
   };
 }
@@ -1542,18 +1865,20 @@ export async function claimMyAzideiaRewards(req, res) {
 
     const batches = await getPendingBatchesForPlayer(player);
     const playerId = String(player._id);
-    const claimed = { convoy_2x: 0, corre: 0 };
+    const claimed = { convoy_2x: 0, corre: 0, barraco_time: 0 };
     let x9Remaining = getX9ClaimRemainingToday(player);
     let correRemaining = getCorreriaClaimRemainingToday(player);
+    let mestreObrasRemaining = getMestreObrasClaimRemainingToday(player);
 
     player.balances = player.balances || {};
-    const accelerators = ensureConvoyAccelerators(player);
+    const convoyAccelerators = ensureConvoyAccelerators(player);
+    const barracoAccelerators = ensureBarracoAccelerators(player);
     const daily = ensureAzideiaDaily(player);
 
     for (const batch of batches) {
       if (batch.claimedBy.includes(playerId)) continue;
 
-      const rewardType = batch.rewardType === 'corre' ? 'corre' : 'convoy_2x';
+      const rewardType = normalizeBatchRewardType(batch);
       const quantity = Math.max(0, Math.floor(toNumber(batch.quantityPerMember, 1)));
       if (quantity <= 0) continue;
 
@@ -1565,11 +1890,20 @@ export async function claimMyAzideiaRewards(req, res) {
         daily.correriaFactionCorreReceived = normalizeCorreriaFactionRewardCap(daily.correriaFactionCorreReceived + grant);
         correRemaining -= grant;
         claimed.corre += grant;
+      } else if (rewardType === 'barraco_time') {
+        if (mestreObrasRemaining <= 0) continue;
+
+        barracoAccelerators.seconds += quantity;
+        daily.mestreObrasFactionBarracoAcceleratorsReceived = normalizeMestreObrasFactionRewardCap(
+          daily.mestreObrasFactionBarracoAcceleratorsReceived + 1,
+        );
+        mestreObrasRemaining -= 1;
+        claimed.barraco_time += quantity;
       } else {
         const grant = Math.min(quantity, x9Remaining);
         if (grant <= 0) continue;
 
-        accelerators.twoX += grant;
+        convoyAccelerators.twoX += grant;
         daily.x9FactionAcceleratorsReceived = normalizeX9FactionRewardCap(daily.x9FactionAcceleratorsReceived + grant);
         x9Remaining -= grant;
         claimed.convoy_2x += grant;
@@ -1579,10 +1913,11 @@ export async function claimMyAzideiaRewards(req, res) {
       await batch.save();
     }
 
-    const totalClaimed = claimed.convoy_2x + claimed.corre;
+    const totalClaimed = claimed.convoy_2x + claimed.corre + claimed.barraco_time;
     if (totalClaimed > 0) {
       if (typeof player.markModified === 'function') {
         player.markModified('convoyAccelerators');
+        player.markModified('barracoAccelerators');
         player.markModified('balances');
         player.markModified('azideiaDaily');
       }

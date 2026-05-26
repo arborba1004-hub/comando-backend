@@ -315,6 +315,8 @@ export function mergePlayerState(incoming = {}) {
       x9FactionAcceleratorsReceived: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.x9FactionAcceleratorsReceived, defaults.azideiaDaily?.x9FactionAcceleratorsReceived ?? 0))),
       correriaNegotiations: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.correriaNegotiations, defaults.azideiaDaily?.correriaNegotiations ?? 0))),
       correriaFactionCorreReceived: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.correriaFactionCorreReceived, defaults.azideiaDaily?.correriaFactionCorreReceived ?? 0))),
+      mestreObrasPayments: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.mestreObrasPayments, defaults.azideiaDaily?.mestreObrasPayments ?? 0))),
+      mestreObrasFactionBarracoAcceleratorsReceived: Math.max(0, Math.floor(toNumber(incoming.azideiaDaily?.mestreObrasFactionBarracoAcceleratorsReceived, defaults.azideiaDaily?.mestreObrasFactionBarracoAcceleratorsReceived ?? 0))),
     },
 
     convoys: {

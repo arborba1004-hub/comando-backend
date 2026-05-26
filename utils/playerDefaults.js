@@ -165,6 +165,8 @@ export function getDefaultPlayerState() {
       x9FactionAcceleratorsReceived: 0,
       correriaNegotiations: 0,
       correriaFactionCorreReceived: 0,
+      mestreObrasPayments: 0,
+      mestreObrasFactionBarracoAcceleratorsReceived: 0,
     },
 
     convoys: {

@@ -9,10 +9,7 @@ import {
 
 const ALLOWED_TOP_LEVEL_FIELDS = [
   'hp',
-  'niveis',
-  'balances',
   'inventory',
-  'pageLevels',
   'skills',
   'vip',
   'lastSkillTrainAt',
@@ -34,13 +31,24 @@ const ALLOWED_TOP_LEVEL_FIELDS = [
   'gang',
 ];
 
-function pickAllowedFields(payload) {
+// Campos controlados por sistemas oficiais do backend.
+// Eles são ignorados em /player/update para impedir adulteração direta do barraco/economia.
+const SERVER_CONTROLLED_FIELDS = new Set([
+  'niveis',
+  'balances',
+  'pageLevels',
+]);
+
+function pickAllowedFields(payload = {}) {
   const safe = {};
-  for (const field of ALLOWED_TOP_LEVEL_FIELDS) {
-    if (Object.prototype.hasOwnProperty.call(payload, field)) {
-      safe[field] = payload[field];
+
+  for (const [field, value] of Object.entries(payload)) {
+    if (SERVER_CONTROLLED_FIELDS.has(field)) continue;
+    if (ALLOWED_TOP_LEVEL_FIELDS.includes(field)) {
+      safe[field] = value;
     }
   }
+
   return safe;
 }
 

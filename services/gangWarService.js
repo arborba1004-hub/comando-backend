@@ -1,6 +1,6 @@
 import GangWar from '../models/GangWar.js';
 import { generateId } from '../utils/gameHelpers.js';
-import { buildGangStatSnapshot } from './gangStatisticsService.js';
+import { applyBarracoGangStatSourceToList, buildGangStatSnapshot } from './gangStatisticsService.js';
 
 export const VALID_FORMATIONS = [
   'pressao_total',
@@ -366,7 +366,10 @@ export function serializeGang(doc, player) {
   const activeByType = countByType(doc.members || [], (m) => m.status === 'ativo');
   const playerGangMembers = Array.isArray(player?.gang?.members) ? player.gang.members : [];
   const statMembers = playerGangMembers.length ? playerGangMembers : (doc.members || []);
-  const statSources = Array.isArray(player?.gang?.statSources) ? player.gang.statSources : [];
+  const statSources = applyBarracoGangStatSourceToList(
+    Array.isArray(player?.gang?.statSources) ? player.gang.statSources : [],
+    player?.niveis?.barracoLevel || 1
+  );
   const statSnapshot = buildGangStatSnapshot(statMembers, statSources);
   const statMemberById = new Map((statSnapshot.members || []).map((member) => [String(member.id), member]));
 

@@ -115,6 +115,95 @@ export const ATRIBUTOS_GANG = {
 
 const STAT_KEYS = ['rajada', 'blindagem', 'folego', 'quebra'];
 
+export const BARRACO_GANG_STAT_SOURCE_ID = 'barraco_level_bonus';
+export const BARRACO_GANG_STAT_SOURCE_LABEL = 'Bônus do Barraco';
+export const BARRACO_GANG_STAT_BONUS_PER_LEVEL = 1;
+
+function getBarracoLevelFromPlayer(player = {}) {
+  return clamp(toPositiveInt(player?.niveis?.barracoLevel, 1), 1, 100);
+}
+
+export function getBarracoGangStatBonusPercent(level = 1) {
+  const safeLevel = clamp(toPositiveInt(level, 1), 1, 100);
+  return Math.max(0, (safeLevel - 1) * BARRACO_GANG_STAT_BONUS_PER_LEVEL);
+}
+
+export function buildBarracoGangStatSource(level = 1) {
+  const safeLevel = clamp(toPositiveInt(level, 1), 1, 100);
+  const bonusPercent = getBarracoGangStatBonusPercent(safeLevel);
+
+  return sanitizeGangStatSource({
+    id: BARRACO_GANG_STAT_SOURCE_ID,
+    source: 'barraco',
+    label: `${BARRACO_GANG_STAT_SOURCE_LABEL} Nv. ${safeLevel}`,
+    targetScope: 'global',
+    percent: {
+      rajada: bonusPercent,
+      blindagem: bonusPercent,
+      folego: bonusPercent,
+      quebra: bonusPercent,
+    },
+    flat: { rajada: 0, blindagem: 0, folego: 0, quebra: 0 },
+    enabled: true,
+    expiresAt: null,
+  });
+}
+
+function barracoSourceSignature(source = {}) {
+  return JSON.stringify({
+    id: String(source?.id || ''),
+    source: String(source?.source || ''),
+    label: String(source?.label || ''),
+    targetScope: String(source?.targetScope || ''),
+    targetType: source?.targetType ?? null,
+    targetMemberId: source?.targetMemberId ?? null,
+    percent: cloneStats(source?.percent),
+    flat: cloneStats(source?.flat),
+    enabled: source?.enabled !== false,
+    expiresAt: source?.expiresAt ? String(source.expiresAt) : null,
+  });
+}
+
+export function applyBarracoGangStatSourceToList(statSources = [], barracoLevel = 1) {
+  const safeSources = sanitizeGangStatSources(statSources);
+  const barracoSource = buildBarracoGangStatSource(barracoLevel);
+  const index = safeSources.findIndex((source) => source.id === BARRACO_GANG_STAT_SOURCE_ID);
+
+  if (index >= 0) {
+    const current = safeSources[index];
+    const isSame = barracoSourceSignature(current) === barracoSourceSignature(barracoSource);
+    safeSources[index] = isSame ? current : barracoSource;
+  } else {
+    safeSources.push(barracoSource);
+  }
+
+  return safeSources;
+}
+
+export function syncBarracoGangStatBonus(player) {
+  if (!player) {
+    return { changed: false, source: null, statSnapshot: null };
+  }
+
+  if (!player.gang) player.gang = { members: [], trainingSlots: [], stats: {}, statSources: [] };
+
+  const barracoLevel = getBarracoLevelFromPlayer(player);
+  const before = Array.isArray(player?.gang?.statSources) ? player.gang.statSources : [];
+  const next = applyBarracoGangStatSourceToList(before, barracoLevel);
+  const source = next.find((item) => item.id === BARRACO_GANG_STAT_SOURCE_ID) || null;
+
+  const beforeBarraco = sanitizeGangStatSources(before).find((item) => item.id === BARRACO_GANG_STAT_SOURCE_ID);
+  const changed = barracoSourceSignature(beforeBarraco || {}) !== barracoSourceSignature(source || {});
+
+  player.gang.statSources = next;
+  player.gang.statSnapshot = buildGangStatSnapshot(player.gang.members || [], next);
+  player.gang.updatedAtIso = new Date().toISOString();
+
+  if (changed && typeof player.markModified === 'function') player.markModified('gang');
+
+  return { changed, source, statSnapshot: player.gang.statSnapshot };
+}
+
 const VALID_SOURCES = [
   'formacao',
   'ct',

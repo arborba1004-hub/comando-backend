@@ -6,6 +6,7 @@ import {
   getMercadoPagoBrickConfig,
   createConvoyBrickPayment,
   createCorrePackageBrickPayment,
+  createBarracoAcceleratorPackageBrickPayment,
 } from '../controllers/mercadoPagoBrickController.js';
 
 const router = Router();
@@ -14,6 +15,7 @@ router.post('/checkout/convoy', authMiddleware, createConvoyCheckout);
 router.get('/brick/config', authMiddleware, getMercadoPagoBrickConfig);
 router.post('/brick/convoy', authMiddleware, createConvoyBrickPayment);
 router.post('/brick/corre-package', authMiddleware, createCorrePackageBrickPayment);
+router.post('/brick/barraco-accelerator-package', authMiddleware, createBarracoAcceleratorPackageBrickPayment);
 router.get('/purchases/:purchaseId', authMiddleware, getPurchaseStatus);
 router.post('/webhooks/mercadopago', handleMercadoPagoWebhook);
 

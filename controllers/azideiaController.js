@@ -216,6 +216,278 @@ async function getFactionRewardContext(player) {
   };
 }
 
+function getFactionRewardSpecForTargetType(targetType = 'x9') {
+  if (targetType === 'correria') {
+    return {
+      rewardType: AZIDEIA_CORRERIA.rewardType,
+      quantityPerMember: AZIDEIA_CORRERIA.rewardQuantity,
+      dailyLimit: AZIDEIA_CORRERIA.factionDailyRewardLimit,
+      senderId: 'system:azideia:correria',
+      senderName: 'Correria',
+      chatBody: (playerName) => `${playerName} negociou com um Correria. A facção recebeu Corres para coletar.`,
+      chatExtraMetadata: (player) => ({
+        negotiatorId: String(player._id),
+        negotiatorName: String(player.name || 'Jogador'),
+        iconUrl: AZIDEIA_CORRERIA.iconUrl,
+      }),
+    };
+  }
+
+  if (targetType === 'mestre_obras') {
+    return {
+      rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
+      quantityPerMember: AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds,
+      dailyLimit: AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit,
+      senderId: 'system:azideia:mestre_obras',
+      senderName: 'Mestre de Obras',
+      chatBody: (playerName) => `${playerName} pagou um Mestre de Obras. A facção recebeu aceleradores de evolução do barraco para coletar.`,
+      chatExtraMetadata: (player) => ({
+        payerId: String(player._id),
+        payerName: String(player.name || 'Jogador'),
+        modelUrl: AZIDEIA_MESTRE_OBRAS.modelUrl,
+      }),
+    };
+  }
+
+  return {
+    rewardType: AZIDEIA_X9.rewardType,
+    quantityPerMember: AZIDEIA_X9.rewardQuantity,
+    dailyLimit: AZIDEIA_X9.factionDailyRewardLimit,
+    senderId: 'system:azideia',
+    senderName: 'Azidéia',
+    chatBody: (playerName) => `${playerName} eliminou um X9. A facção recebeu aceleradores para coletar.`,
+    chatExtraMetadata: () => ({ iconUrl: AZIDEIA_X9.iconUrl }),
+  };
+}
+
+function getFactionCollectableMemberIds(rewardContext, actorPlayerId) {
+  const actorId = String(actorPlayerId || '').trim();
+  return uniqueStrings(rewardContext?.memberIds || []).filter((memberId) => memberId !== actorId);
+}
+
+async function createFactionClaimableRewardForAzideia({ player, mission, targetType = 'x9' }) {
+  if (!player?._id || !mission?._id) return null;
+
+  const rewardContext = await getFactionRewardContext(player);
+  if (!rewardContext) return null;
+
+  // O jogador que executou a ação recebe a recompensa individual imediatamente.
+  // O lote coletivo é SOMENTE para os outros membros da facção coletarem no chat.
+  const memberIds = getFactionCollectableMemberIds(rewardContext, player._id);
+  if (memberIds.length <= 0) return null;
+
+  const spec = getFactionRewardSpecForTargetType(targetType);
+  const sourceMissionId = String(mission._id);
+  const sourceTargetId = String(mission.targetId || '');
+  const actorId = String(player._id);
+
+  const existingBatch = await AzideiaRewardBatch.findOne({
+    $or: [
+      { sourceMissionId, rewardType: spec.rewardType },
+      {
+        sourceTargetType: targetType,
+        sourceTargetId,
+        killerId: actorId,
+        rewardType: spec.rewardType,
+      },
+    ],
+  });
+
+  if (existingBatch) {
+    const mergedMemberIds = uniqueStrings([...existingBatch.memberIds, ...memberIds])
+      .filter((memberId) => memberId !== actorId);
+
+    let changed = false;
+    if (existingBatch.sourceMissionId !== sourceMissionId) {
+      existingBatch.sourceMissionId = sourceMissionId;
+      changed = true;
+    }
+    if (existingBatch.factionId !== rewardContext.factionId) {
+      existingBatch.factionId = rewardContext.factionId;
+      changed = true;
+    }
+    if (JSON.stringify(existingBatch.memberIds || []) !== JSON.stringify(mergedMemberIds)) {
+      existingBatch.memberIds = mergedMemberIds;
+      changed = true;
+    }
+    if (changed) await existingBatch.save();
+    mission.factionRewardBatchId = String(existingBatch._id);
+
+    return {
+      factionId: rewardContext.factionId,
+      rewardType: spec.rewardType,
+      quantityPerMember: spec.quantityPerMember,
+      memberCount: mergedMemberIds.length,
+      batchId: String(existingBatch._id),
+      dailyLimit: spec.dailyLimit,
+      alreadyExisted: true,
+    };
+  }
+
+  const batch = await AzideiaRewardBatch.create({
+    factionId: rewardContext.factionId,
+    rewardType: spec.rewardType,
+    quantityPerMember: spec.quantityPerMember,
+    memberIds,
+    sourceMissionId,
+    sourceTargetType: targetType,
+    sourceTargetId,
+    killerId: actorId,
+    killerName: String(player.name || 'Jogador'),
+  });
+
+  mission.factionRewardBatchId = String(batch._id);
+
+  const factionReward = {
+    factionId: rewardContext.factionId,
+    rewardType: spec.rewardType,
+    quantityPerMember: spec.quantityPerMember,
+    memberCount: memberIds.length,
+    batchId: String(batch._id),
+    dailyLimit: spec.dailyLimit,
+  };
+
+  // Chat é apenas aviso. A recompensa verdadeira já está salva no lote.
+  try {
+    const message = await ChatMessage.create({
+      channel: 'faccao',
+      senderId: spec.senderId,
+      senderName: spec.senderName,
+      factionId: rewardContext.factionId,
+      body: spec.chatBody(String(player.name || 'Jogador')),
+      read: false,
+      system: true,
+      messageType: 'azideia_reward',
+      metadata: {
+        batchId: String(batch._id),
+        targetType,
+        rewardType: spec.rewardType,
+        quantityPerMember: spec.quantityPerMember,
+        memberCount: memberIds.length,
+        dailyLimit: spec.dailyLimit,
+        killerId: actorId,
+        killerName: String(player.name || 'Jogador'),
+        ...spec.chatExtraMetadata(player),
+      },
+    });
+
+    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
+  } catch (chatError) {
+    console.error('[AZIDEIA_FACTION_REWARD_CHAT_NON_BLOCKING]', chatError);
+  }
+
+  return factionReward;
+}
+
+async function createFactionClaimableRewardSafely({ player, mission, targetType }) {
+  try {
+    return await createFactionClaimableRewardForAzideia({ player, mission, targetType });
+  } catch (error) {
+    console.error('[AZIDEIA_FACTION_REWARD_BATCH_NON_BLOCKING]', {
+      playerId: String(player?._id || ''),
+      missionId: String(mission?._id || ''),
+      targetType,
+      error,
+    });
+    return null;
+  }
+}
+
+async function upsertFactionRewardBatchFromResolvedMission({ rewardContext, mission }) {
+  if (!rewardContext || !mission?._id) return null;
+
+  const targetType = mission.targetType || 'x9';
+  const spec = getFactionRewardSpecForTargetType(targetType);
+  const sourceMissionId = String(mission._id);
+  const sourceTargetId = String(mission.targetId || '');
+  const actorId = String(mission.playerId || '').trim();
+  if (!actorId) return null;
+
+  const memberIds = getFactionCollectableMemberIds(rewardContext, actorId);
+  if (memberIds.length <= 0) return null;
+
+  const existingBatch = await AzideiaRewardBatch.findOne({
+    $or: [
+      { sourceMissionId, rewardType: spec.rewardType },
+      {
+        sourceTargetType: targetType,
+        sourceTargetId,
+        killerId: actorId,
+        rewardType: spec.rewardType,
+      },
+    ],
+  });
+
+  if (existingBatch) {
+    const mergedMemberIds = uniqueStrings([...existingBatch.memberIds, ...memberIds])
+      .filter((memberId) => memberId !== actorId);
+
+    let changed = false;
+    if (existingBatch.sourceMissionId !== sourceMissionId) {
+      existingBatch.sourceMissionId = sourceMissionId;
+      changed = true;
+    }
+    if (JSON.stringify(existingBatch.memberIds || []) !== JSON.stringify(mergedMemberIds)) {
+      existingBatch.memberIds = mergedMemberIds;
+      changed = true;
+    }
+    if (changed) await existingBatch.save();
+
+    mission.factionRewardBatchId = String(existingBatch._id);
+    await mission.save();
+    return existingBatch;
+  }
+
+  const batch = await AzideiaRewardBatch.create({
+    factionId: rewardContext.factionId,
+    rewardType: spec.rewardType,
+    quantityPerMember: spec.quantityPerMember,
+    memberIds,
+    sourceMissionId,
+    sourceTargetType: targetType,
+    sourceTargetId,
+    killerId: actorId,
+    killerName: String(mission.playerName || 'Jogador'),
+  });
+
+  mission.factionRewardBatchId = String(batch._id);
+  await mission.save();
+  return batch;
+}
+
+async function repairMissingFactionRewardBatchesForPlayer(player) {
+  const rewardContext = await getFactionRewardContext(player);
+  if (!rewardContext || rewardContext.factionAliases.length <= 0) return { repaired: 0 };
+
+  const missions = await AzideiaMission.find({
+    factionId: { $in: rewardContext.factionAliases },
+    targetType: { $in: ['x9', 'correria', 'mestre_obras'] },
+    rewardGrantedAtIso: { $nin: [null, ''] },
+    $or: [
+      { factionRewardBatchId: null },
+      { factionRewardBatchId: '' },
+      { factionRewardBatchId: { $exists: false } },
+    ],
+  })
+    .sort({ createdAt: -1 })
+    .limit(120);
+
+  let repaired = 0;
+  for (const mission of missions) {
+    try {
+      const batch = await upsertFactionRewardBatchFromResolvedMission({ rewardContext, mission });
+      if (batch) repaired += 1;
+    } catch (error) {
+      console.error('[AZIDEIA_FACTION_REWARD_REPAIR_NON_BLOCKING]', {
+        missionId: String(mission?._id || ''),
+        error,
+      });
+    }
+  }
+
+  return { repaired };
+}
+
 async function getFactionAliasesForPlayer(player) {
   const fallbackFactionId = String(player?.factionId || '').trim();
   const faction = fallbackFactionId
@@ -586,6 +858,7 @@ async function reconcileAllOverdueAzideiaMissions(limit = 120) {
           player.markModified('gang');
           player.markModified('azideiaDaily');
           player.markModified('convoyAccelerators');
+          player.markModified('barracoAccelerators');
           player.markModified('balances');
         }
         bumpVersion(player);
@@ -1103,63 +1376,11 @@ async function grantAzideiaRewards({ player, mission }) {
   const accelerators = ensureConvoyAccelerators(player);
   accelerators.twoX += AZIDEIA_X9.rewardQuantity;
 
-  const rewardContext = await getFactionRewardContext(player);
-  if (!rewardContext || rewardContext.memberIds.length <= 0) return null;
-
-  const memberIds = rewardContext.memberIds;
-  const batch = await AzideiaRewardBatch.create({
-    factionId: rewardContext.factionId,
-    rewardType: AZIDEIA_X9.rewardType,
-    quantityPerMember: AZIDEIA_X9.rewardQuantity,
-    memberIds,
-    sourceTargetType: 'x9',
-    sourceTargetId: String(mission.targetId),
-    killerId: String(player._id),
-    killerName: String(player.name || 'Jogador'),
+  return createFactionClaimableRewardSafely({
+    player,
+    mission,
+    targetType: 'x9',
   });
-
-  mission.factionRewardBatchId = String(batch._id);
-
-  const factionReward = {
-    factionId: rewardContext.factionId,
-    rewardType: AZIDEIA_X9.rewardType,
-    quantityPerMember: AZIDEIA_X9.rewardQuantity,
-    memberCount: memberIds.length,
-    batchId: String(batch._id),
-    dailyLimit: AZIDEIA_X9.factionDailyRewardLimit,
-  };
-
-  // Chat é informativo. Se falhar, o lote de coleta já foi salvo e continua
-  // aparecendo no modal /azideia/rewards/me.
-  try {
-    const message = await ChatMessage.create({
-      channel: 'faccao',
-      senderId: 'system:azideia',
-      senderName: 'Azidéia',
-      factionId: rewardContext.factionId,
-      body: `${player.name || 'Jogador'} eliminou um X9. A facção recebeu aceleradores para coletar.`,
-      read: false,
-      system: true,
-      messageType: 'azideia_reward',
-      metadata: {
-        batchId: String(batch._id),
-        targetType: 'x9',
-        rewardType: AZIDEIA_X9.rewardType,
-        quantityPerMember: AZIDEIA_X9.rewardQuantity,
-        memberCount: memberIds.length,
-        dailyLimit: AZIDEIA_X9.factionDailyRewardLimit,
-        killerId: String(player._id),
-        killerName: String(player.name || 'Jogador'),
-        iconUrl: AZIDEIA_X9.iconUrl,
-      },
-    });
-
-    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
-  } catch (chatError) {
-    console.error('[AZIDEIA_REWARD_CHAT_NON_BLOCKING]', chatError);
-  }
-
-  return factionReward;
 }
 
 function normalizeX9FactionRewardCap(value) {
@@ -1176,74 +1397,20 @@ function normalizeMestreObrasFactionRewardCap(value) {
 
 async function grantCorreriaRewards({ player, mission }) {
   // Recompensa imediata do jogador que negociou: +1 Corre.
-  // Recompensa de facção: NÃO entra direto no saldo; vira lote coletável
-  // pelo ícone Azidéia no chat da facção, com limite diário aplicado no claim.
+  // Recompensa coletiva: lote pendente para os OUTROS membros coletarem no chat.
   player.balances = player.balances || {};
   player.balances.corre = Math.max(0, Math.floor(toNumber(player.balances.corre, 0))) + AZIDEIA_CORRERIA.rewardQuantity;
 
-  const rewardContext = await getFactionRewardContext(player);
-  if (!rewardContext || rewardContext.memberIds.length <= 0) return null;
-
-  const memberIds = rewardContext.memberIds;
-  const batch = await AzideiaRewardBatch.create({
-    factionId: rewardContext.factionId,
-    rewardType: AZIDEIA_CORRERIA.rewardType,
-    quantityPerMember: AZIDEIA_CORRERIA.rewardQuantity,
-    memberIds,
-    sourceTargetType: 'correria',
-    sourceTargetId: String(mission.targetId),
-    killerId: String(player._id),
-    killerName: String(player.name || 'Jogador'),
+  return createFactionClaimableRewardSafely({
+    player,
+    mission,
+    targetType: 'correria',
   });
-
-  mission.factionRewardBatchId = String(batch._id);
-
-  const factionReward = {
-    factionId: rewardContext.factionId,
-    rewardType: AZIDEIA_CORRERIA.rewardType,
-    quantityPerMember: AZIDEIA_CORRERIA.rewardQuantity,
-    memberCount: memberIds.length,
-    batchId: String(batch._id),
-    dailyLimit: AZIDEIA_CORRERIA.factionDailyRewardLimit,
-  };
-
-  // Chat é informativo. Se falhar, o lote de coleta já foi salvo.
-  try {
-    const message = await ChatMessage.create({
-      channel: 'faccao',
-      senderId: 'system:azideia:correria',
-      senderName: 'Correria',
-      factionId: rewardContext.factionId,
-      body: `${player.name || 'Jogador'} negociou com um Correria. A facção recebeu Corres para coletar.`,
-      read: false,
-      system: true,
-      messageType: 'azideia_reward',
-      metadata: {
-        batchId: String(batch._id),
-        targetType: 'correria',
-        rewardType: AZIDEIA_CORRERIA.rewardType,
-        quantityPerMember: AZIDEIA_CORRERIA.rewardQuantity,
-        memberCount: memberIds.length,
-        dailyLimit: AZIDEIA_CORRERIA.factionDailyRewardLimit,
-        negotiatorId: String(player._id),
-        negotiatorName: String(player.name || 'Jogador'),
-        killerId: String(player._id),
-        killerName: String(player.name || 'Jogador'),
-        iconUrl: AZIDEIA_CORRERIA.iconUrl,
-      },
-    });
-
-    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
-  } catch (chatError) {
-    console.error('[CORRERIA_REWARD_CHAT_NON_BLOCKING]', chatError);
-  }
-
-  return factionReward;
 }
 
 async function grantMestreObrasRewards({ player, mission }) {
   // Recompensa imediata: 1h + 1min para acelerar evolução do barraco.
-  // A moeda oficial do sistema é barracoAccelerators.seconds.
+  // Recompensa coletiva: lote pendente para os OUTROS membros coletarem no chat.
   const barracoAccelerators = ensureBarracoAccelerators(player);
   const rewardSeconds = Math.max(0, Math.floor(toNumber(
     AZIDEIA_MESTRE_OBRAS.rewardQuantitySeconds,
@@ -1251,63 +1418,11 @@ async function grantMestreObrasRewards({ player, mission }) {
   )));
   barracoAccelerators.seconds += rewardSeconds;
 
-  const rewardContext = await getFactionRewardContext(player);
-  if (!rewardContext || rewardContext.memberIds.length <= 0) return null;
-
-  const memberIds = rewardContext.memberIds;
-  const batch = await AzideiaRewardBatch.create({
-    factionId: rewardContext.factionId,
-    rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
-    quantityPerMember: AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds,
-    memberIds,
-    sourceTargetType: 'mestre_obras',
-    sourceTargetId: String(mission.targetId),
-    killerId: String(player._id),
-    killerName: String(player.name || 'Jogador'),
+  return createFactionClaimableRewardSafely({
+    player,
+    mission,
+    targetType: 'mestre_obras',
   });
-
-  mission.factionRewardBatchId = String(batch._id);
-
-  const factionReward = {
-    factionId: rewardContext.factionId,
-    rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
-    quantityPerMember: AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds,
-    memberCount: memberIds.length,
-    batchId: String(batch._id),
-    dailyLimit: AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit,
-  };
-
-  try {
-    const message = await ChatMessage.create({
-      channel: 'faccao',
-      senderId: 'system:azideia:mestre_obras',
-      senderName: 'Mestre de Obras',
-      factionId: rewardContext.factionId,
-      body: `${player.name || 'Jogador'} pagou um Mestre de Obras. A facção recebeu aceleradores de evolução do barraco para coletar.`,
-      read: false,
-      system: true,
-      messageType: 'azideia_reward',
-      metadata: {
-        batchId: String(batch._id),
-        targetType: 'mestre_obras',
-        rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
-        quantityPerMember: AZIDEIA_MESTRE_OBRAS.factionRewardQuantitySeconds,
-        memberCount: memberIds.length,
-        dailyLimit: AZIDEIA_MESTRE_OBRAS.factionDailyRewardLimit,
-        payerId: String(player._id),
-        payerName: String(player.name || 'Jogador'),
-        killerId: String(player._id),
-        killerName: String(player.name || 'Jogador'),
-        modelUrl: AZIDEIA_MESTRE_OBRAS.modelUrl,
-      },
-    });
-
-    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
-  } catch (chatError) {
-    console.error('[MESTRE_OBRAS_REWARD_CHAT_NON_BLOCKING]', chatError);
-  }
-
-  return factionReward;
 }
 
 export async function negotiateCorreria(req, res) {
@@ -1771,6 +1886,7 @@ async function getPendingBatchesForPlayer(player) {
   return AzideiaRewardBatch.find({
     memberIds: playerId,
     claimedBy: { $ne: playerId },
+    killerId: { $ne: playerId },
   }).sort({ createdAt: 1 });
 }
 
@@ -1846,6 +1962,9 @@ export async function getMyAzideiaRewards(req, res) {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
+    await reconcileAzideiaMissionsForPlayer(player);
+    await repairMissingFactionRewardBatchesForPlayer(player);
+
     const batches = await getPendingBatchesForPlayer(player);
     const factionAliases = await getFactionAliasesForPlayer(player);
     return res.json({
@@ -1862,6 +1981,9 @@ export async function claimMyAzideiaRewards(req, res) {
   try {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    await reconcileAzideiaMissionsForPlayer(player);
+    await repairMissingFactionRewardBatchesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const playerId = String(player._id);

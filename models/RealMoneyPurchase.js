@@ -7,7 +7,7 @@ const realMoneyPurchaseSchema = new mongoose.Schema({
   // Mantém compatibilidade com comboios e permite pacotes de Corre sem criar outro fluxo de pagamento.
   productType: {
     type: String,
-    enum: ['convoy', 'corre_package'],
+    enum: ['convoy', 'corre_package', 'barraco_accelerator_package'],
     default: 'convoy',
     index: true,
   },
@@ -18,6 +18,11 @@ const realMoneyPurchaseSchema = new mongoose.Schema({
   // Pacotes consumíveis, ex: 10 Corres por R$ 0,99.
   packageId: { type: String, default: '', index: true },
   correAmount: { type: Number, default: 0, min: 0 },
+
+  // Pacotes de aceleradores de evolução do barraco.
+  barracoAcceleratorCount: { type: Number, default: 0, min: 0 },
+  barracoAcceleratorUnitSeconds: { type: Number, default: 0, min: 0 },
+  barracoAcceleratorSeconds: { type: Number, default: 0, min: 0 },
 
   provider: { type: String, default: 'mercadopago', index: true },
   status: {

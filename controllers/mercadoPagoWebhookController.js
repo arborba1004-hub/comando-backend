@@ -3,6 +3,7 @@ import RealMoneyPurchase from '../models/RealMoneyPurchase.js';
 import Player from '../models/Player.js';
 import { getConvoySkin } from '../data/convoyCatalog.js';
 import { getCorrePackage } from '../data/correPackageCatalog.js';
+import { getBarracoAcceleratorPackage } from '../data/barracoAcceleratorPackageCatalog.js';
 import { getMercadoPagoPayment } from '../services/mercadopago/getPayment.js';
 import { grantRealMoneyConvoy } from '../utils/grantRealMoneyConvoy.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
@@ -52,6 +53,22 @@ function grantCorrePackage(player, pack) {
   player.balances.corre += Math.max(0, Math.floor(Number(pack.correAmount || 0)));
 }
 
+function ensureBarracoAccelerators(player) {
+  if (!player.barracoAccelerators || typeof player.barracoAccelerators !== 'object') {
+    player.barracoAccelerators = { seconds: 0 };
+  }
+  player.barracoAccelerators.seconds = Math.max(0, Math.floor(Number(player.barracoAccelerators.seconds || 0)));
+}
+
+function grantBarracoAcceleratorPackage(player, pack) {
+  ensureBarracoAccelerators(player);
+  const totalSeconds = Math.max(0, Math.floor(Number(pack.totalSeconds || 0)));
+  player.barracoAccelerators.seconds += totalSeconds;
+  if (typeof player.markModified === 'function') {
+    player.markModified('barracoAccelerators');
+  }
+}
+
 function emitPlayerUpdate(player) {
   emitToPlayer(String(player._id), 'playerUpdate', {
     player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
@@ -95,6 +112,48 @@ async function grantCorrePurchase({ purchase, payment, res }) {
   emitPlayerUpdate(player);
 
   return res.json({ ok: true, granted: true, productType: 'corre_package', packageId: pack.id, correAmount: purchase.correAmount });
+}
+
+async function grantBarracoAcceleratorPurchase({ purchase, payment, res }) {
+  const pack = getBarracoAcceleratorPackage(purchase.packageId || payment?.metadata?.package_id);
+  if (!pack) {
+    purchase.status = 'failed';
+    await purchase.save();
+    return res.status(400).json({ error: 'invalid_barraco_accelerator_package' });
+  }
+
+  if (purchase.grantedAt) return markPaidAlreadyGranted(purchase, res);
+
+  const player = await Player.findById(purchase.playerId);
+  if (!player) {
+    purchase.status = 'failed';
+    await purchase.save();
+    return res.status(404).json({ error: 'player_not_found' });
+  }
+
+  grantBarracoAcceleratorPackage(player, pack);
+  bumpVersion(player);
+
+  purchase.productType = 'barraco_accelerator_package';
+  purchase.packageId = pack.id;
+  purchase.barracoAcceleratorCount = Math.max(0, Math.floor(Number(pack.acceleratorCount || 0)));
+  purchase.barracoAcceleratorUnitSeconds = Math.max(0, Math.floor(Number(pack.secondsPerAccelerator || 0)));
+  purchase.barracoAcceleratorSeconds = Math.max(0, Math.floor(Number(pack.totalSeconds || 0)));
+  purchase.status = 'paid';
+  purchase.grantedAt = new Date();
+
+  await player.save();
+  await purchase.save();
+  emitPlayerUpdate(player);
+
+  return res.json({
+    ok: true,
+    granted: true,
+    productType: 'barraco_accelerator_package',
+    packageId: pack.id,
+    barracoAcceleratorCount: purchase.barracoAcceleratorCount,
+    barracoAcceleratorSeconds: purchase.barracoAcceleratorSeconds,
+  });
 }
 
 async function grantConvoyPurchase({ purchase, res }) {
@@ -167,7 +226,19 @@ export async function handleMercadoPagoWebhook(req, res) {
 
     const productType = String(purchase.productType || payment?.metadata?.product_type || '').trim();
 
-    if (productType === 'corre_package' || purchase.packageId) {
+    if (productType === 'barraco_accelerator_package') {
+      return grantBarracoAcceleratorPurchase({ purchase, payment, res });
+    }
+
+    if (productType === 'corre_package') {
+      return grantCorrePurchase({ purchase, payment, res });
+    }
+
+    if (purchase.packageId) {
+      const metadataProductType = String(payment?.metadata?.product_type || '').trim();
+      if (metadataProductType === 'barraco_accelerator_package') {
+        return grantBarracoAcceleratorPurchase({ purchase, payment, res });
+      }
       return grantCorrePurchase({ purchase, payment, res });
     }
 

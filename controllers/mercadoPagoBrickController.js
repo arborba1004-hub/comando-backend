@@ -4,6 +4,7 @@ import Player from '../models/Player.js';
 import RealMoneyPurchase from '../models/RealMoneyPurchase.js';
 import { getConvoySkin } from '../data/convoyCatalog.js';
 import { getCorrePackage } from '../data/correPackageCatalog.js';
+import { getBarracoAcceleratorPackage } from '../data/barracoAcceleratorPackageCatalog.js';
 import { playerOwnsConvoy } from '../utils/convoyInventory.js';
 import { grantRealMoneyConvoy } from '../utils/grantRealMoneyConvoy.js';
 import { bumpVersion } from '../utils/gameHelpers.js';
@@ -62,6 +63,22 @@ function ensureBalances(player) {
 function grantCorrePackage(player, pack) {
   ensureBalances(player);
   player.balances.corre += Math.max(0, Math.floor(Number(pack.correAmount || 0)));
+}
+
+function ensureBarracoAccelerators(player) {
+  if (!player.barracoAccelerators || typeof player.barracoAccelerators !== 'object') {
+    player.barracoAccelerators = { seconds: 0 };
+  }
+  player.barracoAccelerators.seconds = Math.max(0, Math.floor(Number(player.barracoAccelerators.seconds || 0)));
+}
+
+function grantBarracoAcceleratorPackage(player, pack) {
+  ensureBarracoAccelerators(player);
+  const totalSeconds = Math.max(0, Math.floor(Number(pack.totalSeconds || 0)));
+  player.barracoAccelerators.seconds += totalSeconds;
+  if (typeof player.markModified === 'function') {
+    player.markModified('barracoAccelerators');
+  }
 }
 
 function emitPlayerUpdate(player) {
@@ -351,3 +368,137 @@ export async function createCorrePackageBrickPayment(req, res) {
     });
   }
 }
+
+export async function createBarracoAcceleratorPackageBrickPayment(req, res) {
+  try {
+    const player = req.player;
+    if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
+
+    const packageId = String(req.body?.packageId || 'barraco_accel_20x2h_099').trim();
+    const pack = getBarracoAcceleratorPackage(packageId);
+
+    if (!pack) {
+      return res.status(404).json({ error: 'Pacote de aceleradores do barraco não encontrado', reason: 'barraco_accelerator_package_not_found' });
+    }
+
+    const amount = Number(Number(pack.price || 0).toFixed(2));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Valor inválido para pagamento.', reason: 'invalid_amount' });
+    }
+
+    const acceleratorCount = Math.max(1, Math.floor(Number(pack.acceleratorCount || 0)));
+    const unitSeconds = Math.max(1, Math.floor(Number(pack.secondsPerAccelerator || 0)));
+    const totalSeconds = Math.max(1, Math.floor(Number(pack.totalSeconds || acceleratorCount * unitSeconds)));
+
+    const form = normalizePaymentData(req.body?.paymentData);
+    if (!validateBrickForm(form, res)) return;
+
+    const purchase = await RealMoneyPurchase.create({
+      playerId: player._id,
+      productType: 'barraco_accelerator_package',
+      packageId: pack.id,
+      barracoAcceleratorCount: acceleratorCount,
+      barracoAcceleratorUnitSeconds: unitSeconds,
+      barracoAcceleratorSeconds: totalSeconds,
+      amount,
+      currency: pack.currency || 'BRL',
+      status: 'pending',
+      provider: 'mercadopago',
+    });
+
+    const purchaseId = String(purchase._id);
+    const idempotencyKey = crypto.randomUUID();
+
+    const payload = {
+      transaction_amount: amount,
+      token: form.token,
+      description: `${pack.name} - ${acceleratorCount} aceleradores de ${Math.floor(unitSeconds / 3600)}h`,
+      installments: Number.isFinite(form.installments) && form.installments > 0 ? form.installments : 1,
+      payment_method_id: form.payment_method_id,
+      issuer_id: form.issuer_id,
+      payer: form.payer,
+      external_reference: purchaseId,
+      metadata: {
+        purchase_id: purchaseId,
+        player_id: String(player._id),
+        product_type: 'barraco_accelerator_package',
+        package_id: pack.id,
+        barraco_accelerator_count: acceleratorCount,
+        barraco_accelerator_unit_seconds: unitSeconds,
+        barraco_accelerator_seconds: totalSeconds,
+        source: 'commandia_barraco_accelerator_package_payment_brick',
+      },
+      notification_url: buildBackendUrl('/payments/webhooks/mercadopago'),
+      statement_descriptor: 'COMMANDIA',
+    };
+
+    const payment = await createMercadoPagoPayment(payload, idempotencyKey);
+
+    purchase.mpPaymentId = payment?.id ? String(payment.id) : '';
+    purchase.rawPayment = payment;
+    purchase.status = isApproved(payment?.status) ? 'paid' : String(payment?.status || 'pending');
+
+    if (isApproved(payment?.status)) {
+      const savedPlayer = await Player.findById(player._id);
+      if (!savedPlayer) {
+        purchase.status = 'failed';
+        await purchase.save();
+        return res.status(404).json({ error: 'Jogador não encontrado', reason: 'player_not_found' });
+      }
+
+      grantBarracoAcceleratorPackage(savedPlayer, pack);
+      bumpVersion(savedPlayer);
+      purchase.grantedAt = new Date();
+      await savedPlayer.save();
+      await purchase.save();
+
+      return res.json({
+        purchaseId,
+        paymentId: payment?.id,
+        status: 'approved',
+        statusDetail: payment?.status_detail,
+        paymentTypeId: payment?.payment_type_id,
+        paymentMethodId: payment?.payment_method_id,
+        packageId: pack.id,
+        acceleratorCount,
+        secondsPerAccelerator: unitSeconds,
+        totalSeconds,
+        amount,
+        currency: purchase.currency,
+        granted: true,
+        player: emitPlayerUpdate(savedPlayer),
+      });
+    }
+
+    await purchase.save();
+
+    const transactionData = payment?.point_of_interaction?.transaction_data || {};
+
+    return res.json({
+      purchaseId,
+      paymentId: payment?.id,
+      status: payment?.status || 'pending',
+      statusDetail: payment?.status_detail,
+      paymentTypeId: payment?.payment_type_id,
+      paymentMethodId: payment?.payment_method_id,
+      packageId: pack.id,
+      acceleratorCount,
+      secondsPerAccelerator: unitSeconds,
+      totalSeconds,
+      amount,
+      currency: purchase.currency,
+      qrCode: transactionData.qr_code,
+      qrCodeBase64: transactionData.qr_code_base64,
+      ticketUrl: transactionData.ticket_url || payment?.transaction_details?.external_resource_url,
+      message: 'Pagamento criado e aguardando aprovação.',
+    });
+  } catch (error) {
+    console.error('[MP_BRICK_BARRACO_ACCELERATOR_PAYMENT]', error);
+    return res.status(error.status || 500).json({
+      error: error.message || 'Erro ao processar pacote de aceleradores do barraco no Mercado Pago',
+      reason: error.reason || 'mp_brick_barraco_accelerator_payment_error',
+      details: error.details,
+    });
+  }
+}
+

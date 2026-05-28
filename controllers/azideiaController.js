@@ -140,6 +140,46 @@ function uniqueStrings(values = []) {
   );
 }
 
+function parseDateMs(value) {
+  const ms = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function getBatchCreatedMs(batch) {
+  return parseDateMs(batch?.createdAtIso) || parseDateMs(batch?.createdAt) || null;
+}
+
+function getFactionMemberRecord(faction, playerId) {
+  if (!faction || !Array.isArray(faction.members)) return null;
+  const safePlayerId = String(playerId || '').trim();
+  if (!safePlayerId) return null;
+  return faction.members.find((member) => String(member?.playerId || '').trim() === safePlayerId) || null;
+}
+
+function isPlayerEligibleForFactionBatch(rewardContext, playerId, batch) {
+  const safePlayerId = String(playerId || '').trim();
+  if (!safePlayerId) return false;
+
+  const currentMemberIds = uniqueStrings(rewardContext?.memberIds || []);
+  if (!currentMemberIds.includes(safePlayerId)) return false;
+
+  const memberRecord = getFactionMemberRecord(rewardContext?.faction, safePlayerId);
+  if (!memberRecord) {
+    // Fallback profissional para dados legados: quando o jogador aparece pela
+    // busca Player.factionId, mas a facção não tem member.joinedAt normalizado.
+    return true;
+  }
+
+  const joinedAtMs = parseDateMs(memberRecord.joinedAt);
+  const batchCreatedMs = getBatchCreatedMs(batch);
+
+  // Se faltar data em documento legado, mantém o lote coletável para não
+  // bloquear recompensa já gerada antes da correção.
+  if (!joinedAtMs || !batchCreatedMs) return true;
+
+  return joinedAtMs <= batchCreatedMs + 1000;
+}
+
 function buildFactionLookup(factionId) {
   const safe = String(factionId || '').trim();
   if (!safe) return null;
@@ -260,9 +300,23 @@ function getFactionRewardSpecForTargetType(targetType = 'x9') {
   };
 }
 
-function getFactionCollectableMemberIds(rewardContext, actorPlayerId) {
-  const actorId = String(actorPlayerId || '').trim();
-  return uniqueStrings(rewardContext?.memberIds || []).filter((memberId) => memberId !== actorId);
+function getFactionCollectableMemberIds(rewardContext, referenceDate = null) {
+  const ids = uniqueStrings(rewardContext?.memberIds || []);
+  const referenceMs = parseDateMs(referenceDate);
+
+  if (!referenceMs || !rewardContext?.faction || !Array.isArray(rewardContext.faction.members)) {
+    return ids;
+  }
+
+  return ids.filter((memberId) => {
+    const memberRecord = getFactionMemberRecord(rewardContext.faction, memberId);
+    if (!memberRecord) return true;
+
+    const joinedAtMs = parseDateMs(memberRecord.joinedAt);
+    if (!joinedAtMs) return true;
+
+    return joinedAtMs <= referenceMs + 1000;
+  });
 }
 
 async function createFactionClaimableRewardForAzideia({ player, mission, targetType = 'x9' }) {
@@ -272,8 +326,9 @@ async function createFactionClaimableRewardForAzideia({ player, mission, targetT
   if (!rewardContext) return null;
 
   // O jogador que executou a ação recebe a recompensa individual imediatamente.
-  // O lote coletivo é SOMENTE para os outros membros da facção coletarem no chat.
-  const memberIds = getFactionCollectableMemberIds(rewardContext, player._id);
+  // A recompensa de facção fica pendente no chat para TODOS os membros da facção,
+  // inclusive o executor, e só é aplicada no player quando cada membro coletar.
+  const memberIds = getFactionCollectableMemberIds(rewardContext);
   if (memberIds.length <= 0) return null;
 
   const spec = getFactionRewardSpecForTargetType(targetType);
@@ -294,8 +349,7 @@ async function createFactionClaimableRewardForAzideia({ player, mission, targetT
   });
 
   if (existingBatch) {
-    const mergedMemberIds = uniqueStrings([...existingBatch.memberIds, ...memberIds])
-      .filter((memberId) => memberId !== actorId);
+    const mergedMemberIds = uniqueStrings([...existingBatch.memberIds, ...memberIds]);
 
     let changed = false;
     if (existingBatch.sourceMissionId !== sourceMissionId) {
@@ -403,7 +457,10 @@ async function upsertFactionRewardBatchFromResolvedMission({ rewardContext, miss
   const actorId = String(mission.playerId || '').trim();
   if (!actorId) return null;
 
-  const memberIds = getFactionCollectableMemberIds(rewardContext, actorId);
+  const memberIds = getFactionCollectableMemberIds(
+    rewardContext,
+    mission.rewardGrantedAtIso || mission.updatedAt || mission.createdAt || null,
+  );
   if (memberIds.length <= 0) return null;
 
   const existingBatch = await AzideiaRewardBatch.findOne({
@@ -419,8 +476,7 @@ async function upsertFactionRewardBatchFromResolvedMission({ rewardContext, miss
   });
 
   if (existingBatch) {
-    const mergedMemberIds = uniqueStrings([...existingBatch.memberIds, ...memberIds])
-      .filter((memberId) => memberId !== actorId);
+    const mergedMemberIds = uniqueStrings([...existingBatch.memberIds, ...memberIds]);
 
     let changed = false;
     if (existingBatch.sourceMissionId !== sourceMissionId) {
@@ -1397,7 +1453,7 @@ function normalizeMestreObrasFactionRewardCap(value) {
 
 async function grantCorreriaRewards({ player, mission }) {
   // Recompensa imediata do jogador que negociou: +1 Corre.
-  // Recompensa coletiva: lote pendente para os OUTROS membros coletarem no chat.
+  // Recompensa de facção: lote pendente para TODOS os membros coletarem no chat.
   player.balances = player.balances || {};
   player.balances.corre = Math.max(0, Math.floor(toNumber(player.balances.corre, 0))) + AZIDEIA_CORRERIA.rewardQuantity;
 
@@ -1410,7 +1466,7 @@ async function grantCorreriaRewards({ player, mission }) {
 
 async function grantMestreObrasRewards({ player, mission }) {
   // Recompensa imediata: 1h + 1min para acelerar evolução do barraco.
-  // Recompensa coletiva: lote pendente para os OUTROS membros coletarem no chat.
+  // Recompensa de facção: lote pendente para TODOS os membros coletarem no chat.
   const barracoAccelerators = ensureBarracoAccelerators(player);
   const rewardSeconds = Math.max(0, Math.floor(toNumber(
     AZIDEIA_MESTRE_OBRAS.rewardQuantitySeconds,
@@ -1879,15 +1935,46 @@ async function getPendingBatchesForPlayer(player) {
   const playerId = String(player?._id || '').trim();
   if (!playerId) return [];
 
-  // O lote já salva memberIds explicitamente. Consultar por memberIds corrige
-  // casos legados em que factionId do jogador e factionId do lote usam ids
-  // diferentes (_id Mongo vs id público) ou o jogador está na lista de membros,
-  // mas ainda não recebeu player.factionId normalizado.
-  return AzideiaRewardBatch.find({
+  const rewardContext = await getFactionRewardContext(player);
+  const factionAliases = uniqueStrings([
+    player?.factionId,
+    ...(rewardContext?.factionAliases || []),
+  ]);
+
+  const byId = new Map();
+  const directBatches = await AzideiaRewardBatch.find({
     memberIds: playerId,
     claimedBy: { $ne: playerId },
-    killerId: { $ne: playerId },
   }).sort({ createdAt: 1 });
+
+  for (const batch of directBatches) {
+    byId.set(String(batch._id), batch);
+  }
+
+  if (rewardContext && factionAliases.length > 0) {
+    const repairCandidates = await AzideiaRewardBatch.find({
+      factionId: { $in: factionAliases },
+      memberIds: { $ne: playerId },
+      claimedBy: { $ne: playerId },
+    }).sort({ createdAt: 1 });
+
+    // Auto-reparo seguro: lotes antigos podem ter sido criados com memberIds
+    // incompleto. Só adiciona o jogador quando ele pertence à facção do lote e,
+    // quando houver joinedAt, já era membro na data em que a recompensa nasceu.
+    for (const batch of repairCandidates) {
+      if (!isPlayerEligibleForFactionBatch(rewardContext, playerId, batch)) continue;
+
+      batch.memberIds = uniqueStrings([...(batch.memberIds || []), playerId]);
+      await batch.save();
+      byId.set(String(batch._id), batch);
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const aMs = getBatchCreatedMs(a) || 0;
+    const bMs = getBatchCreatedMs(b) || 0;
+    return aMs - bMs;
+  });
 }
 
 function getX9ClaimRemainingToday(player) {

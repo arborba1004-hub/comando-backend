@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import ChatMessage    from '../models/ChatMessage.js';
 import Faction from '../models/Faction.js';
+import Player from '../models/Player.js';
 import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
 
 function uniqueStrings(values = []) {
@@ -15,6 +16,27 @@ async function getFactionAliases(factionId) {
     : { id: safe };
   const faction = await Faction.findOne(query).select('_id id').lean();
   return uniqueStrings([safe, faction?.id, faction?._id ? String(faction._id) : '']);
+}
+
+// [PATCH] Resolve faction aliases for a player even when factionId is null/stale.
+// Falls back to a membership lookup so players who are in a faction but have
+// a stale/missing factionId on their Player doc can still read faction chat.
+async function getFactionAliasesForPlayer(userId, rawFactionId) {
+  const safeId = String(rawFactionId || '').trim();
+
+  // Happy path: player has a valid factionId stored
+  if (safeId) {
+    const aliases = await getFactionAliases(safeId);
+    if (aliases.length > 0) return aliases;
+  }
+
+  // Fallback: look up faction via members array
+  const faction = await Faction.findOne({ 'members.playerId': String(userId) })
+    .select('_id id')
+    .lean();
+  if (!faction) return safeId ? [safeId] : [];
+
+  return uniqueStrings([safeId, faction.id, faction._id ? String(faction._id) : '']);
 }
 
 function normalizeMessage(message) {
@@ -88,11 +110,12 @@ export async function sendChatMessage(req, res) {
     }
 
     if (channel === 'faccao') {
+      // [PATCH] Use the robust alias resolver so players with stale factionId can still send
       const effectiveFactionId = user.factionId || factionId || null;
       if (!effectiveFactionId) {
         return res.status(400).json({ error: 'factionId obrigatório no chat da facção' });
       }
-      const factionAliases = await getFactionAliases(effectiveFactionId);
+      const factionAliases = await getFactionAliasesForPlayer(user.id, effectiveFactionId);
       messagePayload.factionId = String(factionAliases[0] || effectiveFactionId);
     }
 
@@ -100,15 +123,8 @@ export async function sendChatMessage(req, res) {
     const normalized = normalizeMessage(message);
 
     // ── Notificação em tempo real ──────────────────────────────────────────
-    // Mail: avisa o destinatário instantaneamente (sem esperar o polling)
     if (channel === 'mail') {
       emitToPlayer(String(recipientId), 'newChatMessage', normalized);
-    }
-
-    // Complexo: avisa todos os conectados
-    if (channel === 'complexo') {
-      // broadcast via socketEmitter não existe ainda — o polling de 3s cobre
-      // Futuramente: broadcast('newChatMessage', normalized)
     }
 
     return res.status(201).json({ message: normalized });
@@ -135,9 +151,13 @@ export async function getChatMessages(req, res) {
     }
 
     if (channel === 'faccao') {
-      if (!factionId) return res.json([]);
-      const factionAliases = await getFactionAliases(factionId);
-      filters.factionId = { $in: factionAliases.length ? factionAliases : [String(factionId)] };
+      // [PATCH] Use robust resolver instead of early-return on null factionId.
+      // Previously: if (!factionId) return res.json([])
+      // This caused players with stale/null factionId (but who ARE faction members)
+      // to never receive any faction messages, including Azidéia reward notifications.
+      const factionAliases = await getFactionAliasesForPlayer(userId, factionId);
+      if (factionAliases.length === 0) return res.json([]);
+      filters.factionId = { $in: factionAliases };
     }
 
     const messages = await ChatMessage.find(filters)

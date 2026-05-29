@@ -18,7 +18,12 @@ const azideiaRewardBatchSchema = new mongoose.Schema(
 );
 
 azideiaRewardBatchSchema.index({ factionId: 1, rewardType: 1, createdAt: -1 });
-azideiaRewardBatchSchema.index({ factionId: 1, memberIds: 1, claimedBy: 1 });
+// MongoDB não permite índice composto com duas arrays (memberIds + claimedBy).
+// O índice antigo não era confiável e piorava a consulta da coleta Azidéia.
+// Substituímos por índices válidos e alinhados às queries reais.
+azideiaRewardBatchSchema.index({ factionId: 1, createdAt: -1 });
+azideiaRewardBatchSchema.index({ memberIds: 1, createdAt: -1 });
+azideiaRewardBatchSchema.index({ claimedBy: 1, createdAt: -1 });
 azideiaRewardBatchSchema.index({ sourceMissionId: 1, rewardType: 1 }, { sparse: true });
 azideiaRewardBatchSchema.index({ sourceTargetType: 1, sourceTargetId: 1, killerId: 1, rewardType: 1 });
 

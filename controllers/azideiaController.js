@@ -319,6 +319,105 @@ function getFactionCollectableMemberIds(rewardContext, referenceDate = null) {
   });
 }
 
+
+function buildAzideiaRewardChatPayload({ rewardContext, batch, spec, targetType, actorId, actorName }) {
+  const safeTargetType = targetType || batch?.sourceTargetType || 'x9';
+  const safeActorId = String(actorId || batch?.killerId || '').trim();
+  const safeActorName = String(actorName || batch?.killerName || 'Jogador').trim() || 'Jogador';
+  const safeMemberIds = uniqueStrings(batch?.memberIds || rewardContext?.memberIds || []);
+  const quantityPerMember = Math.max(1, Math.floor(toNumber(batch?.quantityPerMember, spec.quantityPerMember)));
+
+  return {
+    channel: 'faccao',
+    senderId: spec.senderId,
+    senderName: spec.senderName,
+    factionId: rewardContext.factionId,
+    body: spec.chatBody(safeActorName),
+    read: false,
+    system: true,
+    messageType: 'azideia_reward',
+    metadata: {
+      batchId: String(batch._id),
+      sourceMissionId: String(batch.sourceMissionId || ''),
+      sourceTargetId: String(batch.sourceTargetId || ''),
+      targetType: safeTargetType,
+      rewardType: spec.rewardType,
+      quantityPerMember,
+      memberCount: safeMemberIds.length,
+      dailyLimit: spec.dailyLimit,
+      killerId: safeActorId,
+      killerName: safeActorName,
+      ...spec.chatExtraMetadata({ _id: safeActorId, name: safeActorName }),
+    },
+  };
+}
+
+async function ensureFactionRewardChatMessage({ rewardContext, batch, targetType, actorId, actorName, emit = false }) {
+  if (!rewardContext || !batch?._id) return { message: null, created: false };
+
+  const safeTargetType = targetType || batch.sourceTargetType || 'x9';
+  const spec = getFactionRewardSpecForTargetType(safeTargetType);
+  const payload = buildAzideiaRewardChatPayload({
+    rewardContext,
+    batch,
+    spec,
+    targetType: safeTargetType,
+    actorId,
+    actorName,
+  });
+
+  const batchId = String(batch._id);
+  let message = await ChatMessage.findOne({
+    channel: 'faccao',
+    messageType: 'azideia_reward',
+    'metadata.batchId': batchId,
+  });
+
+  let created = false;
+  if (!message) {
+    message = await ChatMessage.create(payload);
+    created = true;
+  } else {
+    let changed = false;
+    if (String(message.factionId || '') !== String(payload.factionId || '')) {
+      message.factionId = payload.factionId;
+      changed = true;
+    }
+    if (String(message.body || '') !== String(payload.body || '')) {
+      message.body = payload.body;
+      changed = true;
+    }
+
+    const currentMetadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+    const nextMetadata = {
+      ...currentMetadata,
+      ...payload.metadata,
+      // Mantém dados importantes de lotes antigos, mas recalcula contadores que
+      // alimentam o card do chat da facção.
+      batchId,
+      memberCount: payload.metadata.memberCount,
+      quantityPerMember: payload.metadata.quantityPerMember,
+      dailyLimit: payload.metadata.dailyLimit,
+      rewardType: payload.metadata.rewardType,
+      targetType: payload.metadata.targetType,
+    };
+
+    if (JSON.stringify(currentMetadata) !== JSON.stringify(nextMetadata)) {
+      message.metadata = nextMetadata;
+      changed = true;
+    }
+
+    if (changed) await message.save();
+  }
+
+  if (emit && message) {
+    const memberIds = uniqueStrings(batch.memberIds || rewardContext.memberIds || []);
+    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
+  }
+
+  return { message, created };
+}
+
 async function createFactionClaimableRewardForAzideia({ player, mission, targetType = 'x9' }) {
   if (!player?._id || !mission?._id) return null;
 
@@ -367,6 +466,19 @@ async function createFactionClaimableRewardForAzideia({ player, mission, targetT
     if (changed) await existingBatch.save();
     mission.factionRewardBatchId = String(existingBatch._id);
 
+    try {
+      await ensureFactionRewardChatMessage({
+        rewardContext,
+        batch: existingBatch,
+        targetType,
+        actorId,
+        actorName: String(player.name || 'Jogador'),
+        emit: false,
+      });
+    } catch (chatError) {
+      console.error('[AZIDEIA_FACTION_REWARD_CHAT_REPAIR_NON_BLOCKING]', chatError);
+    }
+
     return {
       factionId: rewardContext.factionId,
       rewardType: spec.rewardType,
@@ -403,29 +515,14 @@ async function createFactionClaimableRewardForAzideia({ player, mission, targetT
 
   // Chat é apenas aviso. A recompensa verdadeira já está salva no lote.
   try {
-    const message = await ChatMessage.create({
-      channel: 'faccao',
-      senderId: spec.senderId,
-      senderName: spec.senderName,
-      factionId: rewardContext.factionId,
-      body: spec.chatBody(String(player.name || 'Jogador')),
-      read: false,
-      system: true,
-      messageType: 'azideia_reward',
-      metadata: {
-        batchId: String(batch._id),
-        targetType,
-        rewardType: spec.rewardType,
-        quantityPerMember: spec.quantityPerMember,
-        memberCount: memberIds.length,
-        dailyLimit: spec.dailyLimit,
-        killerId: actorId,
-        killerName: String(player.name || 'Jogador'),
-        ...spec.chatExtraMetadata(player),
-      },
+    await ensureFactionRewardChatMessage({
+      rewardContext,
+      batch,
+      targetType,
+      actorId,
+      actorName: String(player.name || 'Jogador'),
+      emit: true,
     });
-
-    emitToPlayers(memberIds, 'newChatMessage', () => normalizeMessage(message));
   } catch (chatError) {
     console.error('[AZIDEIA_FACTION_REWARD_CHAT_NON_BLOCKING]', chatError);
   }
@@ -491,6 +588,16 @@ async function upsertFactionRewardBatchFromResolvedMission({ rewardContext, miss
 
     mission.factionRewardBatchId = String(existingBatch._id);
     await mission.save();
+
+    await ensureFactionRewardChatMessage({
+      rewardContext,
+      batch: existingBatch,
+      targetType,
+      actorId,
+      actorName: String(mission.playerName || existingBatch.killerName || 'Jogador'),
+      emit: false,
+    });
+
     return existingBatch;
   }
 
@@ -508,6 +615,16 @@ async function upsertFactionRewardBatchFromResolvedMission({ rewardContext, miss
 
   mission.factionRewardBatchId = String(batch._id);
   await mission.save();
+
+  await ensureFactionRewardChatMessage({
+    rewardContext,
+    batch,
+    targetType,
+    actorId,
+    actorName: String(mission.playerName || 'Jogador'),
+    emit: false,
+  });
+
   return batch;
 }
 
@@ -536,6 +653,43 @@ async function repairMissingFactionRewardBatchesForPlayer(player) {
     } catch (error) {
       console.error('[AZIDEIA_FACTION_REWARD_REPAIR_NON_BLOCKING]', {
         missionId: String(mission?._id || ''),
+        error,
+      });
+    }
+  }
+
+  return { repaired };
+}
+
+async function repairMissingFactionRewardChatMessagesForPlayer(player) {
+  const rewardContext = await getFactionRewardContext(player);
+  const playerId = String(player?._id || '').trim();
+  if (!rewardContext || !playerId || rewardContext.factionAliases.length <= 0) return { repaired: 0 };
+
+  const batches = await AzideiaRewardBatch.find({
+    factionId: { $in: rewardContext.factionAliases },
+    memberIds: playerId,
+    claimedBy: { $ne: playerId },
+  })
+    .sort({ createdAt: -1 })
+    .limit(120);
+
+  let repaired = 0;
+  for (const batch of batches) {
+    try {
+      if (!isPlayerEligibleForFactionBatch(rewardContext, playerId, batch)) continue;
+      const result = await ensureFactionRewardChatMessage({
+        rewardContext,
+        batch,
+        targetType: batch.sourceTargetType || 'x9',
+        actorId: String(batch.killerId || ''),
+        actorName: String(batch.killerName || 'Jogador'),
+        emit: false,
+      });
+      if (result.created) repaired += 1;
+    } catch (error) {
+      console.error('[AZIDEIA_FACTION_REWARD_CHAT_REPAIR_NON_BLOCKING]', {
+        batchId: String(batch?._id || ''),
         error,
       });
     }
@@ -2051,6 +2205,7 @@ export async function getMyAzideiaRewards(req, res) {
 
     await reconcileAzideiaMissionsForPlayer(player);
     await repairMissingFactionRewardBatchesForPlayer(player);
+    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const factionAliases = await getFactionAliasesForPlayer(player);
@@ -2071,6 +2226,7 @@ export async function claimMyAzideiaRewards(req, res) {
 
     await reconcileAzideiaMissionsForPlayer(player);
     await repairMissingFactionRewardBatchesForPlayer(player);
+    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const playerId = String(player._id);

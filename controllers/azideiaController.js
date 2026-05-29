@@ -628,28 +628,35 @@ async function upsertFactionRewardBatchFromResolvedMission({ rewardContext, miss
   return batch;
 }
 
-async function repairMissingFactionRewardBatchesForPlayer(player) {
+export async function repairMissingFactionRewardBatchesForPlayer(player) {
   const rewardContext = await getFactionRewardContext(player);
   if (!rewardContext || rewardContext.factionAliases.length <= 0) return { repaired: 0 };
 
+  const memberIds = uniqueStrings(rewardContext.memberIds || []);
+
+  // PONTO CRÍTICO:
+  // A recompensa coletiva verdadeira depende de AzideiaRewardBatch.
+  // Se uma missão antiga foi resolvida e recebeu rewardGrantedAtIso, mas o lote
+  // não foi criado, o modal sempre vai abrir com 0. Por isso o reparo precisa
+  // procurar missões resolvidas da facção inteira, e também por playerId dos
+  // membros, porque algumas missões antigas nasceram com mission.factionId null.
   const missions = await AzideiaMission.find({
-    factionId: { $in: rewardContext.factionAliases },
     targetType: { $in: ['x9', 'correria', 'mestre_obras'] },
     rewardGrantedAtIso: { $nin: [null, ''] },
     $or: [
-      { factionRewardBatchId: null },
-      { factionRewardBatchId: '' },
-      { factionRewardBatchId: { $exists: false } },
+      { factionId: { $in: rewardContext.factionAliases } },
+      ...(memberIds.length > 0 ? [{ playerId: { $in: memberIds } }] : []),
     ],
   })
     .sort({ createdAt: -1 })
-    .limit(40);
+    .limit(120);
 
   let repaired = 0;
   for (const mission of missions) {
     try {
+      const beforeId = String(mission.factionRewardBatchId || '');
       const batch = await upsertFactionRewardBatchFromResolvedMission({ rewardContext, mission });
-      if (batch) repaired += 1;
+      if (batch && String(batch._id) !== beforeId) repaired += 1;
     } catch (error) {
       console.error('[AZIDEIA_FACTION_REWARD_REPAIR_NON_BLOCKING]', {
         missionId: String(mission?._id || ''),
@@ -2202,6 +2209,8 @@ export async function getMyAzideiaRewards(req, res) {
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     await reconcileAzideiaMissionsForPlayer(player);
+    await repairMissingFactionRewardBatchesForPlayer(player);
+    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const factionAliases = await getFactionAliasesForPlayer(player);
@@ -2221,6 +2230,8 @@ export async function claimMyAzideiaRewards(req, res) {
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     await reconcileAzideiaMissionsForPlayer(player);
+    await repairMissingFactionRewardBatchesForPlayer(player);
+    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const playerId = String(player._id);

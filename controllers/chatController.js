@@ -3,7 +3,7 @@ import ChatMessage    from '../models/ChatMessage.js';
 import Faction from '../models/Faction.js';
 import Player from '../models/Player.js';
 import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
-import { repairMissingFactionRewardChatMessagesForPlayer } from './azideiaController.js';
+import { repairMissingFactionRewardBatchesForPlayer, repairMissingFactionRewardChatMessagesForPlayer } from './azideiaController.js';
 
 function uniqueStrings(values = []) {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
@@ -160,9 +160,12 @@ export async function getChatMessages(req, res) {
       if (factionAliases.length === 0) return res.json([]);
       filters.factionId = { $in: factionAliases };
 
-      // Repara cards Azidéia faltantes diretamente na abertura do chat da facção,
-      // em vez de deixar esse custo pesado para o modal de coleta.
+      // Repara primeiro os LOTES e depois os CARDS.
+      // Sem AzideiaRewardBatch o modal de coleta abre, mas mostra 0 recompensa.
+      // Isso cobre missões antigas que já deram recompensa individual, porém não
+      // criaram lote coletivo para a facção.
       try {
+        await repairMissingFactionRewardBatchesForPlayer(req.player);
         await repairMissingFactionRewardChatMessagesForPlayer(req.player);
       } catch (repairError) {
         console.error('[CHAT_AZIDEIA_REPAIR_NON_BLOCKING]', repairError);

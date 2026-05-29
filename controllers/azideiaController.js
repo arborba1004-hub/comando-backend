@@ -643,7 +643,7 @@ async function repairMissingFactionRewardBatchesForPlayer(player) {
     ],
   })
     .sort({ createdAt: -1 })
-    .limit(120);
+    .limit(40);
 
   let repaired = 0;
   for (const mission of missions) {
@@ -661,18 +661,17 @@ async function repairMissingFactionRewardBatchesForPlayer(player) {
   return { repaired };
 }
 
-async function repairMissingFactionRewardChatMessagesForPlayer(player) {
+export async function repairMissingFactionRewardChatMessagesForPlayer(player) {
   const rewardContext = await getFactionRewardContext(player);
   const playerId = String(player?._id || '').trim();
   if (!rewardContext || !playerId || rewardContext.factionAliases.length <= 0) return { repaired: 0 };
 
   const batches = await AzideiaRewardBatch.find({
     factionId: { $in: rewardContext.factionAliases },
-    memberIds: playerId,
     claimedBy: { $ne: playerId },
   })
     .sort({ createdAt: -1 })
-    .limit(120);
+    .limit(40);
 
   let repaired = 0;
   for (const batch of batches) {
@@ -2095,32 +2094,31 @@ async function getPendingBatchesForPlayer(player) {
     ...(rewardContext?.factionAliases || []),
   ]);
 
+  const [directBatches, factionBatches] = await Promise.all([
+    AzideiaRewardBatch.find({
+      memberIds: playerId,
+      claimedBy: { $ne: playerId },
+    }).sort({ createdAt: 1 }),
+    rewardContext && factionAliases.length > 0
+      ? AzideiaRewardBatch.find({
+          factionId: { $in: factionAliases },
+          claimedBy: { $ne: playerId },
+        }).sort({ createdAt: 1 })
+      : Promise.resolve([]),
+  ]);
+
   const byId = new Map();
-  const directBatches = await AzideiaRewardBatch.find({
-    memberIds: playerId,
-    claimedBy: { $ne: playerId },
-  }).sort({ createdAt: 1 });
 
   for (const batch of directBatches) {
     byId.set(String(batch._id), batch);
   }
 
-  if (rewardContext && factionAliases.length > 0) {
-    const repairCandidates = await AzideiaRewardBatch.find({
-      factionId: { $in: factionAliases },
-      memberIds: { $ne: playerId },
-      claimedBy: { $ne: playerId },
-    }).sort({ createdAt: 1 });
-
-    // Auto-reparo seguro: lotes antigos podem ter sido criados com memberIds
-    // incompleto. Só adiciona o jogador quando ele pertence à facção do lote e,
-    // quando houver joinedAt, já era membro na data em que a recompensa nasceu.
-    for (const batch of repairCandidates) {
+  if (rewardContext) {
+    for (const batch of factionBatches) {
+      const batchId = String(batch._id);
+      if (byId.has(batchId)) continue;
       if (!isPlayerEligibleForFactionBatch(rewardContext, playerId, batch)) continue;
-
-      batch.memberIds = uniqueStrings([...(batch.memberIds || []), playerId]);
-      await batch.save();
-      byId.set(String(batch._id), batch);
+      byId.set(batchId, batch);
     }
   }
 
@@ -2204,8 +2202,6 @@ export async function getMyAzideiaRewards(req, res) {
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     await reconcileAzideiaMissionsForPlayer(player);
-    await repairMissingFactionRewardBatchesForPlayer(player);
-    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const factionAliases = await getFactionAliasesForPlayer(player);
@@ -2225,8 +2221,6 @@ export async function claimMyAzideiaRewards(req, res) {
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     await reconcileAzideiaMissionsForPlayer(player);
-    await repairMissingFactionRewardBatchesForPlayer(player);
-    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const playerId = String(player._id);

@@ -3,7 +3,7 @@ import ChatMessage    from '../models/ChatMessage.js';
 import Faction from '../models/Faction.js';
 import Player from '../models/Player.js';
 import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
-import { repairMissingFactionRewardChatMessagesForPlayer } from './azideiaController.js';
+import { repairMissingFactionRewardBatchesForPlayer, repairMissingFactionRewardChatMessagesForPlayer } from './azideiaController.js';
 
 function uniqueStrings(values = []) {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
@@ -19,25 +19,32 @@ async function getFactionAliases(factionId) {
   return uniqueStrings([safe, faction?.id, faction?._id ? String(faction._id) : '']);
 }
 
-// [PATCH] Resolve faction aliases for a player even when factionId is null/stale.
-// Falls back to a membership lookup so players who are in a faction but have
-// a stale/missing factionId on their Player doc can still read faction chat.
+// Resolve aliases by membership first. This is critical for Azidéia rewards:
+// old Player.factionId values may point to Mongo _id or another stale id, while
+// the real clan membership is stored in Faction.members.playerId.
 async function getFactionAliasesForPlayer(userId, rawFactionId) {
   const safeId = String(rawFactionId || '').trim();
+  const playerId = String(userId || '').trim();
 
-  // Happy path: player has a valid factionId stored
+  const membershipFaction = playerId
+    ? await Faction.findOne({ 'members.playerId': playerId }).select('_id id').lean()
+    : null;
+
+  if (membershipFaction) {
+    return uniqueStrings([
+      membershipFaction.id,
+      membershipFaction._id ? String(membershipFaction._id) : '',
+      safeId,
+    ]);
+  }
+
   if (safeId) {
     const aliases = await getFactionAliases(safeId);
     if (aliases.length > 0) return aliases;
+    return [safeId];
   }
 
-  // Fallback: look up faction via members array
-  const faction = await Faction.findOne({ 'members.playerId': String(userId) })
-    .select('_id id')
-    .lean();
-  if (!faction) return safeId ? [safeId] : [];
-
-  return uniqueStrings([safeId, faction.id, faction._id ? String(faction._id) : '']);
+  return [];
 }
 
 function normalizeMessage(message) {
@@ -160,12 +167,15 @@ export async function getChatMessages(req, res) {
       if (factionAliases.length === 0) return res.json([]);
       filters.factionId = { $in: factionAliases };
 
-      // Chat não pode travar a coleta. Aqui repara só os cards já materializados.
-      // A criação/cálculo dos lotes fica na rota própria /azideia/rewards/me.
+      // Repara primeiro os LOTES e depois os CARDS.
+      // Sem AzideiaRewardBatch o modal de coleta abre, mas mostra 0 recompensa.
+      // Isso cobre missões antigas que já deram recompensa individual, porém não
+      // criaram lote coletivo para a facção.
       try {
+        await repairMissingFactionRewardBatchesForPlayer(req.player);
         await repairMissingFactionRewardChatMessagesForPlayer(req.player);
       } catch (repairError) {
-        console.error('[CHAT_AZIDEIA_CARD_REPAIR_NON_BLOCKING]', repairError);
+        console.error('[CHAT_AZIDEIA_REPAIR_NON_BLOCKING]', repairError);
       }
     }
 

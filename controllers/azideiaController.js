@@ -102,6 +102,24 @@ function getTargetCostDirtyMoney(type = 'x9', player = null) {
   return Math.max(0, Math.floor(toNumber(getTargetConfig(type).costDirtyMoney, 0)));
 }
 
+function getNestedValue(source, dottedPath) {
+  if (!source || !dottedPath) return undefined;
+  if (typeof source.get === 'function') {
+    const value = source.get(dottedPath);
+    if (value !== undefined) return value;
+  }
+
+  return dottedPath.split('.').reduce((acc, key) => {
+    if (acc == null) return undefined;
+    return acc[key];
+  }, source);
+}
+
+function safeDailyNumber(current, key, ...legacyValues) {
+  const values = [current?.[key], ...legacyValues].map((value) => toNumber(value, 0));
+  return Math.max(0, Math.floor(Math.max(...values, 0)));
+}
+
 function ensureAzideiaDaily(player) {
   const key = todayKey();
   const current = player.azideiaDaily || {};
@@ -116,14 +134,26 @@ function ensureAzideiaDaily(player) {
       mestreObrasFactionBarracoAcceleratorsReceived: 0,
     };
   } else {
+    // Campo legado visto no Mongo: correriaFactionCorreceive.
+    // Se existir nos documentos antigos, preserva o maior valor até a migração
+    // física remover o typo e gravar correriaFactionCorreReceived.
+    const legacyCorreriaFactionCorreReceived = getNestedValue(
+      player,
+      'azideiaDaily.correriaFactionCorreceive',
+    );
+
     player.azideiaDaily = {
       date: key,
-      x9Kills: Math.max(0, Math.floor(toNumber(current.x9Kills, 0))),
-      x9FactionAcceleratorsReceived: Math.max(0, Math.floor(toNumber(current.x9FactionAcceleratorsReceived, 0))),
-      correriaNegotiations: Math.max(0, Math.floor(toNumber(current.correriaNegotiations, 0))),
-      correriaFactionCorreReceived: Math.max(0, Math.floor(toNumber(current.correriaFactionCorreReceived, 0))),
-      mestreObrasPayments: Math.max(0, Math.floor(toNumber(current.mestreObrasPayments, 0))),
-      mestreObrasFactionBarracoAcceleratorsReceived: Math.max(0, Math.floor(toNumber(current.mestreObrasFactionBarracoAcceleratorsReceived, 0))),
+      x9Kills: safeDailyNumber(current, 'x9Kills'),
+      x9FactionAcceleratorsReceived: safeDailyNumber(current, 'x9FactionAcceleratorsReceived'),
+      correriaNegotiations: safeDailyNumber(current, 'correriaNegotiations'),
+      correriaFactionCorreReceived: safeDailyNumber(
+        current,
+        'correriaFactionCorreReceived',
+        legacyCorreriaFactionCorreReceived,
+      ),
+      mestreObrasPayments: safeDailyNumber(current, 'mestreObrasPayments'),
+      mestreObrasFactionBarracoAcceleratorsReceived: safeDailyNumber(current, 'mestreObrasFactionBarracoAcceleratorsReceived'),
     };
   }
   return player.azideiaDaily;
@@ -210,14 +240,49 @@ async function findFactionByPlayerMembership(player) {
   return Faction.findOne({ 'members.playerId': playerId });
 }
 
+async function normalizePlayerFactionIdFromFaction(player, faction) {
+  const canonicalFactionId = String(faction?.id || '').trim();
+  if (!player?._id || !canonicalFactionId) return false;
+
+  const currentFactionId = String(player.factionId || '').trim();
+  if (currentFactionId === canonicalFactionId) return false;
+
+  player.factionId = canonicalFactionId;
+  if (typeof player.markModified === 'function') player.markModified('factionId');
+  bumpVersion(player);
+
+  try {
+    await player.save();
+    emitPlayerUpdate(player);
+  } catch (error) {
+    console.error('[AZIDEIA_FACTION_ID_NORMALIZE_NON_BLOCKING]', {
+      playerId: String(player._id),
+      from: currentFactionId,
+      to: canonicalFactionId,
+      error,
+    });
+  }
+
+  return true;
+}
+
 async function getFactionRewardContext(player) {
   const fallbackFactionId = String(player?.factionId || '').trim();
-  if (!player?._id) return null;
+  const playerId = String(player?._id || '').trim();
+  if (!playerId) return null;
 
-  const faction = fallbackFactionId
-    ? (await findFactionByAnyId(fallbackFactionId)) || (await findFactionByPlayerMembership(player))
-    : await findFactionByPlayerMembership(player);
+  // Fonte de verdade para recompensa coletiva: membership real no documento da facção.
+  // Se Player.factionId estiver com _id do Mongo, id público antigo, ou valor stale,
+  // a busca por members.playerId precisa vencer para não gerar lote no clã errado.
+  const membershipFaction = await findFactionByPlayerMembership(player);
+  const factionByStoredId = fallbackFactionId ? await findFactionByAnyId(fallbackFactionId) : null;
+  const faction = membershipFaction || factionByStoredId;
+
   if (!faction && !fallbackFactionId) return null;
+
+  if (membershipFaction) {
+    await normalizePlayerFactionIdFromFaction(player, membershipFaction);
+  }
 
   const factionAliases = getFactionIdAliases(faction, fallbackFactionId);
   const canonicalFactionId = String(faction?.id || fallbackFactionId).trim();
@@ -232,9 +297,8 @@ async function getFactionRewardContext(player) {
     }
   }
 
-  // Fonte de segurança: jogadores que apontam para a facção. Isso corrige dados
-  // legados onde alguns players ficaram com factionId = _id do Mongo e outros
-  // com factionId = id público da facção.
+  // Fonte de segurança: jogadores que apontam para qualquer alias válido da facção.
+  // Isso cobre dados legados com factionId = _id e factionId = id público misturados.
   if (factionAliases.length > 0) {
     const playersInFaction = await Player.find({ factionId: { $in: factionAliases } })
       .select('_id')
@@ -245,8 +309,8 @@ async function getFactionRewardContext(player) {
     }
   }
 
-  // Nunca deixa o atacante fora do lote se ele tem factionId.
-  memberIds.add(String(player._id));
+  // Nunca deixa o executor fora do lote quando ele está em uma facção resolvida.
+  if (canonicalFactionId) memberIds.add(playerId);
 
   return {
     faction,
@@ -628,40 +692,35 @@ async function upsertFactionRewardBatchFromResolvedMission({ rewardContext, miss
   return batch;
 }
 
-export async function repairMissingFactionRewardBatchesForPlayer(player, options = {}) {
+export async function repairMissingFactionRewardBatchesForPlayer(player) {
   const rewardContext = await getFactionRewardContext(player);
   if (!rewardContext || rewardContext.factionAliases.length <= 0) return { repaired: 0 };
 
-  const limit = Math.max(1, Math.min(60, Math.floor(toNumber(options.limit, 25))));
   const memberIds = uniqueStrings(rewardContext.memberIds || []);
 
-  // Reparo leve: só busca missões já resolvidas que ainda NÃO têm lote vinculado.
-  // O patch anterior varria missões resolvidas demais e deixava a coleta lenta.
+  // PONTO CRÍTICO:
+  // A recompensa coletiva verdadeira depende de AzideiaRewardBatch.
+  // Se uma missão antiga foi resolvida e recebeu rewardGrantedAtIso, mas o lote
+  // não foi criado, o modal sempre vai abrir com 0. Por isso o reparo precisa
+  // procurar missões resolvidas da facção inteira, e também por playerId dos
+  // membros, porque algumas missões antigas nasceram com mission.factionId null.
   const missions = await AzideiaMission.find({
     targetType: { $in: ['x9', 'correria', 'mestre_obras'] },
     rewardGrantedAtIso: { $nin: [null, ''] },
     $or: [
-      { factionRewardBatchId: null },
-      { factionRewardBatchId: '' },
-      { factionRewardBatchId: { $exists: false } },
-    ],
-    $and: [
-      {
-        $or: [
-          { factionId: { $in: rewardContext.factionAliases } },
-          ...(memberIds.length > 0 ? [{ playerId: { $in: memberIds } }] : []),
-        ],
-      },
+      { factionId: { $in: rewardContext.factionAliases } },
+      ...(memberIds.length > 0 ? [{ playerId: { $in: memberIds } }] : []),
     ],
   })
     .sort({ createdAt: -1 })
-    .limit(limit);
+    .limit(120);
 
   let repaired = 0;
   for (const mission of missions) {
     try {
+      const beforeId = String(mission.factionRewardBatchId || '');
       const batch = await upsertFactionRewardBatchFromResolvedMission({ rewardContext, mission });
-      if (batch) repaired += 1;
+      if (batch && String(batch._id) !== beforeId) repaired += 1;
     } catch (error) {
       console.error('[AZIDEIA_FACTION_REWARD_REPAIR_NON_BLOCKING]', {
         missionId: String(mission?._id || ''),
@@ -671,93 +730,6 @@ export async function repairMissingFactionRewardBatchesForPlayer(player, options
   }
 
   return { repaired };
-}
-
-async function reconcileFactionOverdueAzideiaMissionsForPlayer(player, options = {}) {
-  const rewardContext = await getFactionRewardContext(player);
-  if (!rewardContext || rewardContext.factionAliases.length <= 0) {
-    return { changedMissionCount: 0, changedPlayerCount: 0 };
-  }
-
-  const limit = Math.max(1, Math.min(40, Math.floor(toNumber(options.limit, 20))));
-  const nowMs = Date.now();
-  const memberIds = uniqueStrings(rewardContext.memberIds || []);
-  if (memberIds.length <= 0) return { changedMissionCount: 0, changedPlayerCount: 0 };
-
-  // Ponto que estava faltando: a coleta de um membro precisa materializar
-  // recompensas de missões vencidas feitas por OUTROS membros da facção.
-  // Antes só a missão do próprio jogador era reconciliada; se o atacante não
-  // confirmasse chegada/retorno, a facção via 0 recompensa.
-  const missions = await AzideiaMission.find({
-    targetType: { $in: ['x9', 'correria', 'mestre_obras'] },
-    status: { $in: ['travelling', 'returning'] },
-    $or: [
-      { factionId: { $in: rewardContext.factionAliases } },
-      { playerId: { $in: memberIds } },
-    ],
-    $and: [
-      {
-        $or: [
-          { arriveAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
-          { returnAtIso: { $lte: new Date(nowMs + AZIDEIA_MISSION_GRACE_MS).toISOString() } },
-          { updatedAt: { $lte: new Date(nowMs - AZIDEIA_RESCUE_OVERDUE_MS) } },
-        ],
-      },
-    ],
-  })
-    .sort({ createdAt: 1 })
-    .limit(limit);
-
-  let changedMissionCount = 0;
-  let changedPlayerCount = 0;
-
-  for (const mission of missions) {
-    try {
-      const missionPlayer = await Player.findById(mission.playerId);
-      if (!missionPlayer) continue;
-
-      let missionChanged = false;
-      let playerChanged = false;
-
-      if (mission.status === 'travelling') {
-        const arrival = await resolveAzideiaMissionArrival({ player: missionPlayer, mission, nowMs });
-        missionChanged = missionChanged || arrival.changedMission;
-        playerChanged = playerChanged || arrival.changedPlayer;
-      }
-
-      if (mission.status === 'returning') {
-        const returned = await resolveAzideiaMissionReturn({ player: missionPlayer, mission, nowMs });
-        missionChanged = missionChanged || returned.changedMission;
-        playerChanged = playerChanged || returned.changedPlayer;
-      }
-
-      if (missionChanged) {
-        await mission.save();
-        changedMissionCount += 1;
-      }
-
-      if (playerChanged) {
-        if (typeof missionPlayer.markModified === 'function') {
-          missionPlayer.markModified('gang');
-          missionPlayer.markModified('azideiaDaily');
-          missionPlayer.markModified('convoyAccelerators');
-          missionPlayer.markModified('barracoAccelerators');
-          missionPlayer.markModified('balances');
-        }
-        bumpVersion(missionPlayer);
-        await missionPlayer.save();
-        emitPlayerUpdate(missionPlayer);
-        changedPlayerCount += 1;
-      }
-    } catch (error) {
-      console.error('[AZIDEIA_FACTION_OVERDUE_RECONCILE_NON_BLOCKING]', {
-        missionId: String(mission?._id || ''),
-        error,
-      });
-    }
-  }
-
-  return { changedMissionCount, changedPlayerCount };
 }
 
 export async function repairMissingFactionRewardChatMessagesForPlayer(player) {
@@ -798,13 +770,21 @@ export async function repairMissingFactionRewardChatMessagesForPlayer(player) {
 
 async function getFactionAliasesForPlayer(player) {
   const fallbackFactionId = String(player?.factionId || '').trim();
-  const faction = fallbackFactionId
-    ? (await findFactionByAnyId(fallbackFactionId)) || (await findFactionByPlayerMembership(player))
-    : await findFactionByPlayerMembership(player);
+  const membershipFaction = await findFactionByPlayerMembership(player);
+  if (membershipFaction) {
+    await normalizePlayerFactionIdFromFaction(player, membershipFaction);
+    return uniqueStrings([
+      membershipFaction.id,
+      membershipFaction._id ? String(membershipFaction._id) : '',
+      fallbackFactionId,
+    ]);
+  }
+
+  const faction = fallbackFactionId ? await findFactionByAnyId(fallbackFactionId) : null;
   return uniqueStrings([
-    fallbackFactionId,
-    faction?.id,
+    faction?.id || fallbackFactionId,
     faction?._id ? String(faction._id) : '',
+    fallbackFactionId,
   ]);
 }
 
@@ -880,6 +860,9 @@ function normalizeMission(mission) {
   const config = getTargetConfig(targetType);
   return {
     missionId: String(mission._id),
+    playerId: String(mission.playerId || ''),
+    playerName: String(mission.playerName || 'Jogador'),
+    factionId: mission.factionId ? String(mission.factionId) : null,
     status: mission.status,
     targetId: String(mission.targetId),
     targetType,
@@ -2197,12 +2180,12 @@ async function getPendingBatchesForPlayer(player) {
     AzideiaRewardBatch.find({
       memberIds: playerId,
       claimedBy: { $ne: playerId },
-    }).sort({ createdAt: 1 }).limit(300),
+    }).sort({ createdAt: 1 }),
     rewardContext && factionAliases.length > 0
       ? AzideiaRewardBatch.find({
           factionId: { $in: factionAliases },
           claimedBy: { $ne: playerId },
-        }).sort({ createdAt: 1 }).limit(300)
+        }).sort({ createdAt: 1 })
       : Promise.resolve([]),
   ]);
 
@@ -2301,8 +2284,8 @@ export async function getMyAzideiaRewards(req, res) {
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     await reconcileAzideiaMissionsForPlayer(player);
-    await reconcileFactionOverdueAzideiaMissionsForPlayer(player, { limit: 20 });
-    await repairMissingFactionRewardBatchesForPlayer(player, { limit: 25 });
+    await repairMissingFactionRewardBatchesForPlayer(player);
+    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const factionAliases = await getFactionAliasesForPlayer(player);
@@ -2322,8 +2305,8 @@ export async function claimMyAzideiaRewards(req, res) {
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     await reconcileAzideiaMissionsForPlayer(player);
-    await reconcileFactionOverdueAzideiaMissionsForPlayer(player, { limit: 20 });
-    await repairMissingFactionRewardBatchesForPlayer(player, { limit: 25 });
+    await repairMissingFactionRewardBatchesForPlayer(player);
+    await repairMissingFactionRewardChatMessagesForPlayer(player);
 
     const batches = await getPendingBatchesForPlayer(player);
     const playerId = String(player._id);

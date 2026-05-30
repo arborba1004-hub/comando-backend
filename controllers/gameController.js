@@ -209,6 +209,22 @@ function resolveSlotSpin(multiplier) {
   };
 }
 
+function getFugaVehicleItems(player = {}) {
+  const items = Array.isArray(player?.inventory?.items) ? player.inventory.items : [];
+  return items.filter((item) => item?.category === 'fuga_vehicle' || (item?.source === 'fuga' && (item?.vehicleId || item?.category === 'vehicle')));
+}
+
+function getFugaProtectionPercent(player = {}) {
+  const ownedCount = Array.isArray(player?.ownedVehicles) ? player.ownedVehicles.length : 0;
+  const bestLevel = getFugaVehicleItems(player).reduce((max, item) => {
+    const level = Math.max(1, Math.min(100, Math.floor(safeNumber(item?.level, 1))));
+    return Math.max(max, level);
+  }, 0);
+
+  // A fuga reduz perda e cooldown, mas nunca zera a consequência da blitz.
+  return Math.min(55, Math.round((bestLevel * 0.45 + ownedCount * 1.25) * 10) / 10);
+}
+
 function applyPrisonPenalty(player, now) {
   const cfg = ECONOMY.GIRO.prison;
   const history = player.prisonHistory || {};
@@ -226,9 +242,13 @@ function applyPrisonPenalty(player, now) {
   }
 
   const count = Math.max(1, Number(player.prisonHistory.countInWindow || 1));
-  const lossPct = Math.min(cfg.maxLossPct, cfg.baseLossPct + Math.max(0, count - 1) * cfg.lossStepPct);
+  const baseLossPct = Math.min(cfg.maxLossPct, cfg.baseLossPct + Math.max(0, count - 1) * cfg.lossStepPct);
+  const baseCooldownMs = cfg.cooldownsMs[Math.min(count, cfg.cooldownsMs.length - 1)] || 0;
+  const fugaProtectionPercent = getFugaProtectionPercent(player);
+  const fugaMultiplier = Math.max(0.35, 1 - fugaProtectionPercent / 100);
+  const lossPct = Number((baseLossPct * fugaMultiplier).toFixed(4));
   const loss = Math.floor(Math.max(0, Number(player.balances?.dirtyMoney || 0)) * lossPct);
-  const cooldownMs = cfg.cooldownsMs[Math.min(count, cfg.cooldownsMs.length - 1)] || 0;
+  const cooldownMs = Math.max(0, Math.round(baseCooldownMs * fugaMultiplier));
 
   player.balances.dirtyMoney = Math.max(0, Number(player.balances?.dirtyMoney || 0) - loss);
   player.prisonHistory.cooldownUntil = now + cooldownMs;
@@ -236,7 +256,10 @@ function applyPrisonPenalty(player, now) {
   return {
     loss,
     lossPct,
+    baseLossPct,
     cooldownMs,
+    baseCooldownMs,
+    fugaProtectionPercent,
     cooldownUntil: player.prisonHistory.cooldownUntil,
     prisonCountInWindow: count,
   };

@@ -63,6 +63,7 @@ export function getDefaultPlayerState() {
       lavagem: 1,
       luxury: 1,
       arsenal: 1,
+      fuga: 1,
       bribery: 1,
       hierarchy: 1,
       home: 1,

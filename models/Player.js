@@ -412,6 +412,7 @@ const playerSchema = new mongoose.Schema(
       lavagem: { type: Number, default: 1, min: 1 },
       luxury: { type: Number, default: 1, min: 1 },
       arsenal: { type: Number, default: 1, min: 1 },
+      fuga: { type: Number, default: 1, min: 1 },
       bribery: { type: Number, default: 1, min: 1 },
       hierarchy: { type: Number, default: 1, min: 1 },
       home: { type: Number, default: 1, min: 1 },

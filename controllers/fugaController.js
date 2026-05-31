@@ -249,3 +249,18 @@ export async function buyFugaVehicle(req, res) {
     return res.status(500).json({ error: 'Erro ao comprar veículo de fuga' });
   }
 }
+
+// Compatibilidade de deploy com routes/fugaRoutes.js de versões anteriores.
+// A nova Garagem da Fuga AAA não usa mais acessórios/upgrades separados; cada
+// veículo comprado já entrega o bônus permanente em player.gang.statSources.
+export async function buyFugaCatalogAccessory(_req, res) {
+  return res.status(410).json({
+    error: 'Sistema antigo de acessórios de fuga substituído pela Garagem da Fuga. Use /fuga/buy.',
+  });
+}
+
+export async function buyFugaVehicleUpgrade(_req, res) {
+  return res.status(410).json({
+    error: 'Sistema antigo de upgrades de fuga substituído pela Garagem da Fuga. Use /fuga/buy.',
+  });
+}

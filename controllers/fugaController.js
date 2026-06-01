@@ -5,92 +5,32 @@ import { upsertGangStatSource } from '../services/gangStatisticsService.js';
 
 const FUGA_BONUS_PERCENT = 1;
 
+// Fonte autoritativa da Garagem da Fuga.
+// Frontend só exibe; backend valida preço, liberação, duplicata, saldo e bônus.
 const FUGA_VEHICLES = [
-  {
-    id: 'touro_negro',
-    name: 'Touro Negro',
-    codename: 'TN-01',
-    unlockBarracoLevel: 1,
-    priceCleanMoney: 850,
-    targetType: 'frente',
-    targetStat: 'rajada',
-    role: 'Arrancada de intimidação',
-  },
-  {
-    id: 'bastiao_vx',
-    name: 'Bastião VX',
-    codename: 'BVX',
-    unlockBarracoLevel: 5,
-    priceCleanMoney: 1250,
-    targetType: 'muralha',
-    targetStat: 'blindagem',
-    role: 'Blindagem urbana',
-  },
-  {
-    id: 'vibora_900',
-    name: 'Víbora 900',
-    codename: 'V900',
-    unlockBarracoLevel: 10,
-    priceCleanMoney: 1850,
-    targetType: 'assassino',
-    targetStat: 'quebra',
-    role: 'Escape silencioso',
-  },
-  {
-    id: 'mirage_gt',
-    name: 'Mirage GT',
-    codename: 'MGT',
-    unlockBarracoLevel: 15,
-    priceCleanMoney: 2700,
-    targetType: 'certeiro',
-    targetStat: 'rajada',
-    role: 'Precisão em alta velocidade',
-  },
-  {
-    id: 'lastro_4x4',
-    name: 'Lastro 4x4',
-    codename: 'L4X',
-    unlockBarracoLevel: 20,
-    priceCleanMoney: 3900,
-    targetType: 'capanga',
-    targetStat: 'folego',
-    role: 'Carga, resistência e apoio',
-  },
-  {
-    id: 'silenciador_s',
-    name: 'Silenciador S',
-    codename: 'S-S',
-    unlockBarracoLevel: 30,
-    priceCleanMoney: 5400,
-    targetType: 'executor',
-    targetStat: 'quebra',
-    role: 'Discrição executiva',
-  },
-  {
-    id: 'dinamo_lx',
-    name: 'Dínamo LX',
-    codename: 'DLX',
-    unlockBarracoLevel: 40,
-    priceCleanMoney: 8200,
-    targetType: 'motorista',
-    targetStat: 'folego',
-    role: 'Transporte blindado',
-  },
-  {
-    id: 'nitro_phantom',
-    name: 'Nitro Phantom',
-    codename: 'NPH',
-    unlockBarracoLevel: 50,
-    priceCleanMoney: 12500,
-    targetType: 'nitro',
-    targetStat: 'rajada',
-    role: 'Fuga extrema',
-  },
+  { id: 'touro_negro', name: 'Touro Negro', codename: 'TN-01', unlockBarracoLevel: 1, priceCleanMoney: 450, targetType: 'frente', targetStat: 'rajada', role: 'Arrancada de intimidação' },
+  { id: 'bastiao_vx', name: 'Bastião VX', codename: 'BVX', unlockBarracoLevel: 5, priceCleanMoney: 750, targetType: 'muralha', targetStat: 'blindagem', role: 'Pressão com proteção' },
+  { id: 'vibora_900', name: 'Víbora 900', codename: 'V900', unlockBarracoLevel: 10, priceCleanMoney: 1100, targetType: 'assassino', targetStat: 'quebra', role: 'Corte relâmpago' },
+  { id: 'mirage_gt', name: 'Mirage GT', codename: 'MGT', unlockBarracoLevel: 15, priceCleanMoney: 1600, targetType: 'certeiro', targetStat: 'rajada', role: 'Controle limpo' },
+  { id: 'lastro_4x4', name: 'Lastro 4x4', codename: 'L4X', unlockBarracoLevel: 20, priceCleanMoney: 2300, targetType: 'capanga', targetStat: 'folego', role: 'Apoio pesado' },
+  { id: 'silenciador_s', name: 'Silenciador S', codename: 'S-S', unlockBarracoLevel: 25, priceCleanMoney: 3200, targetType: 'executor', targetStat: 'quebra', role: 'Fuga sem sirene' },
+  { id: 'dinamo_lx', name: 'Dínamo LX', codename: 'DLX', unlockBarracoLevel: 30, priceCleanMoney: 4500, targetType: 'motorista', targetStat: 'folego', role: 'Retirada prolongada' },
+  { id: 'nitro_phantom', name: 'Nitro Phantom', codename: 'NPH', unlockBarracoLevel: 35, priceCleanMoney: 6300, targetType: 'nitro', targetStat: 'rajada', role: 'Segundo estágio' },
+  { id: 'corvo_gt', name: 'Corvo GT', codename: 'CGT', unlockBarracoLevel: 40, priceCleanMoney: 8800, targetType: 'frente', targetStat: 'quebra', role: 'Quebra de bloqueio' },
+  { id: 'sentinela_x', name: 'Sentinela X', codename: 'STX', unlockBarracoLevel: 45, priceCleanMoney: 12300, targetType: 'muralha', targetStat: 'folego', role: 'Parede de contenção' },
+  { id: 'raposa_r', name: 'Raposa R', codename: 'RPR', unlockBarracoLevel: 50, priceCleanMoney: 17200, targetType: 'assassino', targetStat: 'rajada', role: 'Corte de viela' },
+  { id: 'executor_van', name: 'Executor Van', codename: 'EXV', unlockBarracoLevel: 55, priceCleanMoney: 24000, targetType: 'executor', targetStat: 'blindagem', role: 'Extração fechada' },
+  { id: 'gigante_6x6', name: 'Gigante 6x6', codename: 'G6X', unlockBarracoLevel: 60, priceCleanMoney: 33000, targetType: 'motorista', targetStat: 'blindagem', role: 'Rota impossível' },
+  { id: 'obus_mk', name: 'Obus MK', codename: 'OBM', unlockBarracoLevel: 65, priceCleanMoney: 45500, targetType: 'muralha', targetStat: 'quebra', role: 'Choque pesado' },
+  { id: 'fantasma_sedan', name: 'Fantasma Sedan', codename: 'FSD', unlockBarracoLevel: 70, priceCleanMoney: 62000, targetType: 'certeiro', targetStat: 'blindagem', role: 'Infiltração premium' },
+  { id: 'cobra_negra', name: 'Cobra Negra', codename: 'CBN', unlockBarracoLevel: 75, priceCleanMoney: 84000, targetType: 'assassino', targetStat: 'folego', role: 'Fôlego de perseguição' },
+  { id: 'falcao_4x4', name: 'Falcão 4x4', codename: 'F4X', unlockBarracoLevel: 80, priceCleanMoney: 112000, targetType: 'capanga', targetStat: 'blindagem', role: 'Apoio fora de rota' },
+  { id: 'tempestade_gt', name: 'Tempestade GT', codename: 'TPG', unlockBarracoLevel: 85, priceCleanMoney: 150000, targetType: 'nitro', targetStat: 'folego', role: 'Velocidade sustentada' },
+  { id: 'imperador_lux', name: 'Imperador Lux', codename: 'ILX', unlockBarracoLevel: 90, priceCleanMoney: 200000, targetType: 'executor', targetStat: 'folego', role: 'Comando discreto' },
+  { id: 'eclipse_zero', name: 'Eclipse Zero', codename: 'EZ0', unlockBarracoLevel: 95, priceCleanMoney: 265000, targetType: 'nitro', targetStat: 'quebra', role: 'Fim de jogo' },
 ];
 
-const LEGACY_NAME_TO_ID = new Map(
-  FUGA_VEHICLES.map((vehicle) => [vehicle.name.toLowerCase(), vehicle.id])
-);
+const LEGACY_NAME_TO_ID = new Map(FUGA_VEHICLES.map((vehicle) => [vehicle.name.toLowerCase(), vehicle.id]));
 
 function findVehicle(input = {}) {
   const rawId = String(input.vehicleId || input.id || input.itemId || '').trim();
@@ -150,7 +90,7 @@ function buildInventoryItem(vehicle) {
     codename: vehicle.codename,
     category: 'fuga_vehicle',
     source: 'fuga',
-    rarity: 'signature',
+    rarity: vehicle.unlockBarracoLevel >= 90 ? 'legendary' : vehicle.unlockBarracoLevel >= 60 ? 'phantom' : 'signature',
     role: vehicle.role,
     level: vehicle.unlockBarracoLevel,
     price: vehicle.priceCleanMoney,
@@ -189,9 +129,7 @@ export async function buyFugaVehicle(req, res) {
 
     const barracoLevel = Math.max(1, Math.floor(Number(player?.niveis?.barracoLevel || 1)));
     if (barracoLevel < vehicle.unlockBarracoLevel) {
-      return res.status(403).json({
-        error: `Esse veículo libera no barraco nível ${vehicle.unlockBarracoLevel}`,
-      });
+      return res.status(403).json({ error: `Esse veículo libera no barraco nível ${vehicle.unlockBarracoLevel}` });
     }
 
     if (player?.punishments?.cleanMoneyBlocked) {
@@ -200,7 +138,6 @@ export async function buyFugaVehicle(req, res) {
 
     ensureInventory(player);
     ensureGang(player);
-
     if (!Array.isArray(player.ownedVehicles)) player.ownedVehicles = [];
 
     if (isOwned(player, vehicle)) {
@@ -218,7 +155,11 @@ export async function buyFugaVehicle(req, res) {
     const item = buildInventoryItem(vehicle);
     player.inventory.items.push(item);
 
-    const { source: statSource } = upsertGangStatSource(player, buildStatSource(vehicle));
+    // IMPORTANTE PARA A BATALHA:
+    // services/attack/resolveAttack.js consome player.gang.statSources com
+    // buildMemberStatSnapshot/buildGangStatSnapshot antes de calcular rounds.
+    // Por isso cada veículo grava uma fonte permanente em gang.statSources.
+    const { source: statSource, statSnapshot } = upsertGangStatSource(player, buildStatSource(vehicle));
 
     if (!player.pageLevels || typeof player.pageLevels !== 'object') player.pageLevels = {};
     player.pageLevels.fuga = Math.max(Number(player.pageLevels.fuga || 1), player.ownedVehicles.length || 1);
@@ -242,6 +183,7 @@ export async function buyFugaVehicle(req, res) {
       vehicle,
       item,
       statSource,
+      statSnapshot,
       message: `${vehicle.name} comprado com sucesso`,
     });
   } catch (error) {
@@ -250,9 +192,7 @@ export async function buyFugaVehicle(req, res) {
   }
 }
 
-// Compatibilidade de deploy com routes/fugaRoutes.js de versões anteriores.
-// A nova Garagem da Fuga AAA não usa mais acessórios/upgrades separados; cada
-// veículo comprado já entrega o bônus permanente em player.gang.statSources.
+// Compatibilidade com bundles antigos. A nova Garagem da Fuga usa /fuga/buy.
 export async function buyFugaCatalogAccessory(_req, res) {
   return res.status(410).json({
     error: 'Sistema antigo de acessórios de fuga substituído pela Garagem da Fuga. Use /fuga/buy.',

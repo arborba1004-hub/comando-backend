@@ -434,6 +434,14 @@ const playerSchema = new mongoose.Schema(
       min: 0,
     },
 
+    // Prestígio ganho em PvP. Não é custo nem moeda de ataque; é métrica de guerra
+    // persistida para ranking/recompensas futuras.
+    battlePrestige: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     vip: {
       type: Boolean,
       default: false,

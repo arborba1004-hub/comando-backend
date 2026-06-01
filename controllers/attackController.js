@@ -270,6 +270,14 @@ function getCooldownExpiresAt(defender, attackerId) {
   return lastAt + getEffectiveCooldownMs(defender);
 }
 
+async function findActiveAttackAgainstTarget(attackerId, defenderId) {
+  return Attack.findOne({
+    status: 'travelling',
+    attackerId: String(attackerId),
+    targetId: String(defenderId),
+  }).lean();
+}
+
 function validateCanAttack(attacker, defender) {
   if (String(attacker._id) === String(defender._id)) {
     return {
@@ -362,6 +370,18 @@ async function resolveAttackDocument(attack) {
   attacker.balances.dirtyMoney = result.nextDirtyMoneyAtacante;
   defender.balances.dirtyMoney = result.nextDirtyMoneyDefensor;
 
+  // PvP continua sem custo, mas todos os espólios exibidos no relatório precisam
+  // ser persistidos. Antes, Corre/Prestígio apareciam no relatório e não entravam
+  // no saldo/conta do atacante.
+  const correLoot = Math.max(0, Math.floor(toNumber(result.spoils?.correLoot, 0)));
+  const prestigeLoot = Math.max(0, Math.floor(toNumber(result.spoils?.battlePrestigeLoot ?? result.spoils?.prestigeLoot, 0)));
+  if (correLoot > 0) {
+    attacker.balances.corre = Math.max(0, Math.floor(toNumber(attacker.balances.corre, 0))) + correLoot;
+  }
+  if (prestigeLoot > 0) {
+    attacker.battlePrestige = Math.max(0, Math.floor(toNumber(attacker.battlePrestige, 0))) + prestigeLoot;
+  }
+
   attacker.gang = {
     ...(attacker.gang?.toObject?.() || attacker.gang || {}),
     ...result.nextAttackerGang,
@@ -442,6 +462,11 @@ async function resolveAttackDocument(attack) {
     defender.shieldExpiresAt = Date.now() + SHIELD_DERROTA_MS;
     defender.shieldSource    = 'derrota';
   }
+
+  // Cooldown por alvo passa a ser confirmado no fim da batalha. Assim um ataque
+  // cancelado/travado não consome 24h indevidamente. O startBattle ainda impede
+  // abrir duas marchas simultâneas para o mesmo alvo.
+  setCooldownTimestamp(defender, attacker._id, Date.now());
 
   await Promise.all([attacker.save(), defender.save(), attack.save()]);
 
@@ -626,7 +651,7 @@ export async function estimateBattle(req, res) {
       estimatedChance:     Math.round(result.winChance * 100),
       attackerPower:       result.attackerGangStats.totalPower,
       defenderPower:       result.defenderGangStats.totalPower,
-      correCost:           10,
+      correCost:           0,
       attackerGangPower:   result.attackerGangStats.totalPower,
       defenderGangPower:   result.defenderGangStats.totalPower,
       estimatedWinner:     result.winner,
@@ -679,6 +704,16 @@ export async function startBattle(req, res) {
         shieldExpiresAt: validation.shieldExpiresAt,
         shieldSource: validation.shieldSource,
         cooldownExpiresAt: validation.cooldownExpiresAt,
+      });
+    }
+
+    const activeSameTarget = await findActiveAttackAgainstTarget(attacker._id, defender._id);
+    if (activeSameTarget) {
+      return res.status(409).json({
+        error: 'Você já tem uma marcha em andamento contra esse alvo',
+        reason: 'active_attack_same_target',
+        battleId: activeSameTarget.id,
+        arriveAtIso: activeSameTarget.arriveAtIso || null,
       });
     }
 
@@ -777,13 +812,6 @@ export async function startBattle(req, res) {
     } catch (createErr) {
       await rollbackMarchingMembers(attacker._id, attackId);
       throw createErr;
-    }
-
-    setCooldownTimestamp(defender, attacker._id, Date.now());
-    try {
-      await defender.save();
-    } catch (cooldownErr) {
-      console.error(`[ATTACK] Ataque ${attack.id} criado, mas cooldown do defensor não salvou:`, cooldownErr?.message || cooldownErr);
     }
 
     console.log(`[ATTACK] Iniciado: ${attack.attackerName} → ${attack.targetName} (${resolvedMemberIds.length} membros)`);
@@ -1014,6 +1042,19 @@ export async function canAttack(req, res) {
     }
 
     const validation = validateCanAttack(attacker, defender);
+
+    if (validation.ok) {
+      const activeSameTarget = await findActiveAttackAgainstTarget(attacker._id, defender._id);
+      if (activeSameTarget) {
+        return res.json({
+          canAttack: false,
+          reason: 'active_attack_same_target',
+          message: 'Você já tem uma marcha em andamento contra esse alvo',
+          battleId: activeSameTarget.id,
+          arriveAtIso: activeSameTarget.arriveAtIso || null,
+        });
+      }
+    }
 
     return res.json({
       canAttack:          validation.ok,

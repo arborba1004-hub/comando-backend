@@ -139,6 +139,64 @@ function emptyByType() {
   return Object.fromEntries(MEMBER_TYPES.map((t) => [t, 0]));
 }
 
+const INVENTORY_BONUS_SOURCES = new Set(['item', 'loja', 'arsenal']);
+
+function emptyStats() {
+  return { rajada: 0, blindagem: 0, folego: 0, quebra: 0 };
+}
+
+function cloneStats(input = {}) {
+  const out = emptyStats();
+  for (const key of ['rajada', 'blindagem', 'folego', 'quebra']) {
+    out[key] = Number(toNumber(input?.[key], 0).toFixed(2));
+  }
+  return out;
+}
+
+/**
+ * Bônus vindos de inventário/loja/arsenal precisam respeitar punições como
+ * delação premiada. O atributo base do membro continua imutável; só reduzimos
+ * fontes externas antes de montar effectiveStats.
+ */
+function applyInventoryPenaltyToStatSources(player = {}, statSources = []) {
+  const safeSources = Array.isArray(statSources) ? statSources : [];
+  const punishments = player?.punishments || {};
+  const inventoryBlocked = Boolean(punishments?.inventoryBlocked || punishments?.delacao?.active);
+  const rawReduction = toNumber(punishments?.inventoryBonusReductionPercent, inventoryBlocked ? 100 : 0);
+  const reductionPercent = clamp(rawReduction, 0, 100);
+
+  if (!inventoryBlocked && reductionPercent <= 0) return safeSources;
+
+  const multiplier = 1 - reductionPercent / 100;
+  return safeSources.map((source) => {
+    const sourceKind = String(source?.source || '');
+    if (!INVENTORY_BONUS_SOURCES.has(sourceKind)) return source;
+
+    return {
+      ...source,
+      percent: Object.fromEntries(
+        Object.entries(cloneStats(source?.percent)).map(([key, value]) => [key, Number((value * multiplier).toFixed(2))])
+      ),
+      flat: Object.fromEntries(
+        Object.entries(cloneStats(source?.flat)).map(([key, value]) => [key, Number((value * multiplier).toFixed(2))])
+      ),
+      inventoryPenaltyApplied: {
+        blocked: inventoryBlocked,
+        reductionPercent,
+      },
+    };
+  });
+}
+
+function getCombatStatSources(player = {}) {
+  const withBarraco = applyBarracoGangStatSourceToList(
+    Array.isArray(player?.gang?.statSources) ? player.gang.statSources : [],
+    player?.niveis?.barracoLevel || 1
+  );
+
+  return applyInventoryPenaltyToStatSources(player, withBarraco);
+}
+
 // ─── VIAGEM ───────────────────────────────────────────────────────────────────
 
 /**
@@ -517,14 +575,8 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
     .map(asBattleActive);
 
   // Stats pré-batalha (para winChance e relatório)
-  const attackerStatSources = applyBarracoGangStatSourceToList(
-    Array.isArray(attacker?.gang?.statSources) ? attacker.gang.statSources : [],
-    attacker?.niveis?.barracoLevel || 1
-  );
-  const defenderStatSources = applyBarracoGangStatSourceToList(
-    Array.isArray(defender?.gang?.statSources) ? defender.gang.statSources : [],
-    defender?.niveis?.barracoLevel || 1
-  );
+  const attackerStatSources = getCombatStatSources(attacker);
+  const defenderStatSources = getCombatStatSources(defender);
 
   const attackerGangStats = computeGangStats(attackerMarch, attackerStatSources);
   const defenderGangStats = computeGangStats(defenderMarch, defenderStatSources);
@@ -602,18 +654,24 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
     : defenderDirtyMoney;
 
   // ── Baixas ───────────────────────────────────────────────────────────────
-  const attackerGangLosses = resolveGangCasualties({
-    members:   attackerMarch,
-    ownStats:  attackerGangStats,
-    enemyStats: defenderGangStats,
-    side: 'attacker',
-  });
-  const defenderGangLosses = resolveGangCasualties({
-    members:   defenderMarch,
-    ownStats:  defenderGangStats,
-    enemyStats: attackerGangStats,
-    side: 'defender',
-  });
+  // Fonte única de verdade: a simulação round-by-round define HP final; HP final
+  // define mortos/feridos/ativos; relatório e persistência usam exatamente isso.
+  function summarizeUnitCasualties(units = []) {
+    const mortos = emptyByType();
+    const feridos = emptyByType();
+
+    for (const unit of units) {
+      const type = MEMBER_TYPES.includes(String(unit?.type)) ? String(unit.type) : 'capanga';
+      const status = classifyStatus(unit);
+      if (status === 'morto') mortos[type] += 1;
+      if (status === 'ferido') feridos[type] += 1;
+    }
+
+    return { mortos, feridos, preservadosPeloMedico: 0 };
+  }
+
+  const attackerGangLosses = summarizeUnitCasualties(attackerUnits);
+  const defenderGangLosses = summarizeUnitCasualties(defenderUnits);
 
   // ── IDs de mortos e feridos (para o controller atualizar status) ─────────
   const attackerUnitsMap = new Map(attackerUnits.map((u) => [u.persistedId, u]));
@@ -738,6 +796,7 @@ export function resolveAttackResult({ battleId = null, attacker, defender, selec
       dirtyMoneyLoot:          lootDirtyMoney,
       correLoot,
       prestigeLoot,
+      battlePrestigeLoot:      prestigeLoot,
       brokenLuxuryItemId:      null,
       brokenLuxuryItemName:    null,
       brokenLuxuryItemValue:   null,

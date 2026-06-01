@@ -80,6 +80,7 @@ export function getDefaultPlayerState() {
     },
 
     power: 0,
+    battlePrestige: 0,
     vip: false,
 
     lastSkillTrainAt: 0,

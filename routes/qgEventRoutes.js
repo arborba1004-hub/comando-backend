@@ -8,6 +8,7 @@ import {
   useQgMandateAbility,
   sendQgMandatePack,
   assignQgServant,
+  setQgResourceDecree,
   forceReconcileQgEvent,
   startQgEvent,
   joinQgEvent,
@@ -24,6 +25,7 @@ router.post('/appoint-role', authMiddleware, appointQgRole);
 router.post('/mandate/ability', authMiddleware, useQgMandateAbility);
 router.post('/mandate/pack', authMiddleware, sendQgMandatePack);
 router.post('/mandate/servant', authMiddleware, assignQgServant);
+router.post('/mandate/decree', authMiddleware, setQgResourceDecree);
 router.post('/reconcile', authMiddleware, forceReconcileQgEvent);
 
 // Rotas antigas preservadas para não quebrar front/cache antigo.

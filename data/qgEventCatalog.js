@@ -95,28 +95,28 @@ export const QG_MANDATE_ROLES = [
     title: 'Líder do Complexo',
     description: 'Cargo máximo do mandato. Nomeia cargos, comanda decretos e representa a facção vencedora.',
     percent: { rajada: 5, blindagem: 5, folego: 3, quebra: 3 },
-    powers: ['abilities', 'packs', 'servants', 'appoint'],
+    powers: ['abilities', 'packs', 'servants', 'appoint', 'decrees'],
   },
   {
     id: 'sub_lider',
     title: 'Sub Líder',
     description: 'Segundo comando do mandato. Mantém a administração do QG quando o líder está fora.',
     percent: { rajada: 3, blindagem: 3, folego: 2, quebra: 2 },
-    powers: ['abilities', 'packs'],
+    powers: ['abilities', 'packs', 'decrees'],
   },
   {
     id: 'seguranca',
     title: 'Segurança',
     description: 'Responsável por segurar o QG e reduzir perdas defensivas da facção.',
     percent: { rajada: 0, blindagem: 5, folego: 5, quebra: 0 },
-    powers: ['defense_abilities'],
+    powers: ['defense_abilities', 'decrees'],
   },
   {
     id: 'tesoureiro',
     title: 'Tesoureiro',
     description: 'Controla pacotes e cofre do mandato. Também fortalece sustentação tática.',
     percent: { rajada: 0, blindagem: 2, folego: 3, quebra: 0 },
-    powers: ['packs', 'treasury_abilities'],
+    powers: ['packs', 'treasury_abilities', 'decrees'],
   },
 ];
 
@@ -130,15 +130,6 @@ export const QG_MANDATE_FACTION_BUFF = {
 };
 
 export const QG_MANDATE_ABILITIES = [
-  {
-    id: 'tregua_complexo',
-    title: 'Trégua do Complexo',
-    description: 'Ativa proteção PvP de 4 horas para todos os membros da facção vencedora.',
-    cost: { dirtyMoney: 200000, cleanMoney: 0, corre: 0 },
-    durationMs: 4 * 60 * 60 * 1000,
-    allowedRoles: ['lider_complexo', 'sub_lider'],
-    effect: 'pvp_truce',
-  },
   {
     id: 'tratamento_emergencial',
     title: 'Tratamento Emergencial',
@@ -210,6 +201,50 @@ export const QG_SERVANT_PENALTIES = [
   },
 ];
 
+
+export const QG_RESOURCE_DECREES = [
+  {
+    id: 'mais_x9',
+    title: 'Decreto dos X9',
+    description: 'Durante o mandato, prioriza eventos e comunicações ligados aos X9 no mapa.',
+    cost: { dirtyMoney: 75000, cleanMoney: 0, corre: 10 },
+    allowedRoles: ['lider_complexo', 'sub_lider'],
+    effect: 'azideia_x9_bias',
+  },
+  {
+    id: 'mais_correria',
+    title: 'Decreto da Correria',
+    description: 'Durante o mandato, prioriza oportunidades de Correria e recompensas de Corre.',
+    cost: { dirtyMoney: 75000, cleanMoney: 0, corre: 10 },
+    allowedRoles: ['lider_complexo', 'sub_lider'],
+    effect: 'azideia_correria_bias',
+  },
+  {
+    id: 'mais_mestre_obras',
+    title: 'Decreto da Obra',
+    description: 'Durante o mandato, prioriza Mestre de Obras e aceleradores do barraco.',
+    cost: { dirtyMoney: 90000, cleanMoney: 0, corre: 14 },
+    allowedRoles: ['lider_complexo', 'tesoureiro'],
+    effect: 'azideia_mestre_obras_bias',
+  },
+  {
+    id: 'mais_lavagem',
+    title: 'Decreto da Lavagem',
+    description: 'Durante o mandato, fortalece a economia e favorece recompensas ligadas à lavagem.',
+    cost: { dirtyMoney: 110000, cleanMoney: 0, corre: 16 },
+    allowedRoles: ['lider_complexo', 'tesoureiro'],
+    effect: 'lavagem_bias',
+  },
+  {
+    id: 'mais_comboio',
+    title: 'Decreto dos Comboios',
+    description: 'Durante o mandato, favorece aceleradores de comboio e logística da facção.',
+    cost: { dirtyMoney: 95000, cleanMoney: 0, corre: 14 },
+    allowedRoles: ['lider_complexo', 'seguranca'],
+    effect: 'convoy_accelerator_bias',
+  },
+];
+
 export function getQgLocation(key) {
   return QG_LOCATIONS.find((item) => item.key === String(key || '')) || null;
 }
@@ -228,6 +263,10 @@ export function getQGRewardPack(packId) {
 
 export function getQGServantPenalty(penaltyId) {
   return QG_SERVANT_PENALTIES.find((item) => item.id === String(penaltyId || '')) || null;
+}
+
+export function getQGResourceDecree(decreeId) {
+  return QG_RESOURCE_DECREES.find((item) => item.id === String(decreeId || '')) || null;
 }
 
 export function emptyByType() {

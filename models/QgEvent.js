@@ -100,6 +100,10 @@ const qgMandateSchema = new mongoose.Schema(
     roles: { type: [qgMandateRoleSchema], default: [] },
     rewardsGranted: { type: Boolean, default: false },
     statSourcesAppliedAt: { type: String, default: null },
+    abilityUses: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    packagesSent: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    servants: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    activeDecrees: { type: [mongoose.Schema.Types.Mixed], default: [] },
   },
   { _id: false }
 );

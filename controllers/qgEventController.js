@@ -103,7 +103,7 @@ function playerOwnsGarrisonAt(event, playerId, locationKey = null) {
   });
 }
 
-function nextSaoPaulo22FromNow(now = Date.now()) {
+function nextSaoPauloEventStartFromNow(now = Date.now()) {
   const spLocal = new Date(now - SAO_PAULO_OFFSET_MS);
   let candidate = Date.UTC(
     spLocal.getUTCFullYear(),
@@ -123,7 +123,7 @@ function nextSaoPaulo22FromNow(now = Date.now()) {
 }
 
 function nextStartFromLatest(latestEvent, now = Date.now()) {
-  if (!latestEvent?.startsAt) return nextSaoPaulo22FromNow(now);
+  if (!latestEvent?.startsAt) return nextSaoPauloEventStartFromNow(now);
   let next = dateMs(latestEvent.startsAt) + QG_EVENT.intervalMs;
   while (next + QG_EVENT.maxBattleMs <= now) next += QG_EVENT.intervalMs;
   return next;
@@ -300,9 +300,11 @@ function recalculateParticipantsPerFaction(event) {
     score.participants = counts.get(String(score.factionId)) || 0;
   }
   event.factions = (event.factions || []).sort((a, b) => {
-    const aHold = toNumber(a.qgMaxContinuousHoldMs, 0);
-    const bHold = toNumber(b.qgMaxContinuousHoldMs, 0);
+    const aHold = toNumber(a.qgHoldMs, 0);
+    const bHold = toNumber(b.qgHoldMs, 0);
     if (bHold !== aHold) return bHold - aHold;
+    const continuousDiff = toNumber(b.qgMaxContinuousHoldMs, 0) - toNumber(a.qgMaxContinuousHoldMs, 0);
+    if (continuousDiff !== 0) return continuousDiff;
     return toNumber(b.contribution, 0) - toNumber(a.contribution, 0);
   });
 }
@@ -710,11 +712,10 @@ async function settleQGEventToAppointment(event) {
   recalculateParticipantsPerFaction(event);
 
   const ranked = [...(event.factions || [])].sort((a, b) => {
-    const aQualified = toNumber(a.qgMaxContinuousHoldMs, 0) >= QG_EVENT.requiredHoldMs ? 1 : 0;
-    const bQualified = toNumber(b.qgMaxContinuousHoldMs, 0) >= QG_EVENT.requiredHoldMs ? 1 : 0;
-    if (bQualified !== aQualified) return bQualified - aQualified;
-    const holdDiff = toNumber(b.qgMaxContinuousHoldMs, 0) - toNumber(a.qgMaxContinuousHoldMs, 0);
+    const holdDiff = toNumber(b.qgHoldMs, 0) - toNumber(a.qgHoldMs, 0);
     if (holdDiff !== 0) return holdDiff;
+    const continuousDiff = toNumber(b.qgMaxContinuousHoldMs, 0) - toNumber(a.qgMaxContinuousHoldMs, 0);
+    if (continuousDiff !== 0) return continuousDiff;
     return toNumber(b.contribution, 0) - toNumber(a.contribution, 0);
   });
   const winner = ranked[0] || null;
@@ -724,9 +725,9 @@ async function settleQGEventToAppointment(event) {
   event.winnerFactionId = winner?.factionId || null;
   event.winnerFactionName = winner?.factionName || '';
   event.winnerFactionTag = winner?.factionTag || '';
-  event.winnerReason = winner && toNumber(winner.qgMaxContinuousHoldMs, 0) >= QG_EVENT.requiredHoldMs
-    ? '8h de ocupação contínua do QG'
-    : winner ? 'maior ocupação contínua do QG na janela de guerra' : 'sem ocupação válida';
+  event.winnerReason = winner
+    ? 'maior tempo acumulado de ocupação do QG entre 18h e 00h'
+    : 'sem ocupação válida';
 
   if (winner) {
     const appointmentEndsAt = new Date(Date.now() + QG_EVENT.appointmentMs).toISOString();
@@ -1089,9 +1090,21 @@ function normalizeEvent(event, currentPlayerId = null) {
   const currentIndex = currentPlayerId
     ? sortedParticipants.findIndex((item) => String(item.playerId) === String(currentPlayerId))
     : -1;
+  const qgStateForRank = getLocationState(event, 'qg');
+  const qgOccupantForRank = String(qgStateForRank?.occupantFactionId || '');
+  const qgCurrentHoldForRank = qgOccupantForRank && qgStateForRank?.occupiedSince
+    ? Math.max(0, Date.now() - dateMs(qgStateForRank.occupiedSince))
+    : 0;
+  const getLiveQGTotalHoldMs = (item) => toNumber(item.qgHoldMs, 0) + (String(item.factionId) === qgOccupantForRank ? qgCurrentHoldForRank : 0);
+  const getLiveQGContinuousHoldMs = (item) => Math.max(
+    toNumber(item.qgMaxContinuousHoldMs, 0),
+    String(item.factionId) === qgOccupantForRank ? qgCurrentHoldForRank : 0,
+  );
   const rankedFactions = [...(event.factions || [])].sort((a, b) => {
-    const holdDiff = toNumber(b.qgMaxContinuousHoldMs, 0) - toNumber(a.qgMaxContinuousHoldMs, 0);
+    const holdDiff = getLiveQGTotalHoldMs(b) - getLiveQGTotalHoldMs(a);
     if (holdDiff !== 0) return holdDiff;
+    const continuousDiff = getLiveQGContinuousHoldMs(b) - getLiveQGContinuousHoldMs(a);
+    if (continuousDiff !== 0) return continuousDiff;
     return toNumber(b.contribution, 0) - toNumber(a.contribution, 0);
   });
 
@@ -1117,13 +1130,8 @@ function normalizeEvent(event, currentPlayerId = null) {
       factionName: String(item.factionName || ''),
       factionTag: String(item.factionTag || ''),
       contribution: Math.floor(toNumber(item.contribution, 0)),
-      qgHoldMs: Math.floor(toNumber(item.qgHoldMs, 0)),
-      qgMaxContinuousHoldMs: Math.max(
-        Math.floor(toNumber(item.qgMaxContinuousHoldMs, 0)),
-        String(item.factionId) === String(getLocationState(event, 'qg')?.occupantFactionId || '')
-          ? Math.floor(Date.now() - dateMs(getLocationState(event, 'qg')?.occupiedSince))
-          : 0,
-      ),
+      qgHoldMs: Math.floor(getLiveQGTotalHoldMs(item)),
+      qgMaxContinuousHoldMs: Math.floor(getLiveQGContinuousHoldMs(item)),
       qgCaptures: Math.floor(toNumber(item.qgCaptures, 0)),
       ctCaptures: Math.floor(toNumber(item.ctCaptures, 0)),
       ctDamageDealt: Math.floor(toNumber(item.ctDamageDealt, 0)),

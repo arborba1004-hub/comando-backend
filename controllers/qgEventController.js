@@ -4,7 +4,11 @@ import Player from '../models/Player.js';
 import { bumpVersion, generateId } from '../utils/gameHelpers.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { emitToPlayer, emitToPlayers, broadcastToAll } from '../services/socketEmitter.js';
-import { buildGangStatSnapshot, buildMemberStatSnapshot } from '../services/gangStatisticsService.js';
+import {
+  applyBarracoGangStatSourceToList,
+  buildGangStatSnapshot,
+  buildMemberStatSnapshot,
+} from '../services/gangStatisticsService.js';
 import {
   QG_EVENT,
   QG_LOCATIONS,
@@ -29,6 +33,8 @@ import {
 
 const SAO_PAULO_OFFSET_MS = 3 * 60 * 60 * 1000;
 const QG_STAT_SOURCE_PREFIX = 'tomada_qg_';
+const QG_INVENTORY_BONUS_SOURCES = new Set(['item', 'loja', 'arsenal']);
+
 
 function nowIso() { return new Date().toISOString(); }
 function toNumber(value, fallback = 0) {
@@ -44,6 +50,58 @@ function dateMs(value) {
   return Number.isFinite(ms) ? ms : 0;
 }
 function formatName(playerOrMember) { return String(playerOrMember?.playerName || playerOrMember?.name || 'Jogador'); }
+
+function emptyStats() { return { rajada: 0, blindagem: 0, folego: 0, quebra: 0 }; }
+function cloneStats(input = {}) {
+  const out = emptyStats();
+  for (const key of Object.keys(out)) out[key] = Number(toNumber(input?.[key], 0).toFixed(2));
+  return out;
+}
+
+function applyInventoryPenaltyToQGStatSources(player = {}, statSources = []) {
+  const safeSources = Array.isArray(statSources) ? statSources : [];
+  const punishments = player?.punishments || {};
+  const inventoryBlocked = Boolean(punishments?.inventoryBlocked || punishments?.delacao?.active);
+  const rawReduction = toNumber(punishments?.inventoryBonusReductionPercent, inventoryBlocked ? 100 : 0);
+  const reductionPercent = clamp(rawReduction, 0, 100);
+  if (!inventoryBlocked && reductionPercent <= 0) return safeSources;
+
+  const multiplier = 1 - reductionPercent / 100;
+  return safeSources.map((source) => {
+    const sourceKind = String(source?.source || '');
+    if (!QG_INVENTORY_BONUS_SOURCES.has(sourceKind)) return source;
+    return {
+      ...source,
+      percent: Object.fromEntries(Object.entries(cloneStats(source?.percent)).map(([key, value]) => [key, Number((value * multiplier).toFixed(2))])),
+      flat: Object.fromEntries(Object.entries(cloneStats(source?.flat)).map(([key, value]) => [key, Number((value * multiplier).toFixed(2))])),
+      inventoryPenaltyApplied: { blocked: inventoryBlocked, reductionPercent },
+    };
+  });
+}
+
+function getQGCombatStatSources(player = {}) {
+  const persistentSources = Array.isArray(player?.gang?.statSources) ? player.gang.statSources : [];
+  const withBarraco = applyBarracoGangStatSourceToList(persistentSources, player?.niveis?.barracoLevel || 1);
+  return applyInventoryPenaltyToQGStatSources(player, withBarraco);
+}
+
+function getAllGarrisonMemberIds(event) {
+  const ids = new Set();
+  for (const location of event?.locations || []) {
+    for (const group of location?.garrison || []) {
+      for (const id of group?.memberIds || []) ids.add(String(id));
+    }
+  }
+  return ids;
+}
+
+function playerOwnsGarrisonAt(event, playerId, locationKey = null) {
+  const pid = String(playerId || '');
+  return (event?.locations || []).some((location) => {
+    if (locationKey && String(location.key) !== String(locationKey)) return false;
+    return (location.garrison || []).some((group) => String(group.playerId) === pid && Array.isArray(group.memberIds) && group.memberIds.length > 0);
+  });
+}
 
 function nextSaoPaulo22FromNow(now = Date.now()) {
   const spLocal = new Date(now - SAO_PAULO_OFFSET_MS);
@@ -307,10 +365,11 @@ function getCombatPower(member, statSources = []) {
   );
 }
 
-function selectMembersForMarch(player, selection, capacity) {
+function selectMembersForMarch(player, selection, capacity, reservedMemberIds = new Set()) {
   const safeSelection = normalizeQGSelection(selection);
+  const reserved = reservedMemberIds instanceof Set ? reservedMemberIds : new Set();
   const active = Array.isArray(player?.gang?.members)
-    ? player.gang.members.filter((member) => member?.status === 'ativo')
+    ? player.gang.members.filter((member) => member?.status === 'ativo' && !reserved.has(String(member.id)))
     : [];
   const chosen = [];
   const byType = new Map();
@@ -353,7 +412,7 @@ function markMembersForGarrison(player, memberIds, event, locationKey) {
 
 async function releaseMembers(playerId, memberIds, casualtyRate = 0, options = {}) {
   const player = await Player.findById(String(playerId));
-  if (!player || !Array.isArray(player?.gang?.members)) return { lost: 0, survivors: [] };
+  if (!player || !Array.isArray(player?.gang?.members)) return { lost: 0, survivors: [], player: null };
   const ids = new Set((memberIds || []).map(String));
   const survivors = [];
   let lost = 0;
@@ -387,7 +446,7 @@ async function releaseMembers(playerId, memberIds, casualtyRate = 0, options = {
   await player.save();
   emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
   emitToPlayer(String(player._id), 'gangUpdate', { gang: player.gang });
-  return { lost, survivors };
+  return { lost, survivors, player };
 }
 
 async function damageGarrison(location, count, options = {}) {
@@ -453,7 +512,12 @@ function addContribution(event, player, faction, amount, meta = {}) {
 async function createScheduledOrActiveEvent(startsAtMs) {
   const startsAt = new Date(startsAtMs).toISOString();
   const endsAt = new Date(startsAtMs + QG_EVENT.maxBattleMs).toISOString();
-  const status = Date.now() >= startsAtMs ? 'active' : 'scheduled';
+  const now = Date.now();
+  const status = now >= startsAtMs
+    ? 'active'
+    : now >= startsAtMs - QG_EVENT.warningMs
+      ? 'preparation'
+      : 'scheduled';
   return QgEvent.create({
     slug: QG_EVENT.slug,
     status,
@@ -466,6 +530,16 @@ async function createScheduledOrActiveEvent(startsAtMs) {
     mandate: {},
     activityLog: [{ id: generateId(), type: 'event_scheduled', actorPlayerName: 'Sistema', metadata: { startsAt, status }, createdAt: nowIso() }],
   });
+}
+
+async function enterPreparationEvent(event) {
+  if (!event || event.status !== 'scheduled') return event;
+  event.status = 'preparation';
+  ensureLocations(event);
+  addEventLog(event, 'event_preparation_started', { playerName: 'Sistema' }, { startsAt: event.startsAt });
+  await event.save();
+  await emitQGUpdate(event);
+  return event;
 }
 
 async function openScheduledEvent(event) {
@@ -483,7 +557,7 @@ async function getLatestEvent() {
 }
 
 async function getActiveLikeEvent() {
-  return QgEvent.findOne({ slug: QG_EVENT.slug, status: { $in: ['scheduled', 'active', 'appointment', 'mandate'] } }).sort({ startsAt: -1 });
+  return QgEvent.findOne({ slug: QG_EVENT.slug, status: { $in: ['scheduled', 'preparation', 'active', 'appointment', 'mandate'] } }).sort({ startsAt: -1 });
 }
 
 async function ensureQgEventCycle() {
@@ -495,7 +569,11 @@ async function ensureQgEventCycle() {
     event = await createScheduledOrActiveEvent(nextStartFromLatest(latest, now));
   }
 
-  if (event.status === 'scheduled' && now >= dateMs(event.startsAt)) {
+  if (event.status === 'scheduled' && now >= dateMs(event.startsAt) - QG_EVENT.warningMs) {
+    event = await enterPreparationEvent(event);
+  }
+
+  if ((event.status === 'scheduled' || event.status === 'preparation') && now >= dateMs(event.startsAt)) {
     event = await openScheduledEvent(event);
   }
 
@@ -1074,6 +1152,7 @@ function buildEligibility({ player, faction, event }) {
     mandateRoleId: mandateRole?.roleId || null,
     mandateRoleTitle: mandateRole?.title || null,
     canMarch: Boolean(event?.status === 'active' && faction && barracoLevel >= QG_EVENT.minBarracoLevel),
+    canWithdraw: Boolean(event?.status === 'active' && faction && playerOwnsGarrisonAt(event, getPlayerId(player))),
     canAppoint: Boolean(event?.status === 'appointment' && faction && String(event.winnerFactionId || '') === String(faction.id || '') && String(faction.leaderId || '') === getPlayerId(player)),
     canUseMandatePower: Boolean(event?.status === 'mandate' && isWinnerFaction && mandateRole),
     canSendMandatePack: Boolean(event?.status === 'mandate' && isWinnerFaction && mandateHasPower(event, player, 'packs')),
@@ -1133,11 +1212,12 @@ export async function sendQgMarch(req, res) {
     const remainingForFriendly = location.occupantFactionId === String(faction.id)
       ? Math.max(0, toNumber(location.capacity, baseCapacity) - getGarrisonCount(location))
       : baseCapacity;
-    const selectedMembers = selectMembersForMarch(player, selection, remainingForFriendly);
+    const reservedMemberIds = getAllGarrisonMemberIds(event);
+    const selectedMembers = selectMembersForMarch(player, selection, remainingForFriendly, reservedMemberIds);
     if (!selectedMembers.length) return res.status(400).json({ error: 'Não há membros ativos suficientes para essa marcha ou a capacidade está cheia.' });
 
     const selectedIds = selectedMembers.map((member) => String(member.id));
-    const statSources = Array.isArray(player?.gang?.statSources) ? player.gang.statSources : [];
+    const statSources = getQGCombatStatSources(player);
     const power = Math.round(selectedMembers.reduce((sum, member) => sum + getCombatPower(member, statSources), 0));
     const group = {
       id: generateId(),
@@ -1160,18 +1240,19 @@ export async function sendQgMarch(req, res) {
     let outcome = 'reinforced';
     let attackerLost = 0;
     let defenderLost = 0;
+    let workingPlayer = player;
 
     if (isEmpty) {
       setLocationControl(event, location, faction, player, baseCapacity);
       location.garrison = [group];
       outcome = locationKey === 'qg' ? 'qg_occupied' : 'ct_occupied';
       addContribution(event, player, faction, locationKey === 'qg' ? 650 : 280, { troopsSent: selectedIds.length, qgCapture: locationKey === 'qg', ctCapture: locationKey !== 'qg' });
-      markMembersForGarrison(player, selectedIds, event, locationKey);
+      markMembersForGarrison(workingPlayer, selectedIds, event, locationKey);
     } else if (isFriendly) {
       location.garrison.push(group);
       outcome = locationKey === 'qg' ? 'qg_reinforced' : 'ct_reinforced';
       addContribution(event, player, faction, Math.max(60, selectedIds.length * 2), { troopsSent: selectedIds.length });
-      markMembersForGarrison(player, selectedIds, event, locationKey);
+      markMembersForGarrison(workingPlayer, selectedIds, event, locationKey);
     } else {
       const defenderPower = Math.max(1, getGarrisonPower(location));
       const attackerScore = power * (0.92 + Math.random() * 0.18);
@@ -1184,13 +1265,14 @@ export async function sendQgMarch(req, res) {
         defenderLost = await releaseAllGarrison(location, defenderLossRate, { deathRate: 0.26 });
         const casualty = await releaseMembers(getPlayerId(player), selectedIds, attackerLossRate, { deathRate: 0.18 });
         attackerLost = casualty.lost;
+        workingPlayer = casualty.player || workingPlayer;
         const survivorIds = casualty.survivors;
 
         if (survivorIds.length > 0) {
           const survivorGroup = { ...group, memberIds: survivorIds, activeCount: survivorIds.length, power: Math.max(1, Math.round(power * (survivorIds.length / Math.max(1, selectedIds.length)))) };
           setLocationControl(event, location, faction, player, baseCapacity);
           location.garrison = [survivorGroup];
-          markMembersForGarrison(player, survivorIds, event, locationKey);
+          markMembersForGarrison(workingPlayer, survivorIds, event, locationKey);
         } else {
           clearLocationControl(location);
         }
@@ -1202,6 +1284,7 @@ export async function sendQgMarch(req, res) {
         const defenderLossRate = clamp((power / Math.max(1, defenderPower)) * 0.10, 0.03, 0.18);
         const casualty = await releaseMembers(getPlayerId(player), selectedIds, attackerLossRate, { deathRate: 0.25 });
         attackerLost = casualty.lost;
+        workingPlayer = casualty.player || workingPlayer;
         defenderLost = await damageGarrison(location, Math.max(1, Math.floor(getGarrisonCount(location) * defenderLossRate)), { deathRate: 0.12 });
         outcome = 'attack_repelled';
         addContribution(event, player, faction, Math.max(50, Math.floor(power / 40)), { troopsSent: selectedIds.length, troopsLost: attackerLost });
@@ -1216,20 +1299,73 @@ export async function sendQgMarch(req, res) {
     recalculateParticipantsPerFaction(event);
     addEventLog(event, outcome, { playerId: getPlayerId(player), playerName: player.name }, { locationKey, factionId: faction.id, membersSent: selectedIds.length, power, attackerLost, defenderLost });
 
-    player.markModified?.('gang');
-    bumpVersion(player);
-    await player.save();
+    workingPlayer.markModified?.('gang');
+    bumpVersion(workingPlayer);
+    await workingPlayer.save();
     await event.save();
-    emitToPlayer(getPlayerId(player), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
+    emitToPlayer(getPlayerId(workingPlayer), 'playerUpdate', { player: mergePlayerState(workingPlayer.toObject()) });
+    emitToPlayer(getPlayerId(workingPlayer), 'gangUpdate', { gang: workingPlayer.gang });
     await emitQGUpdate(event);
 
     return res.json({
-      ...buildStatePayload({ event, player, faction }),
+      ...buildStatePayload({ event, player: workingPlayer, faction }),
       marchResult: { locationKey, outcome, membersSent: selectedIds.length, power, attackerLost, defenderLost },
     });
   } catch (error) {
     console.error('[qgEvent] march error:', error);
     return res.status(500).json({ error: 'Erro ao enviar gangue para a Tomada do QG' });
+  }
+}
+
+
+export async function withdrawQgGarrison(req, res) {
+  try {
+    const event = await ensureQgEventCycle();
+    if (!event || event.status !== 'active') return res.status(400).json({ error: 'Só é possível retirar guarnição durante a guerra do QG.' });
+
+    const player = req.player;
+    const faction = await findFactionForPlayer(player);
+    if (!faction) return res.status(400).json({ error: 'Você precisa estar em uma facção.' });
+
+    const locationKey = String(req.body?.locationKey || '').trim();
+    const locationConfig = getQgLocation(locationKey);
+    if (!locationConfig || !QG_LOCATION_KEYS.includes(locationKey)) return res.status(400).json({ error: 'Ponto inválido para retirada.' });
+
+    const location = getLocationState(event, locationKey);
+    cleanGarrison(location);
+
+    const playerId = getPlayerId(player);
+    const ownGroups = (location.garrison || []).filter((group) => String(group.playerId) === playerId);
+    if (!ownGroups.length) return res.status(400).json({ error: 'Você não possui guarnição nesse ponto.' });
+
+    const memberIds = ownGroups.flatMap((group) => Array.isArray(group.memberIds) ? group.memberIds.map(String) : []);
+    const result = await releaseMembers(playerId, memberIds, 0, { deathRate: 0 });
+    const updatedPlayer = result.player || await Player.findById(playerId) || player;
+
+    location.garrison = (location.garrison || []).filter((group) => String(group.playerId) !== playerId);
+    cleanGarrison(location);
+
+    if (location.occupantFactionId && getGarrisonCount(location) <= 0) {
+      if (location.key === 'qg') finalizeQGHold(event, Date.now());
+      clearLocationControl(location);
+    }
+
+    addContribution(event, updatedPlayer, faction, Math.max(10, Math.floor(memberIds.length / 5)), { troopsSent: 0 });
+    addEventLog(event, 'garrison_withdrawn', { playerId, playerName: updatedPlayer.name || player.name }, { locationKey, membersReturned: memberIds.length });
+    recalculateParticipantsPerFaction(event);
+
+    await event.save();
+    emitToPlayer(playerId, 'playerUpdate', { player: mergePlayerState(updatedPlayer.toObject()) });
+    emitToPlayer(playerId, 'gangUpdate', { gang: updatedPlayer.gang });
+    await emitQGUpdate(event);
+
+    return res.json({
+      ...buildStatePayload({ event, player: updatedPlayer, faction }),
+      withdrawResult: { locationKey, membersReturned: memberIds.length },
+    });
+  } catch (error) {
+    console.error('[qgEvent] withdraw error:', error);
+    return res.status(500).json({ error: 'Erro ao retirar guarnição da Tomada do QG' });
   }
 }
 

@@ -2,6 +2,9 @@ import { Router } from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import {
   getQgEventState,
+  sendQgMarch,
+  appointQgRole,
+  forceReconcileQgEvent,
   startQgEvent,
   joinQgEvent,
   submitQgEventAction,
@@ -11,6 +14,11 @@ import {
 const router = Router();
 
 router.get('/state', authMiddleware, getQgEventState);
+router.post('/march', authMiddleware, sendQgMarch);
+router.post('/appoint-role', authMiddleware, appointQgRole);
+router.post('/reconcile', authMiddleware, forceReconcileQgEvent);
+
+// Rotas antigas preservadas para não quebrar front/cache antigo.
 router.post('/start', authMiddleware, startQgEvent);
 router.post('/join', authMiddleware, joinQgEvent);
 router.post('/action', authMiddleware, submitQgEventAction);

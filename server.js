@@ -29,6 +29,7 @@ import convoyRoutes from './routes/convoyRoutes.js';
 import mercadoPagoRoutes from './routes/mercadoPagoRoutes.js';
 import azideiaRoutes from './routes/azideiaRoutes.js';
 import qgEventRoutes from './routes/qgEventRoutes.js';
+import { runQgEventSchedulerTick } from './controllers/qgEventController.js';
 import { ensureAzideiaSystemHealth } from './controllers/azideiaController.js';
 
 import adminRoutes from './routes/adminRoutes.js';
@@ -36,6 +37,7 @@ import factionHelpRoutes from './routes/factionHelpRoutes.js';
 import factionInviteRoutes from './routes/factionInviteRoutes.js';
 
 const AZIDEIA_HEALTH_INTERVAL_MS = 30 * 1000;
+const QG_EVENT_TICK_INTERVAL_MS = 30 * 1000;
 
 const app = express();
 const server = createServer(app);
@@ -132,6 +134,7 @@ app.use('/', briberyRoutes);
 app.use('/admin', adminRoutes);
 app.use('/faction-invite', factionInviteRoutes);
 
+
 // Tratamento de rota não encontrada
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota não encontrada' });
@@ -157,6 +160,13 @@ async function startServer() {
     setInterval(() => {
       void ensureAzideiaSystemHealth();
     }, AZIDEIA_HEALTH_INTERVAL_MS);
+
+    // Reconciliador automático da Tomada do QG: agenda o evento às 22h a cada 72h,
+    // aplica dano dos CTs a cada 30s, encerra a janela de guerra e inicia o mandato.
+    await runQgEventSchedulerTick();
+    setInterval(() => {
+      void runQgEventSchedulerTick();
+    }, QG_EVENT_TICK_INTERVAL_MS);
 
     server.listen(env.PORT, () => {
       console.log('Servidor rodando com WebSocket');

@@ -3,6 +3,7 @@ import authMiddleware from '../middlewares/authMiddleware.js';
 import {
   getQgEventState,
   sendQgMarch,
+  withdrawQgGarrison,
   appointQgRole,
   useQgMandateAbility,
   sendQgMandatePack,
@@ -18,6 +19,7 @@ const router = Router();
 
 router.get('/state', authMiddleware, getQgEventState);
 router.post('/march', authMiddleware, sendQgMarch);
+router.post('/withdraw', authMiddleware, withdrawQgGarrison);
 router.post('/appoint-role', authMiddleware, appointQgRole);
 router.post('/mandate/ability', authMiddleware, useQgMandateAbility);
 router.post('/mandate/pack', authMiddleware, sendQgMandatePack);

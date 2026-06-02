@@ -113,7 +113,7 @@ const qgEventSchema = new mongoose.Schema(
     slug: { type: String, default: 'tomada_qg', index: true },
     status: {
       type: String,
-      enum: ['scheduled', 'active', 'appointment', 'mandate', 'closed', 'cancelled'],
+      enum: ['scheduled', 'preparation', 'active', 'appointment', 'mandate', 'closed', 'cancelled'],
       default: 'scheduled',
       index: true,
     },

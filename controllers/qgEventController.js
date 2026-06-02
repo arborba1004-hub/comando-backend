@@ -13,7 +13,14 @@ import {
   QG_MEMBER_TYPES,
   QG_MANDATE_ROLES,
   QG_MANDATE_FACTION_BUFF,
+  QG_MANDATE_ABILITIES,
+  QG_REWARD_PACKS,
+  QG_SERVANT_PENALTIES,
   getQgLocation,
+  getQGMandateRole,
+  getQGMandateAbility,
+  getQGRewardPack,
+  getQGServantPenalty,
   normalizeQGSelection,
   hasAnyQGSelection,
   getQGIndividualReward,
@@ -744,7 +751,108 @@ function applyRewardToPlayer(player, reward, event) {
 }
 
 function roleConfig(roleId) {
-  return QG_MANDATE_ROLES.find((role) => role.id === String(roleId)) || null;
+  return getQGMandateRole(roleId) || null;
+}
+
+function getMandateRoleForPlayer(event, playerId) {
+  const roles = Array.isArray(event?.mandate?.roles) ? event.mandate.roles : [];
+  return roles.find((role) => String(role.playerId || '') === String(playerId || '')) || null;
+}
+
+function mandateHasPower(event, player, power) {
+  const role = getMandateRoleForPlayer(event, getPlayerId(player));
+  const config = roleConfig(role?.roleId);
+  return Boolean(config?.powers?.includes(power));
+}
+
+function mandateRoleAllowed(event, player, allowedRoles = []) {
+  const role = getMandateRoleForPlayer(event, getPlayerId(player));
+  if (!role) return false;
+  return allowedRoles.includes(String(role.roleId));
+}
+
+function ensureFactionTreasury(faction) {
+  if (!faction.treasury) faction.treasury = { dirtyMoney: 0, cleanMoney: 0, corre: 0 };
+  faction.treasury.dirtyMoney = Math.max(0, toNumber(faction.treasury.dirtyMoney, 0));
+  faction.treasury.cleanMoney = Math.max(0, toNumber(faction.treasury.cleanMoney, 0));
+  faction.treasury.corre = Math.max(0, toNumber(faction.treasury.corre, 0));
+}
+
+function canPayTreasury(faction, cost = {}) {
+  ensureFactionTreasury(faction);
+  return faction.treasury.dirtyMoney >= toNumber(cost.dirtyMoney, 0)
+    && faction.treasury.cleanMoney >= toNumber(cost.cleanMoney, 0)
+    && faction.treasury.corre >= toNumber(cost.corre, 0);
+}
+
+function debitTreasury(faction, cost = {}) {
+  if (!canPayTreasury(faction, cost)) return false;
+  faction.treasury.dirtyMoney -= Math.max(0, Math.floor(toNumber(cost.dirtyMoney, 0)));
+  faction.treasury.cleanMoney -= Math.max(0, Math.floor(toNumber(cost.cleanMoney, 0)));
+  faction.treasury.corre -= Math.max(0, Math.floor(toNumber(cost.corre, 0)));
+  faction.markModified?.('treasury');
+  return true;
+}
+
+function creditTreasury(faction, reward = {}) {
+  ensureFactionTreasury(faction);
+  faction.treasury.dirtyMoney += Math.max(0, Math.floor(toNumber(reward.dirtyMoney, 0)));
+  faction.treasury.cleanMoney += Math.max(0, Math.floor(toNumber(reward.cleanMoney, 0)));
+  faction.treasury.corre += Math.max(0, Math.floor(toNumber(reward.corre, 0)));
+  faction.markModified?.('treasury');
+}
+
+function addFactionLog(faction, type, actor = {}, metadata = {}) {
+  faction.activityLog = Array.isArray(faction.activityLog) ? faction.activityLog : [];
+  faction.activityLog.push({
+    id: generateId(),
+    type,
+    actorPlayerId: String(actor.playerId || actor._id || ''),
+    actorPlayerName: String(actor.playerName || actor.name || 'Sistema'),
+    metadata,
+    createdAt: nowIso(),
+  });
+  if (faction.activityLog.length > 220) faction.activityLog = faction.activityLog.slice(-220);
+  faction.markModified?.('activityLog');
+}
+
+function ensureMandateArrays(event) {
+  if (!event.mandate) event.mandate = {};
+  if (!Array.isArray(event.mandate.abilityUses)) event.mandate.abilityUses = [];
+  if (!Array.isArray(event.mandate.packagesSent)) event.mandate.packagesSent = [];
+  if (!Array.isArray(event.mandate.servants)) event.mandate.servants = [];
+  if (!Array.isArray(event.mandate.activeDecrees)) event.mandate.activeDecrees = [];
+}
+
+function applyQGRewardToPlayer(player, reward, event, label = 'Pacote do QG') {
+  if (!player.balances) player.balances = { dirtyMoney: 0, cleanMoney: 0, corre: 0 };
+  if (!player.inventory) player.inventory = { items: [], gifts: [], rewards: [] };
+  if (!Array.isArray(player.inventory.rewards)) player.inventory.rewards = [];
+  if (!player.convoyAccelerators) player.convoyAccelerators = { twoX: 0 };
+  if (!player.barracoAccelerators) player.barracoAccelerators = { seconds: 0 };
+
+  player.balances.cleanMoney += Math.max(0, Math.floor(toNumber(reward.cleanMoney, 0)));
+  player.balances.dirtyMoney += Math.max(0, Math.floor(toNumber(reward.dirtyMoney, 0)));
+  player.balances.corre += Math.max(0, Math.floor(toNumber(reward.corre, 0)));
+  player.barracoAccelerators.seconds += Math.max(0, Math.floor(toNumber(reward.barracoAcceleratorSeconds, 0)));
+  player.convoyAccelerators.twoX += Math.max(0, Math.floor(toNumber(reward.convoyAcceleratorTwoX, 0)));
+  player.inventory.rewards.push({ id: `tomada_qg_pack_${String(event._id)}_${generateId()}`, type: 'mandate_pack', source: 'tomada_qg', name: label, reward, createdAt: nowIso() });
+  player.markModified?.('balances');
+  player.markModified?.('inventory');
+  player.markModified?.('barracoAccelerators');
+  player.markModified?.('convoyAccelerators');
+  bumpVersion(player);
+}
+
+function applyQGStatSource(player, source) {
+  if (!player.gang) player.gang = { members: [], trainingSlots: [], stats: {}, statSources: [] };
+  if (!Array.isArray(player.gang.statSources)) player.gang.statSources = [];
+  player.gang.statSources = player.gang.statSources.filter((item) => String(item?.id || '') !== String(source.id));
+  player.gang.statSources.push(source);
+  player.gang.statSnapshot = buildGangStatSnapshot(player.gang.members || [], player.gang.statSources);
+  player.gang.updatedAtIso = nowIso();
+  player.markModified?.('gang');
+  bumpVersion(player);
 }
 
 async function finalizeQGMandate(event) {
@@ -839,6 +947,9 @@ function publicConfig() {
     ...QG_EVENT,
     locations: QG_LOCATIONS,
     mandateRoles: QG_MANDATE_ROLES,
+    mandateAbilities: QG_MANDATE_ABILITIES,
+    rewardPacks: QG_REWARD_PACKS,
+    servantPenalties: QG_SERVANT_PENALTIES,
     factionBuff: QG_MANDATE_FACTION_BUFF.percent,
   };
 }
@@ -952,14 +1063,21 @@ function normalizeEvent(event, currentPlayerId = null) {
 function buildEligibility({ player, faction, event }) {
   const barracoLevel = getBarracoLevel(player);
   const member = faction ? getFactionMember(faction, getPlayerId(player)) : null;
+  const mandateRole = getMandateRoleForPlayer(event, getPlayerId(player));
+  const isWinnerFaction = Boolean(faction && String(event?.winnerFactionId || event?.mandate?.factionId || '') === String(faction.id || ''));
   return {
     hasFaction: Boolean(faction),
     factionId: faction?.id || null,
     factionName: faction?.name || null,
     factionTag: faction?.tag || null,
     role: member?.role || null,
+    mandateRoleId: mandateRole?.roleId || null,
+    mandateRoleTitle: mandateRole?.title || null,
     canMarch: Boolean(event?.status === 'active' && faction && barracoLevel >= QG_EVENT.minBarracoLevel),
     canAppoint: Boolean(event?.status === 'appointment' && faction && String(event.winnerFactionId || '') === String(faction.id || '') && String(faction.leaderId || '') === getPlayerId(player)),
+    canUseMandatePower: Boolean(event?.status === 'mandate' && isWinnerFaction && mandateRole),
+    canSendMandatePack: Boolean(event?.status === 'mandate' && isWinnerFaction && mandateHasPower(event, player, 'packs')),
+    canAssignServant: Boolean(event?.status === 'mandate' && isWinnerFaction && mandateHasPower(event, player, 'servants')),
     barracoLevel,
     minBarracoLevel: QG_EVENT.minBarracoLevel,
     marchCapacity: faction ? calculateFactionCapacity(player, faction) : getBarracoLevel(player) * QG_EVENT.qgBaseCapacityPerBarracoLevel,
@@ -1145,6 +1263,233 @@ export async function appointQgRole(req, res) {
   } catch (error) {
     console.error('[qgEvent] appoint role error:', error);
     return res.status(500).json({ error: 'Erro ao nomear cargo do QG' });
+  }
+}
+
+
+export async function useQgMandateAbility(req, res) {
+  try {
+    const event = await ensureQgEventCycle();
+    const player = req.player;
+    const faction = await findFactionForPlayer(player);
+    const abilityId = String(req.body?.abilityId || '').trim();
+    const ability = getQGMandateAbility(abilityId);
+
+    if (!event || event.status !== 'mandate') return res.status(400).json({ error: 'O mandato do QG não está ativo.' });
+    if (!faction || String(faction.id) !== String(event.mandate?.factionId || event.winnerFactionId || '')) return res.status(403).json({ error: 'Apenas a facção do mandato pode usar habilidades do QG.' });
+    if (!ability) return res.status(400).json({ error: 'Habilidade do QG inválida.' });
+    if (!mandateRoleAllowed(event, player, ability.allowedRoles || [])) return res.status(403).json({ error: 'Seu cargo não pode ativar esta habilidade.' });
+
+    ensureMandateArrays(event);
+    if (!debitTreasury(faction, ability.cost)) return res.status(400).json({ error: 'Cofre do Complexo insuficiente para esta habilidade.' });
+
+    const startedAt = nowIso();
+    const endsAt = ability.durationMs ? new Date(Date.now() + ability.durationMs).toISOString() : null;
+    const memberIds = [...new Set((faction.members || []).map((m) => String(m.playerId)).filter(Boolean))];
+    const players = memberIds.length ? await Player.find({ _id: { $in: memberIds } }) : [];
+
+    if (ability.effect === 'pvp_truce') {
+      for (const memberPlayer of players) {
+        memberPlayer.pvpProtectionUntil = endsAt;
+        if (!memberPlayer.punishments) memberPlayer.punishments = {};
+        memberPlayer.punishments.pvpProtectionUntil = endsAt;
+        memberPlayer.markModified?.('punishments');
+        bumpVersion(memberPlayer);
+        await memberPlayer.save();
+        emitToPlayer(String(memberPlayer._id), 'playerUpdate', { player: mergePlayerState(memberPlayer.toObject()) });
+      }
+      faction.activeBuffs = Array.isArray(faction.activeBuffs) ? faction.activeBuffs : [];
+      faction.activeBuffs.push({ id: `qg_truce_${String(event._id)}_${Date.now()}`, name: ability.title, type: 'qg_truce', value: 1, startedAt, endsAt });
+      faction.markModified?.('activeBuffs');
+    }
+
+    if (ability.effect === 'emergency_heal') {
+      const now = Date.now();
+      const acceleratedUntil = new Date(now + 6 * 60 * 1000).toISOString();
+      for (const memberPlayer of players) {
+        let changed = false;
+        if (Array.isArray(memberPlayer?.gang?.members)) {
+          for (const gangMember of memberPlayer.gang.members) {
+            if (gangMember.status !== 'ferido' || !gangMember.injuryEndsAt) continue;
+            const current = dateMs(gangMember.injuryEndsAt);
+            if (current > dateMs(acceleratedUntil)) {
+              gangMember.injuryEndsAt = acceleratedUntil;
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          memberPlayer.markModified?.('gang');
+          bumpVersion(memberPlayer);
+          await memberPlayer.save();
+          emitToPlayer(String(memberPlayer._id), 'playerUpdate', { player: mergePlayerState(memberPlayer.toObject()) });
+          emitToPlayer(String(memberPlayer._id), 'gangUpdate', { gang: memberPlayer.gang });
+        }
+      }
+      faction.activeBuffs = Array.isArray(faction.activeBuffs) ? faction.activeBuffs : [];
+      faction.activeBuffs.push({ id: `qg_emergency_${String(event._id)}_${Date.now()}`, name: ability.title, type: 'qg_emergency_heal', value: 1, startedAt, endsAt });
+      faction.markModified?.('activeBuffs');
+    }
+
+    if (ability.effect === 'treasury_convert') {
+      creditTreasury(faction, ability.rewardTreasury || {});
+    }
+
+    event.mandate.abilityUses.push({
+      id: generateId(),
+      abilityId: ability.id,
+      title: ability.title,
+      cost: ability.cost,
+      actorPlayerId: getPlayerId(player),
+      actorPlayerName: player.name || 'Jogador',
+      startedAt,
+      endsAt,
+    });
+    addEventLog(event, 'mandate_ability_used', { playerId: getPlayerId(player), playerName: player.name }, { abilityId: ability.id, title: ability.title, cost: ability.cost });
+    addFactionLog(faction, 'qg_mandate_ability_used', player, { eventId: String(event._id), abilityId: ability.id, title: ability.title });
+
+    await faction.save();
+    await event.save();
+    await emitQGUpdate(event);
+    return res.json(buildStatePayload({ event, player, faction }));
+  } catch (error) {
+    console.error('[qgEvent] ability error:', error);
+    return res.status(500).json({ error: 'Erro ao ativar habilidade do QG' });
+  }
+}
+
+export async function sendQgMandatePack(req, res) {
+  try {
+    const event = await ensureQgEventCycle();
+    const player = req.player;
+    const faction = await findFactionForPlayer(player);
+    const packId = String(req.body?.packId || '').trim();
+    const targetPlayerId = String(req.body?.playerId || '').trim();
+    const pack = getQGRewardPack(packId);
+
+    if (!event || event.status !== 'mandate') return res.status(400).json({ error: 'O mandato do QG não está ativo.' });
+    if (!faction || String(faction.id) !== String(event.mandate?.factionId || event.winnerFactionId || '')) return res.status(403).json({ error: 'Apenas a facção do mandato pode enviar pacotes.' });
+    if (!pack) return res.status(400).json({ error: 'Pacote do QG inválido.' });
+    if (!mandateRoleAllowed(event, player, pack.allowedRoles || [])) return res.status(403).json({ error: 'Seu cargo não pode enviar este pacote.' });
+
+    const targetMember = (faction.members || []).find((m) => String(m.playerId) === targetPlayerId);
+    if (!targetMember) return res.status(400).json({ error: 'O alvo precisa ser membro da facção do mandato.' });
+
+    ensureMandateArrays(event);
+    const alreadyForTarget = event.mandate.packagesSent.filter((item) => String(item.targetPlayerId) === targetPlayerId).length;
+    if (alreadyForTarget >= QG_EVENT.maxPacksPerPlayerPerMandate) {
+      return res.status(400).json({ error: `Esse jogador já recebeu o limite de ${QG_EVENT.maxPacksPerPlayerPerMandate} pacotes neste mandato.` });
+    }
+
+    if (!debitTreasury(faction, pack.cost)) return res.status(400).json({ error: 'Cofre do Complexo insuficiente para este pacote.' });
+
+    const targetPlayer = await Player.findById(targetPlayerId);
+    if (!targetPlayer) return res.status(404).json({ error: 'Jogador alvo não encontrado.' });
+
+    applyQGRewardToPlayer(targetPlayer, pack.reward, event, pack.title);
+    await targetPlayer.save();
+    emitToPlayer(String(targetPlayer._id), 'playerUpdate', { player: mergePlayerState(targetPlayer.toObject()) });
+
+    const sent = {
+      id: generateId(),
+      packId: pack.id,
+      title: pack.title,
+      cost: pack.cost,
+      reward: pack.reward,
+      targetPlayerId,
+      targetPlayerName: targetMember.playerName || targetPlayer.name || 'Jogador',
+      actorPlayerId: getPlayerId(player),
+      actorPlayerName: player.name || 'Jogador',
+      sentAt: nowIso(),
+    };
+    event.mandate.packagesSent.push(sent);
+    addEventLog(event, 'mandate_pack_sent', { playerId: getPlayerId(player), playerName: player.name }, { packId: pack.id, targetPlayerId, targetPlayerName: sent.targetPlayerName });
+    addFactionLog(faction, 'qg_mandate_pack_sent', player, { eventId: String(event._id), packId: pack.id, targetPlayerId, targetPlayerName: sent.targetPlayerName });
+
+    await faction.save();
+    await event.save();
+    await emitQGUpdate(event);
+    return res.json(buildStatePayload({ event, player, faction }));
+  } catch (error) {
+    console.error('[qgEvent] send pack error:', error);
+    return res.status(500).json({ error: 'Erro ao enviar pacote do QG' });
+  }
+}
+
+export async function assignQgServant(req, res) {
+  try {
+    const event = await ensureQgEventCycle();
+    const player = req.player;
+    const faction = await findFactionForPlayer(player);
+    const penaltyId = String(req.body?.penaltyId || '').trim();
+    const targetPlayerId = String(req.body?.playerId || '').trim();
+    const penalty = getQGServantPenalty(penaltyId);
+
+    if (!event || event.status !== 'mandate') return res.status(400).json({ error: 'O mandato do QG não está ativo.' });
+    if (!faction || String(faction.id) !== String(event.mandate?.factionId || event.winnerFactionId || '')) return res.status(403).json({ error: 'Apenas a facção do mandato pode aplicar servos.' });
+    if (!penalty) return res.status(400).json({ error: 'Servo/penalidade inválido.' });
+    if (!mandateRoleAllowed(event, player, penalty.allowedRoles || [])) return res.status(403).json({ error: 'Seu cargo não pode aplicar servos.' });
+
+    ensureMandateArrays(event);
+    if (event.mandate.servants.length >= QG_EVENT.maxServantsPerMandate) {
+      return res.status(400).json({ error: `Limite de ${QG_EVENT.maxServantsPerMandate} servos por mandato atingido.` });
+    }
+    if (event.mandate.servants.some((item) => String(item.targetPlayerId) === targetPlayerId)) {
+      return res.status(400).json({ error: 'Esse jogador já recebeu uma penalidade neste mandato.' });
+    }
+
+    const participant = (event.participants || []).find((item) => String(item.playerId) === targetPlayerId);
+    if (!participant) return res.status(400).json({ error: 'O alvo precisa ter participado da Tomada do QG atual.' });
+    if (String(participant.factionId) === String(faction.id)) return res.status(400).json({ error: 'Não é permitido aplicar servo em membro da própria facção.' });
+
+    const targetPlayer = await Player.findById(targetPlayerId);
+    if (!targetPlayer) return res.status(404).json({ error: 'Jogador alvo não encontrado.' });
+
+    const expiresAt = event.mandateEndsAt || event.mandate?.endsAt || new Date(Date.now() + QG_EVENT.mandateMs).toISOString();
+    const source = {
+      id: `${QG_STAT_SOURCE_PREFIX}servo_${penalty.id}_${String(event._id)}`,
+      source: 'evento',
+      label: `${penalty.title} - Mandato do QG`,
+      targetScope: 'global',
+      targetType: null,
+      targetMemberId: null,
+      percent: penalty.percent,
+      flat: { rajada: 0, blindagem: 0, folego: 0, quebra: 0 },
+      enabled: true,
+      expiresAt,
+      updatedAtIso: nowIso(),
+    };
+    applyQGStatSource(targetPlayer, source);
+    await targetPlayer.save();
+    emitToPlayer(String(targetPlayer._id), 'playerUpdate', { player: mergePlayerState(targetPlayer.toObject()) });
+    emitToPlayer(String(targetPlayer._id), 'gangUpdate', { gang: targetPlayer.gang });
+
+    const entry = {
+      id: generateId(),
+      penaltyId: penalty.id,
+      title: penalty.title,
+      percent: penalty.percent,
+      targetPlayerId,
+      targetPlayerName: participant.playerName || targetPlayer.name || 'Jogador',
+      targetFactionId: participant.factionId,
+      targetFactionName: participant.factionName,
+      targetFactionTag: participant.factionTag,
+      actorPlayerId: getPlayerId(player),
+      actorPlayerName: player.name || 'Jogador',
+      assignedAt: nowIso(),
+      expiresAt,
+    };
+    event.mandate.servants.push(entry);
+    addEventLog(event, 'mandate_servant_assigned', { playerId: getPlayerId(player), playerName: player.name }, { penaltyId: penalty.id, targetPlayerId, targetPlayerName: entry.targetPlayerName });
+    addFactionLog(faction, 'qg_mandate_servant_assigned', player, { eventId: String(event._id), penaltyId: penalty.id, targetPlayerId, targetPlayerName: entry.targetPlayerName });
+
+    await faction.save();
+    await event.save();
+    await emitQGUpdate(event);
+    return res.json(buildStatePayload({ event, player, faction }));
+  } catch (error) {
+    console.error('[qgEvent] servant error:', error);
+    return res.status(500).json({ error: 'Erro ao aplicar servo do QG' });
   }
 }
 

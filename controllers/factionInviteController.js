@@ -18,10 +18,10 @@ function canActorInvite(actorMember) {
 
 export async function listPlayersWithoutFaction(req, res, next) {
   try {
-    const currentPlayerId = String(req.player._id);
+    const currentPlayerId = String(req.user?.id || req.player?._id || '');
 
     const players = await Player.find({
-      _id: { $ne: req.player._id },
+      _id: { $ne: currentPlayerId },
       $or: [{ factionId: null }, { factionId: '' }],
     })
       .select('_id name avatar power hierarchyBadge niveis factionId mapPosition')
@@ -60,7 +60,13 @@ export async function invitePlayerToFaction(req, res, next) {
       return res.status(400).json({ error: 'Você não está em uma facção' });
     }
 
-    const faction = await Faction.findById(actor.factionId);
+    const actorFactionId = String(actor.factionId || '').trim();
+    const faction = await Faction.findOne({
+      $or: [
+        { id: actorFactionId },
+        ...( /^[a-f0-9]{24}$/i.test(actorFactionId) ? [{ _id: actorFactionId }] : [] ),
+      ],
+    });
     if (!faction) {
       return res.status(404).json({ error: 'Facção não encontrada' });
     }
@@ -87,7 +93,7 @@ export async function invitePlayerToFaction(req, res, next) {
     const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
     const invite = await FactionInvite.create({
-      factionId: String(faction._id),
+      factionId: String(faction.id),
       factionName: faction.name || '',
       factionTag: faction.tag || '',
       invitedPlayerId: String(targetPlayer._id),

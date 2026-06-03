@@ -148,16 +148,17 @@ export function buildBarracoUpgradeOperation({ fromLevel, toLevel, cost, duratio
 export function getBarracoUpgradeRequirements(player = {}) {
   const barracoLevel = normalizeLevel(player?.niveis?.barracoLevel, 1);
   const cleanMoney = Math.max(0, toNumber(player?.balances?.cleanMoney, 0));
-  const lavagemLevel = normalizeLevel(
-    player?.pageLevels?.lavagem ?? player?.niveis?.lavagemLevel,
+  const arsenalLevel = normalizeLevel(
+    player?.pageLevels?.arsenal ?? player?.niveis?.arsenalLevel,
+    1
+  );
+  const fugaLevel = normalizeLevel(player?.pageLevels?.fuga, 1);
+  const briberyLevel = normalizeLevel(
+    player?.pageLevels?.bribery ?? player?.niveis?.briberyLevel,
     1
   );
   const luxuryLevel = normalizeLevel(
     player?.pageLevels?.luxury ?? player?.niveis?.luxuryLevel,
-    1
-  );
-  const hierarchyLevel = normalizeLevel(
-    player?.niveis?.hierarchyLevel ?? player?.pageLevels?.hierarchy,
     1
   );
 
@@ -166,11 +167,10 @@ export function getBarracoUpgradeRequirements(player = {}) {
   const durationMs = getBarracoUpgradeDurationMs(barracoLevel);
   const nextLevel = Math.min(MAX_BARRACO_LEVEL, barracoLevel + 1);
 
-  // Power continua existindo no player para mapa/ranking/batalha,
-  // mas não bloqueia a evolução do barraco.
-  const lavagemRequirement = Math.max(1, Math.floor(barracoLevel / 10));
-  const luxuryRequirement = Math.max(1, Math.floor(barracoLevel / 12));
-  const hierarchyRequirement = Math.max(1, Math.floor(barracoLevel / 15));
+  // Regra oficial profissional: para subir o barraco do nível N para N+1,
+  // os sistemas centrais precisam estar no nível N.
+  // Isso força progressão horizontal, fortalece retenção e impede rush de barraco.
+  const sideRequirement = Math.max(1, barracoLevel);
 
   const rules = [
     {
@@ -191,24 +191,34 @@ export function getBarracoUpgradeRequirements(player = {}) {
       reason: 'A evolução de nível está bloqueada por uma punição ativa.',
     },
     {
+      key: 'cleanMoneyBlocked',
+      ok: player?.punishments?.cleanMoneyBlocked !== true,
+      reason: 'Seu dinheiro limpo está bloqueado por uma punição ativa.',
+    },
+    {
       key: 'cleanMoney',
       ok: cleanMoney >= cost,
       reason: `Você precisa de ${cost.toLocaleString('pt-BR')} de dinheiro limpo.`,
     },
     {
-      key: 'lavagem',
-      ok: lavagemLevel >= lavagemRequirement,
-      reason: `Sua lavagem está abaixo do necessário (${lavagemRequirement}). Atual: ${lavagemLevel}.`,
+      key: 'arsenal',
+      ok: arsenalLevel >= sideRequirement,
+      reason: `Seu Arsenal precisa estar no nível ${sideRequirement}. Atual: ${arsenalLevel}.`,
+    },
+    {
+      key: 'fuga',
+      ok: fugaLevel >= sideRequirement,
+      reason: `Sua Fuga precisa estar no nível ${sideRequirement}. Atual: ${fugaLevel}.`,
+    },
+    {
+      key: 'bribery',
+      ok: briberyLevel >= sideRequirement,
+      reason: `Seu Suborno precisa estar no nível ${sideRequirement}. Atual: ${briberyLevel}.`,
     },
     {
       key: 'luxury',
-      ok: luxuryLevel >= luxuryRequirement,
-      reason: `Seu nível de luxo está abaixo do necessário (${luxuryRequirement}). Atual: ${luxuryLevel}.`,
-    },
-    {
-      key: 'hierarchy',
-      ok: hierarchyLevel >= hierarchyRequirement,
-      reason: `Sua hierarquia está abaixo do necessário (${hierarchyRequirement}). Atual: ${hierarchyLevel}.`,
+      ok: luxuryLevel >= sideRequirement,
+      reason: `Seus Artigos de Luxo precisam estar no nível ${sideRequirement}. Atual: ${luxuryLevel}.`,
     },
   ];
 
@@ -225,10 +235,24 @@ export function getBarracoUpgradeRequirements(player = {}) {
     nextLevel,
     maxLevel: MAX_BARRACO_LEVEL,
     upgradeStatus,
+    sideRequirement,
+    systemLevels: {
+      arsenal: arsenalLevel,
+      fuga: fugaLevel,
+      bribery: briberyLevel,
+      luxury: luxuryLevel,
+    },
+    requiredSystemLevels: {
+      arsenal: sideRequirement,
+      fuga: sideRequirement,
+      bribery: sideRequirement,
+      luxury: sideRequirement,
+    },
     requirements: {
-      lavagem: lavagemRequirement,
-      luxury: luxuryRequirement,
-      hierarchy: hierarchyRequirement,
+      arsenal: sideRequirement,
+      fuga: sideRequirement,
+      bribery: sideRequirement,
+      luxury: sideRequirement,
     },
   };
 }

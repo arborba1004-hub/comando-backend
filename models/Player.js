@@ -666,6 +666,12 @@ playerSchema.index(
   { unique: true, sparse: true }
 );
 
+// Índices de leitura pesada do mapa/facção. Mantém snapshot e consultas de
+// recompensa sem varrer a coleção inteira quando houver muitos jogadores.
+playerSchema.index({ 'mapPosition.tileY': 1, 'mapPosition.tileX': 1, _id: 1 });
+playerSchema.index({ factionId: 1 });
+playerSchema.index({ gangId: 1 });
+
 const Player = mongoose.models.Player || mongoose.model('Player', playerSchema);
 
 export default Player;

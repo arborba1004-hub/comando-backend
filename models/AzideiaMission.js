@@ -54,6 +54,11 @@ const azideiaMissionSchema = new mongoose.Schema(
 );
 
 azideiaMissionSchema.index({ playerId: 1, status: 1 });
+azideiaMissionSchema.index({ playerId: 1, status: 1, createdAt: 1 });
+azideiaMissionSchema.index({ playerId: 1, status: 1, arriveAtIso: 1 });
+azideiaMissionSchema.index({ playerId: 1, status: 1, returnAtIso: 1 });
 azideiaMissionSchema.index({ targetId: 1, status: 1 });
+azideiaMissionSchema.index({ status: 1, arriveAtIso: 1 });
+azideiaMissionSchema.index({ status: 1, returnAtIso: 1 });
 
 export default mongoose.models.AzideiaMission || mongoose.model('AzideiaMission', azideiaMissionSchema);

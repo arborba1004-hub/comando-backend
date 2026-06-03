@@ -21,6 +21,8 @@ const azideiaTargetSchema = new mongoose.Schema(
 
 azideiaTargetSchema.index({ type: 1, active: 1 });
 azideiaTargetSchema.index({ type: 1, active: 1, reservedByPlayerId: 1 });
+azideiaTargetSchema.index({ type: 1, active: 1, reservedAt: 1 });
+azideiaTargetSchema.index({ type: 1, active: 1, createdAt: 1 });
 azideiaTargetSchema.index({ tileX: 1, tileY: 1, active: 1 });
 
 export default mongoose.models.AzideiaTarget || mongoose.model('AzideiaTarget', azideiaTargetSchema);

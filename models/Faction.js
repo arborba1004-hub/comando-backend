@@ -241,4 +241,9 @@ const factionSchema = new mongoose.Schema(
   }
 );
 
+factionSchema.index({ id: 1 });
+factionSchema.index({ tag: 1 });
+factionSchema.index({ 'members.playerId': 1 });
+factionSchema.index({ level: -1, exp: -1 });
+
 export default mongoose.models.Faction || mongoose.model('Faction', factionSchema);

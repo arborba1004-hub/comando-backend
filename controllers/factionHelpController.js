@@ -3,7 +3,8 @@ import Faction from '../models/Faction.js';
 import Player from '../models/Player.js';
 import ChatMessage from '../models/ChatMessage.js';
 import { generateId, bumpVersion } from '../utils/gameHelpers.js';
-import { emitToPlayer } from '../services/socketEmitter.js';
+import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
+import { mergePlayerState } from '../utils/playerMapper.js';
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
@@ -11,6 +12,33 @@ function todayString() {
 
 function normalizeText(value, maxLength = 140) {
   return String(value || '').trim().slice(0, maxLength);
+}
+
+
+function normalizeChatMessage(message) {
+  return {
+    id: String(message._id),
+    channel: message.channel,
+    senderId: message.senderId,
+    senderName: message.senderName,
+    recipientId: message.recipientId ?? null,
+    recipientName: message.recipientName ?? null,
+    factionId: message.factionId ?? null,
+    subject: message.subject ?? null,
+    body: message.body,
+    createdAt: message.createdAt,
+    read: message.read ?? false,
+    system: message.system ?? false,
+    messageType: message.messageType ?? 'text',
+    metadata: message.metadata ?? {},
+  };
+}
+
+function emitFactionChatMessage(faction, message) {
+  const memberIds = Array.isArray(faction?.members)
+    ? Array.from(new Set(faction.members.map((member) => String(member?.playerId || '')).filter(Boolean)))
+    : [];
+  emitToPlayers(memberIds, 'newChatMessage', () => normalizeChatMessage(message));
 }
 
 function normalizeHelpRequest(request) {
@@ -33,11 +61,16 @@ function normalizeHelpRequest(request) {
 }
 
 async function ensureFactionMember(player) {
-  if (!player?.factionId) {
-    return { ok: false, error: 'Você não pertence a nenhuma facção' };
+  const playerId = String(player?._id || '').trim();
+  const factionId = String(player?.factionId || '').trim();
+  if (!playerId) {
+    return { ok: false, error: 'Jogador inválido' };
   }
 
-  const faction = await Faction.findOne({ id: String(player.factionId) });
+  const or = [{ 'members.playerId': playerId }];
+  if (factionId) or.unshift({ id: factionId });
+
+  const faction = await Faction.findOne({ $or: or });
   if (!faction) {
     return { ok: false, error: 'Facção não encontrada' };
   }
@@ -62,8 +95,14 @@ export async function listFactionHelpRequests(req, res) {
       return res.status(403).json({ error: factionCheck.error });
     }
 
+    const factionAliases = [
+      factionCheck.faction.id,
+      factionCheck.faction._id ? String(factionCheck.faction._id) : '',
+      player.factionId ? String(player.factionId) : '',
+    ].filter(Boolean).map(String);
+
     const requests = await FactionHelpRequest.find({
-      factionId: String(player.factionId),
+      factionId: { $in: factionAliases },
       requestDate: todayString(),
     })
       .sort({ createdAt: -1 })
@@ -87,6 +126,7 @@ export async function createFactionHelpRequest(req, res) {
       return res.status(403).json({ error: factionCheck.error });
     }
 
+    const canonicalFactionId = String(factionCheck.faction.id || factionCheck.faction._id);
     const requestDate = todayString();
 
     const existingToday = await FactionHelpRequest.findOne({
@@ -106,7 +146,7 @@ export async function createFactionHelpRequest(req, res) {
 
     const request = await FactionHelpRequest.create({
       id: generateId(),
-      factionId: String(player.factionId),
+      factionId: canonicalFactionId,
       requesterId: String(player._id),
       requesterName: player.name || 'Jogador',
       message,
@@ -121,11 +161,11 @@ export async function createFactionHelpRequest(req, res) {
       completedAtIso: '',
     });
 
-    await ChatMessage.create({
+    const chatMessage = await ChatMessage.create({
       channel: 'faccao',
       senderId: String(player._id),
       senderName: player.name || 'Jogador',
-      factionId: String(player.factionId),
+      factionId: canonicalFactionId,
       subject: null,
       body: `📢 Pedido de corre: ${message}`,
       read: false,
@@ -135,6 +175,8 @@ export async function createFactionHelpRequest(req, res) {
         requestId: request.id,
       },
     });
+
+    emitFactionChatMessage(factionCheck.faction, chatMessage);
 
     return res.status(201).json({
       success: true,
@@ -161,7 +203,13 @@ export async function helpFactionRequest(req, res) {
       return res.status(404).json({ error: 'Pedido não encontrado' });
     }
 
-    if (String(request.factionId) !== String(player.factionId)) {
+    const factionAliases = [
+      factionCheck.faction.id,
+      factionCheck.faction._id ? String(factionCheck.faction._id) : '',
+      player.factionId ? String(player.factionId) : '',
+    ].filter(Boolean).map(String);
+
+    if (!factionAliases.includes(String(request.factionId))) {
       return res.status(403).json({ error: 'Pedido não pertence à sua facção' });
     }
 
@@ -181,7 +229,6 @@ export async function helpFactionRequest(req, res) {
       request.status = 'completed';
       request.completedAtIso = new Date().toISOString();
       await request.save();
-    emitToPlayer(String(request._id), 'playerUpdate', { player: mergePlayerState(request.toObject()) });
       return res.status(400).json({ error: 'Esse pedido já atingiu o limite de ajudas' });
     }
 
@@ -197,6 +244,7 @@ export async function helpFactionRequest(req, res) {
 
     bumpVersion(requester);
     await requester.save();
+    emitToPlayer(String(requester._id), 'playerUpdate', { player: mergePlayerState(requester.toObject()) });
 
     request.helperIds.push(String(player._id));
     request.helpCount = Number(request.helpCount || 0) + 1;
@@ -209,11 +257,11 @@ export async function helpFactionRequest(req, res) {
 
     await request.save();
 
-    await ChatMessage.create({
+    const chatMessage = await ChatMessage.create({
       channel: 'faccao',
       senderId: String(player._id),
       senderName: player.name || 'Jogador',
-      factionId: String(player.factionId),
+      factionId: String(request.factionId),
       subject: null,
       body: `🤝 ajudou ${request.requesterName} no pedido de corre`,
       read: false,
@@ -227,6 +275,8 @@ export async function helpFactionRequest(req, res) {
         maxHelps: request.maxHelps,
       },
     });
+
+    emitFactionChatMessage(factionCheck.faction, chatMessage);
 
     return res.json({
       success: true,

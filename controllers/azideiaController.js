@@ -15,6 +15,7 @@ import {
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { broadcastToAll, emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
+import { DEFAULT_CONVOY_SKIN_ID, getConvoySkin } from '../data/convoyCatalog.js';
 
 const GRID_WIDTH = 120;
 const GRID_HEIGHT = 120;
@@ -824,6 +825,10 @@ function normalizeTarget(target, player = null) {
   };
 }
 
+function getEquippedConvoySkinId(player = {}) {
+  return getConvoySkin(player?.convoys?.equippedSkinId || DEFAULT_CONVOY_SKIN_ID).id;
+}
+
 function normalizeMessage(message) {
   return {
     id: String(message._id),
@@ -891,6 +896,7 @@ function normalizeMission(mission) {
     costDirtyMoney: Math.max(0, Math.floor(toNumber(mission.costDirtyMoney, 0))),
     rewardType: mission.rewardType || config.rewardType,
     rewardQuantity: Math.max(0, Math.floor(toNumber(mission.rewardQuantity, config.rewardQuantity))),
+    convoySkinId: getConvoySkin(mission.convoySkinId || DEFAULT_CONVOY_SKIN_ID).id,
   };
 }
 
@@ -1668,6 +1674,7 @@ export async function attackX9(req, res) {
       rewardType: AZIDEIA_X9.rewardType,
       rewardQuantity: AZIDEIA_X9.rewardQuantity,
       selectedGangMemberId: selectedMember?.id || null,
+      convoySkinId: getEquippedConvoySkinId(player),
       status: 'travelling',
       launchedAtIso: new Date(launchedAt).toISOString(),
       arriveAtIso,
@@ -1872,6 +1879,7 @@ export async function negotiateCorreria(req, res) {
       rewardType: AZIDEIA_CORRERIA.rewardType,
       rewardQuantity: AZIDEIA_CORRERIA.rewardQuantity,
       selectedGangMemberId: selectedMember?.id || null,
+      convoySkinId: getEquippedConvoySkinId(player),
       status: 'travelling',
       launchedAtIso: new Date(launchedAt).toISOString(),
       arriveAtIso,
@@ -2033,6 +2041,7 @@ export async function payMestreObras(req, res) {
       rewardType: AZIDEIA_MESTRE_OBRAS.rewardType,
       rewardQuantity: AZIDEIA_MESTRE_OBRAS.rewardQuantitySeconds,
       selectedGangMemberId: selectedMember?.id || null,
+      convoySkinId: getEquippedConvoySkinId(player),
       status: 'travelling',
       launchedAtIso: new Date(launchedAt).toISOString(),
       arriveAtIso,

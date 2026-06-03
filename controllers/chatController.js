@@ -1,9 +1,7 @@
 import mongoose from 'mongoose';
 import ChatMessage    from '../models/ChatMessage.js';
 import Faction from '../models/Faction.js';
-import Player from '../models/Player.js';
-import { emitToPlayer, emitToPlayers } from '../services/socketEmitter.js';
-import { repairMissingFactionRewardBatchesForPlayer, repairMissingFactionRewardChatMessagesForPlayer } from './azideiaController.js';
+import { emitToPlayers, broadcastToAll } from '../services/socketEmitter.js';
 
 function uniqueStrings(values = []) {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
@@ -22,6 +20,23 @@ async function getFactionAliases(factionId) {
 // Resolve aliases by membership first. This is critical for Azidéia rewards:
 // old Player.factionId values may point to Mongo _id or another stale id, while
 // the real clan membership is stored in Faction.members.playerId.
+
+async function getFactionMemberIdsByAliases(aliases = []) {
+  const safeAliases = uniqueStrings(aliases);
+  if (safeAliases.length === 0) return [];
+
+  const objectIdAliases = safeAliases.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  const query = {
+    $or: [
+      { id: { $in: safeAliases } },
+      ...(objectIdAliases.length > 0 ? [{ _id: { $in: objectIdAliases } }] : []),
+    ],
+  };
+
+  const faction = await Faction.findOne(query).select('members.playerId').lean();
+  return uniqueStrings((faction?.members || []).map((member) => member?.playerId));
+}
+
 async function getFactionAliasesForPlayer(userId, rawFactionId) {
   const safeId = String(rawFactionId || '').trim();
   const playerId = String(userId || '').trim();
@@ -131,8 +146,17 @@ export async function sendChatMessage(req, res) {
     const normalized = normalizeMessage(message);
 
     // ── Notificação em tempo real ──────────────────────────────────────────
-    if (channel === 'mail') {
-      emitToPlayer(String(recipientId), 'newChatMessage', normalized);
+    // Complexo: todos veem imediatamente.
+    // Facção: todos os membros conectados recebem no mesmo instante.
+    // Mail: destinatário e remetente recebem para manter abas/dispositivos sincronizados.
+    if (channel === 'complexo') {
+      broadcastToAll('newChatMessage', normalized);
+    } else if (channel === 'faccao') {
+      const aliases = await getFactionAliasesForPlayer(user.id, messagePayload.factionId);
+      const memberIds = await getFactionMemberIdsByAliases(aliases.length ? aliases : [messagePayload.factionId]);
+      emitToPlayers(memberIds, 'newChatMessage', () => normalized);
+    } else if (channel === 'mail') {
+      emitToPlayers([String(recipientId), String(user.id)], 'newChatMessage', () => normalized);
     }
 
     return res.status(201).json({ message: normalized });
@@ -167,16 +191,9 @@ export async function getChatMessages(req, res) {
       if (factionAliases.length === 0) return res.json([]);
       filters.factionId = { $in: factionAliases };
 
-      // Repara primeiro os LOTES e depois os CARDS.
-      // Sem AzideiaRewardBatch o modal de coleta abre, mas mostra 0 recompensa.
-      // Isso cobre missões antigas que já deram recompensa individual, porém não
-      // criaram lote coletivo para a facção.
-      try {
-        await repairMissingFactionRewardBatchesForPlayer(req.player);
-        await repairMissingFactionRewardChatMessagesForPlayer(req.player);
-      } catch (repairError) {
-        console.error('[CHAT_AZIDEIA_REPAIR_NON_BLOCKING]', repairError);
-      }
+      // Importante: leitura de chat precisa ser leve.
+      // Reparos de Azidéia ficam nos endpoints próprios de recompensa/coleta,
+      // não no polling/leitura do chat da facção.
     }
 
     const messages = await ChatMessage.find(filters)

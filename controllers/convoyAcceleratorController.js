@@ -1,5 +1,5 @@
+import Player from '../models/Player.js';
 import Attack from '../models/Attack.js';
-import { bumpVersion } from '../utils/gameHelpers.js';
 import { emitToPlayer, broadcastToAll } from '../services/socketEmitter.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 
@@ -17,12 +17,20 @@ function clampInt(value, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function normalizeAccelerators(raw = {}) {
+  return { twoX: Math.max(0, Math.floor(toNumber(raw?.twoX, 0))) };
+}
+
 function ensureAccelerators(player) {
-  const current = player.convoyAccelerators || {};
-  player.convoyAccelerators = {
-    twoX: Math.max(0, Math.floor(toNumber(current.twoX, 0))),
-  };
-  return player.convoyAccelerators;
+  const current = normalizeAccelerators(player?.convoyAccelerators || {});
+  if (player) player.convoyAccelerators = current;
+  return current;
+}
+
+function acceleratorStateChanged(player) {
+  const before = JSON.stringify(player?.convoyAccelerators || {});
+  const normalized = normalizeAccelerators(player?.convoyAccelerators || {});
+  return { normalized, changed: before !== JSON.stringify(normalized) };
 }
 
 function emitPlayerUpdate(player) {
@@ -51,8 +59,13 @@ export async function getConvoyAccelerators(req, res) {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
-    ensureAccelerators(player);
-    await player.save();
+    const { normalized, changed } = acceleratorStateChanged(player);
+    player.convoyAccelerators = normalized;
+    if (changed) {
+      if (typeof player.markModified === 'function') player.markModified('convoyAccelerators');
+      player.version = Math.max(0, Math.floor(toNumber(player.version, 0))) + 1;
+      await player.save();
+    }
 
     return res.json(buildEnvelope(player));
   } catch (error) {
@@ -69,32 +82,33 @@ export async function purchaseConvoyAccelerator(req, res) {
     const quantity = clampInt(req.body?.quantity ?? 1, 1, 99);
     const cost = ACCELERATOR_PRICE_DIRTY * quantity;
 
-    player.balances = player.balances || {};
-    const dirtyMoney = toNumber(player.balances.dirtyMoney, 0);
+    const updatedPlayer = await Player.findOneAndUpdate(
+      {
+        _id: player._id,
+        'balances.dirtyMoney': { $gte: cost },
+      },
+      {
+        $inc: {
+          'balances.dirtyMoney': -cost,
+          'convoyAccelerators.twoX': quantity,
+          version: 1,
+        },
+      },
+      { new: true, runValidators: true }
+    );
 
-    if (dirtyMoney < cost) {
+    if (!updatedPlayer) {
+      const fresh = await Player.findById(player._id).select('balances.dirtyMoney').lean();
       return res.status(400).json({
         error: 'Saldo insuficiente para comprar acelerador de comboio.',
         reason: 'insufficient_dirty_money',
         cost,
-        current: dirtyMoney,
+        current: toNumber(fresh?.balances?.dirtyMoney, 0),
       });
     }
 
-    const accelerators = ensureAccelerators(player);
-    player.balances.dirtyMoney = Math.max(0, dirtyMoney - cost);
-    accelerators.twoX += quantity;
-
-    if (typeof player.markModified === 'function') {
-      player.markModified('balances');
-      player.markModified('convoyAccelerators');
-    }
-
-    bumpVersion(player);
-    await player.save();
-    emitPlayerUpdate(player);
-
-    return res.json(buildEnvelope(player, { purchased: quantity, cost }));
+    emitPlayerUpdate(updatedPlayer);
+    return res.json(buildEnvelope(updatedPlayer, { purchased: quantity, cost }));
   } catch (error) {
     console.error('[CONVOY_ACCELERATOR_PURCHASE]', error);
     return res.status(500).json({ error: 'Erro ao comprar acelerador de comboio' });
@@ -109,11 +123,6 @@ export async function useConvoyAccelerator(req, res) {
     const battleId = String(req.body?.battleId || req.params?.battleId || '').trim();
     if (!battleId) return res.status(400).json({ error: 'battleId é obrigatório', reason: 'missing_battle_id' });
 
-    const accelerators = ensureAccelerators(player);
-    if (accelerators.twoX <= 0) {
-      return res.status(400).json({ error: 'Você não tem aceleradores de comboio disponíveis.', reason: 'no_accelerators' });
-    }
-
     const attack = await Attack.findOne({
       id: battleId,
       attackerId: String(player._id),
@@ -125,7 +134,8 @@ export async function useConvoyAccelerator(req, res) {
     }
 
     const now = Date.now();
-    const currentArriveAtMs = new Date(attack.arriveAtIso).getTime();
+    const currentArriveAtIso = String(attack.arriveAtIso || '');
+    const currentArriveAtMs = new Date(currentArriveAtIso).getTime();
     const launchedAtMs = new Date(attack.launchedAtIso).getTime();
 
     if (!Number.isFinite(currentArriveAtMs) || currentArriveAtMs <= now) {
@@ -141,54 +151,97 @@ export async function useConvoyAccelerator(req, res) {
     const newArriveAtMs = now + remainingAfterMs;
     const arriveAtIso = new Date(newArriveAtMs).toISOString();
 
-    accelerators.twoX -= 1;
-
-    attack.arriveAtIso = arriveAtIso;
-    attack.totalDurationMs = Math.max(0, newArriveAtMs - launchedAtMs);
-    attack.acceleratorUses = Math.max(0, Math.floor(toNumber(attack.acceleratorUses, 0))) + 1;
-    attack.acceleratedAtIso = new Date(now).toISOString();
-
-    if (Array.isArray(player.gang?.members)) {
-      for (const member of player.gang.members) {
-        if (member?.status === 'marchando' && String(member.activeAttackId || '') === String(battleId)) {
-          member.marchingUntil = arriveAtIso;
-        }
+    const updatedPlayer = await Player.findOneAndUpdate(
+      {
+        _id: player._id,
+        'convoyAccelerators.twoX': { $gte: 1 },
+      },
+      {
+        $inc: {
+          'convoyAccelerators.twoX': -1,
+          version: 1,
+        },
+        $set: {
+          'gang.members.$[member].marchingUntil': arriveAtIso,
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+        arrayFilters: [
+          {
+            'member.status': 'marchando',
+            'member.activeAttackId': String(battleId),
+          },
+        ],
       }
+    );
+
+    if (!updatedPlayer) {
+      return res.status(400).json({
+        error: 'Você não tem aceleradores de comboio disponíveis.',
+        reason: 'no_accelerators',
+      });
     }
 
-    if (typeof player.markModified === 'function') {
-      player.markModified('convoyAccelerators');
-      player.markModified('gang');
+    const updatedAttack = await Attack.findOneAndUpdate(
+      {
+        id: battleId,
+        attackerId: String(player._id),
+        status: 'travelling',
+        arriveAtIso: currentArriveAtIso,
+      },
+      {
+        $set: {
+          arriveAtIso,
+          totalDurationMs: Math.max(0, newArriveAtMs - launchedAtMs),
+          acceleratedAtIso: new Date(now).toISOString(),
+        },
+        $inc: {
+          acceleratorUses: 1,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedAttack) {
+      // Reembolso defensivo se outra requisição já acelerou a mesma marcha.
+      const refundedPlayer = await Player.findOneAndUpdate(
+        { _id: player._id },
+        { $inc: { 'convoyAccelerators.twoX': 1, version: 1 } },
+        { new: true, runValidators: true }
+      );
+      if (refundedPlayer) emitPlayerUpdate(refundedPlayer);
+      return res.status(409).json({
+        error: 'Acelerador não confirmado. Atualize a página e tente novamente.',
+        reason: 'accelerator_race_conflict',
+      });
     }
 
-    bumpVersion(player);
-
-    await attack.save();
-    await player.save();
-    emitPlayerUpdate(player);
+    emitPlayerUpdate(updatedPlayer);
 
     const payload = {
-      battleId: attack.id,
+      battleId: updatedAttack.id,
       attackerId: String(player._id),
       attackerName: String(player.name || ''),
-      attackerConvoySkinId: attack.attackerConvoySkinId || 'comboio_padrao',
-      origin: attack.origin,
-      target: attack.target,
+      attackerConvoySkinId: updatedAttack.attackerConvoySkinId || 'comboio_padrao',
+      origin: updatedAttack.origin,
+      target: updatedAttack.target,
       route: {
-        fromTileX: toNumber(attack?.origin?.tileX, 0),
-        fromTileY: toNumber(attack?.origin?.tileY, 0),
-        toTileX: toNumber(attack?.target?.tileX, 0),
-        toTileY: toNumber(attack?.target?.tileY, 0),
+        fromTileX: toNumber(updatedAttack?.origin?.tileX, 0),
+        fromTileY: toNumber(updatedAttack?.origin?.tileY, 0),
+        toTileX: toNumber(updatedAttack?.target?.tileX, 0),
+        toTileY: toNumber(updatedAttack?.target?.tileY, 0),
       },
-      routeTiles: Array.isArray(attack.routeTiles) ? attack.routeTiles : [],
-      routeDistanceTiles: attack.routeDistanceTiles,
-      timePerTileMs: attack.timePerTileMs,
-      totalDurationMs: attack.totalDurationMs,
-      launchedAtIso: attack.launchedAtIso,
-      arriveAtIso: attack.arriveAtIso,
+      routeTiles: Array.isArray(updatedAttack.routeTiles) ? updatedAttack.routeTiles : [],
+      routeDistanceTiles: updatedAttack.routeDistanceTiles,
+      timePerTileMs: updatedAttack.timePerTileMs,
+      totalDurationMs: updatedAttack.totalDurationMs,
+      launchedAtIso: updatedAttack.launchedAtIso,
+      arriveAtIso: updatedAttack.arriveAtIso,
       remainingBeforeMs,
       remainingAfterMs,
-      acceleratorUses: attack.acceleratorUses,
+      acceleratorUses: updatedAttack.acceleratorUses,
     };
 
     try {
@@ -197,7 +250,7 @@ export async function useConvoyAccelerator(req, res) {
       console.error('[CONVOY_ACCELERATOR_BROADCAST]', broadcastError?.message || broadcastError);
     }
 
-    return res.json(buildEnvelope(player, payload));
+    return res.json(buildEnvelope(updatedPlayer, payload));
   } catch (error) {
     console.error('[CONVOY_ACCELERATOR_USE]', error);
     return res.status(500).json({ error: 'Erro ao usar acelerador de comboio' });

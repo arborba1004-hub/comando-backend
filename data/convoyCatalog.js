@@ -67,9 +67,12 @@ export const CONVOY_CATALOG = [
     modelUrl: 'https://static.wixstatic.com/3d/50f4bf_3d710d145f1b455d9360a59766a17f45.glb',
     icon: '🚐',
     accentColor: '#22c55e',
-    modelScale: 1,
-    fitTileLength: 2.8,
+    modelScale: 0.42,
+    fitTileLength: 1.15,
     speedBonusPercent: 0,
+    maxModelHeight: 1.35,
+    groundOffsetY: -0.12,
+    materialBoost: 2.4,
   },
   {
     id: 'comboio_real_199_glb',
@@ -87,8 +90,9 @@ export const CONVOY_CATALOG = [
     fitTileLength: 1.15,
     speedBonusPercent: 0,
     maxModelHeight: 1.35,
-    groundOffsetY: -0.12,
+    groundOffsetY: 0.08,
     materialBoost: 2.4,
+    visualScaleMultiplier: 3.5,
   },
 ];
 

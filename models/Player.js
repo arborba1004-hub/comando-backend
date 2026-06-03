@@ -131,6 +131,9 @@ const dailyCorreSchema = new mongoose.Schema(
     streak: { type: Number, default: 0, min: 0 },
     lastClaimDate: { type: String, default: '' },
     totalClaims: { type: Number, default: 0, min: 0 },
+    // Epoch ms do último resgate. Usado para manter sequência por janela de 36h,
+    // sem quebrar jogador brasileiro por fuso/UTC.
+    lastClaimAt: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -394,7 +397,7 @@ const playerSchema = new mongoose.Schema(
 
     dailyCorre: {
       type: dailyCorreSchema,
-      default: () => ({ streak: 0, lastClaimDate: '', totalClaims: 0 }),
+      default: () => ({ streak: 0, lastClaimDate: '', totalClaims: 0, lastClaimAt: 0 }),
     },
 
     prisonHistory: {
@@ -630,6 +633,7 @@ const playerSchema = new mongoose.Schema(
       training: { type: operationLockSchema, default: () => ({ id: null, atIso: null }) },
       attackStart: { type: operationLockSchema, default: () => ({ id: null, atIso: null }) },
       azideiaStart: { type: operationLockSchema, default: () => ({ id: null, atIso: null }) },
+      giroSpin: { type: operationLockSchema, default: () => ({ id: null, atIso: null }) },
     },
 
     lastPassiveIncomeAt: {

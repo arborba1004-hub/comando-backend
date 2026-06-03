@@ -25,6 +25,14 @@ const X9_SPAWN_PADDING_TILES = 1;
 const X9_STALE_RESERVATION_MS = 90 * 1000;
 const AZIDEIA_MISSION_GRACE_MS = 2500;
 const AZIDEIA_RESCUE_OVERDUE_MS = 45 * 1000;
+const TARGET_POOL_ENSURE_MIN_INTERVAL_MS = 15 * 1000;
+const PLAYER_RECONCILE_MIN_INTERVAL_MS = 12 * 1000;
+const VISIBLE_TARGET_CACHE_MS = 1500;
+
+let lastTargetPoolEnsureAt = 0;
+let targetPoolEnsurePromise = null;
+let visibleTargetsCache = { expiresAt: 0, data: null };
+const lastMissionReconcileByPlayer = new Map();
 
 function availableTargetQuery(type) {
   return {
@@ -836,6 +844,7 @@ function normalizeMessage(message) {
 }
 
 function emitAzideiaMapChanged(reason, extra = {}) {
+  visibleTargetsCache.expiresAt = 0;
   const payload = {
     reason,
     atIso: new Date().toISOString(),
@@ -1368,6 +1377,57 @@ async function ensureActiveX9Targets() {
   return ensureActiveAzideiaTargets();
 }
 
+async function ensureActiveAzideiaTargetsThrottled({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - lastTargetPoolEnsureAt < TARGET_POOL_ENSURE_MIN_INTERVAL_MS) {
+    return { skipped: true };
+  }
+
+  if (targetPoolEnsurePromise) return targetPoolEnsurePromise;
+
+  lastTargetPoolEnsureAt = now;
+  targetPoolEnsurePromise = ensureActiveAzideiaTargets()
+    .then((result) => {
+      if (result?.created || result?.cleaned) visibleTargetsCache.expiresAt = 0;
+      return result;
+    })
+    .finally(() => {
+      targetPoolEnsurePromise = null;
+    });
+
+  return targetPoolEnsurePromise;
+}
+
+async function reconcileAzideiaMissionsForPlayerThrottled(player, { force = false } = {}) {
+  if (!player?._id) return null;
+  const playerId = String(player._id);
+  const now = Date.now();
+  const last = lastMissionReconcileByPlayer.get(playerId) || 0;
+  if (!force && now - last < PLAYER_RECONCILE_MIN_INTERVAL_MS) return null;
+  lastMissionReconcileByPlayer.set(playerId, now);
+  return reconcileAzideiaMissionsForPlayer(player);
+}
+
+async function getCachedVisibleTargets() {
+  const now = Date.now();
+  if (visibleTargetsCache.data && visibleTargetsCache.expiresAt > now) {
+    return visibleTargetsCache.data;
+  }
+
+  const [x9Targets, correriaTargets, mestreObrasTargets] = await Promise.all([
+    getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY),
+    getVisibleTargetsForType('correria', AZIDEIA_CORRERIA, AVAILABLE_CORRERIA_QUERY),
+    getVisibleTargetsForType('mestre_obras', AZIDEIA_MESTRE_OBRAS, AVAILABLE_MESTRE_OBRAS_QUERY),
+  ]);
+
+  visibleTargetsCache = {
+    expiresAt: now + VISIBLE_TARGET_CACHE_MS,
+    data: { x9Targets, correriaTargets, mestreObrasTargets },
+  };
+
+  return visibleTargetsCache.data;
+}
+
 
 async function getVisibleTargetsForType(type, config, query) {
   // Exibe sempre os alvos ativos do tipo. Reservado continua visível, mas o
@@ -1426,13 +1486,10 @@ function buildDailyEnvelope(player, travellingReservations = 0, correriaTravelli
 
 export async function getAzideiaTargets(req, res) {
   try {
-    if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
-    await ensureActiveAzideiaTargets();
-    const [x9Targets, correriaTargets, mestreObrasTargets] = await Promise.all([
-      getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY),
-      getVisibleTargetsForType('correria', AZIDEIA_CORRERIA, AVAILABLE_CORRERIA_QUERY),
-      getVisibleTargetsForType('mestre_obras', AZIDEIA_MESTRE_OBRAS, AVAILABLE_MESTRE_OBRAS_QUERY),
-    ]);
+    if (req.player) await reconcileAzideiaMissionsForPlayerThrottled(req.player);
+    await ensureActiveAzideiaTargetsThrottled();
+
+    const { x9Targets, correriaTargets, mestreObrasTargets } = await getCachedVisibleTargets();
 
     const activeCounts = await getActiveAzideiaMissionCounts(req.player._id);
     const daily = buildDailyEnvelope(
@@ -1461,14 +1518,14 @@ export async function getAzideiaTargets(req, res) {
 
 export async function getX9Targets(req, res) {
   try {
-    if (req.player) await reconcileAzideiaMissionsForPlayer(req.player);
-    await ensureActiveAzideiaTargets();
-    const targets = await getVisibleTargetsForType('x9', AZIDEIA_X9, AVAILABLE_X9_QUERY);
+    if (req.player) await reconcileAzideiaMissionsForPlayerThrottled(req.player);
+    await ensureActiveAzideiaTargetsThrottled();
+    const { x9Targets } = await getCachedVisibleTargets();
 
     const activeCounts = await getActiveAzideiaMissionCounts(req.player._id);
     const daily = buildDailyEnvelope(req.player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras);
     return res.json({
-      targets: targets.map((target) => normalizeTarget(target, req.player)),
+      targets: x9Targets.map((target) => normalizeTarget(target, req.player)),
       costDirtyMoney: AZIDEIA_X9.costDirtyMoney,
       activeAzideiaConvoys: activeCounts.total,
       maxParallelAzideiaConvoys: MAX_PARALLEL_AZIDEIA_CONVOYS,
@@ -1485,12 +1542,12 @@ export async function getActiveAzideiaMissions(req, res) {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
-    await reconcileAzideiaMissionsForPlayer(player);
+    await reconcileAzideiaMissionsForPlayerThrottled(player);
 
     const missions = await AzideiaMission.find({
       playerId: String(player._id),
       status: { $in: ['travelling', 'returning'] },
-    }).sort({ createdAt: 1 });
+    }).sort({ createdAt: 1 }).lean();
 
     return res.json({ missions: missions.map(normalizeMission) });
   } catch (error) {

@@ -6,6 +6,8 @@ const DEFAULT_LIMIT = 18;
 const MAX_LIMIT = 24;
 const DEFAULT_SNAPSHOT_LIMIT = 1000;
 const MAX_SNAPSHOT_LIMIT = 1000;
+const SNAPSHOT_CACHE_MS = 2000;
+let snapshotCache = { expiresAt: 0, limit: 0, data: null };
 const MIN_TILE = 0;
 const MAX_TILE = 119;
 
@@ -115,8 +117,13 @@ export async function getMapPlayersSnapshot(req, res) {
       MAX_SNAPSHOT_LIMIT
     );
 
+    const now = Date.now();
+    if (snapshotCache.data && snapshotCache.limit === limit && snapshotCache.expiresAt > now) {
+      return res.json(snapshotCache.data);
+    }
+
     const players = await Player.find(
-      {}, // 🔥 SEM FILTRO (ESSENCIAL)
+      {}, // snapshot global leve para montar mapa
       {
         _id: 1,
         name: 1,
@@ -132,7 +139,10 @@ export async function getMapPlayersSnapshot(req, res) {
       .limit(limit)
       .lean();
 
-    return res.json(players.map(projectPlayerForMap));
+    const data = players.map(projectPlayerForMap);
+    snapshotCache = { expiresAt: now + SNAPSHOT_CACHE_MS, limit, data };
+
+    return res.json(data);
   } catch (error) {
     console.error('Erro ao buscar snapshot global do mapa:', error);
     return res.status(500).json({

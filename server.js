@@ -148,28 +148,38 @@ app.use((error, req, res, next) => {
   });
 });
 
+function runSafeBackgroundTask(label, task) {
+  Promise.resolve()
+    .then(task)
+    .catch((error) => {
+      console.error(`❌ ${label}:`, error?.message || error);
+    });
+}
+
+function startSchedulers() {
+  // Não bloqueia cold start do Render. O /health sobe primeiro; manutenção roda logo depois.
+  setTimeout(() => {
+    runSafeBackgroundTask('Azidéia health inicial', ensureAzideiaSystemHealth);
+    runSafeBackgroundTask('QG scheduler inicial', runQgEventSchedulerTick);
+  }, 1500);
+
+  setInterval(() => {
+    runSafeBackgroundTask('Azidéia health interval', ensureAzideiaSystemHealth);
+  }, AZIDEIA_HEALTH_INTERVAL_MS);
+
+  setInterval(() => {
+    runSafeBackgroundTask('QG scheduler interval', runQgEventSchedulerTick);
+  }, QG_EVENT_TICK_INTERVAL_MS);
+}
+
 // Inicialização do servidor
 async function startServer() {
   try {
     await connectDB();
 
-    // Garante que Azidéia/X9/Correria não dependam do frontend para ressuscitar.
-    // Na prática: ao subir o Render e depois a cada 30s, o backend reconcilia
-    // missões vencidas, solta reservas órfãs e recompõe o pool 20 X9 / 10 Correria.
-    await ensureAzideiaSystemHealth();
-    setInterval(() => {
-      void ensureAzideiaSystemHealth();
-    }, AZIDEIA_HEALTH_INTERVAL_MS);
-
-    // Reconciliador automático da Tomada do QG: agenda o evento às 22h a cada 72h,
-    // aplica dano dos CTs a cada 30s, encerra a janela de guerra e inicia o mandato.
-    await runQgEventSchedulerTick();
-    setInterval(() => {
-      void runQgEventSchedulerTick();
-    }, QG_EVENT_TICK_INTERVAL_MS);
-
     server.listen(env.PORT, () => {
       console.log('Servidor rodando com WebSocket');
+      startSchedulers();
     });
   } catch (error) {
     console.error('❌ Não foi possível iniciar o servidor:', error);

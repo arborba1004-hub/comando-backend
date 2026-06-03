@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import { authOnly } from '../middlewares/authMiddleware.js';
 import {
   getAllPlayers,
   getMapPlayersSnapshot,
@@ -7,7 +7,7 @@ import {
 
 const router = Router();
 
-router.get('/snapshot', authMiddleware, getMapPlayersSnapshot);
-router.get('/', authMiddleware, getAllPlayers);
+router.get('/snapshot', authOnly, getMapPlayersSnapshot);
+router.get('/', authOnly, getAllPlayers);
 
 export default router;

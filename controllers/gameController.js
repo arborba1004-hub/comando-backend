@@ -1,4 +1,6 @@
+import { randomUUID } from 'crypto';
 import Faction from '../models/Faction.js';
+import Player from '../models/Player.js';
 import { mergePlayerState } from '../utils/playerMapper.js';
 import { applyPassiveIncome, bumpVersion } from '../utils/gameHelpers.js';
 import { emitToPlayer } from '../services/socketEmitter.js';
@@ -6,6 +8,8 @@ import { ECONOMY } from '../config/economyConfig.js';
 import { addCardToCollection, drawRandomGiroCard } from '../data/giroCardCatalog.js';
 
 const ALLOWED_MULTIPLIERS = ECONOMY.GIRO.multipliers;
+const GIRO_SPIN_LOCK_STALE_MS = 90 * 1000;
+const DAILY_STREAK_WINDOW_MS = 36 * 60 * 60 * 1000;
 const SYMBOLS_BY_OUTCOME = Object.freeze({
   jackpot: ['diamond', 'diamond', 'diamond'],
   big: ['gun', 'gun', 'gun'],
@@ -29,6 +33,51 @@ function safeNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+async function acquireGiroSpinLock(playerId, lockId) {
+  const staleIso = new Date(Date.now() - GIRO_SPIN_LOCK_STALE_MS).toISOString();
+  return Player.findOneAndUpdate(
+    {
+      _id: playerId,
+      $or: [
+        { 'operationLocks.giroSpin.id': null },
+        { 'operationLocks.giroSpin.id': '' },
+        { 'operationLocks.giroSpin.atIso': null },
+        { 'operationLocks.giroSpin.atIso': { $lte: staleIso } },
+        { operationLocks: { $exists: false } },
+      ],
+    },
+    {
+      $set: {
+        'operationLocks.giroSpin.id': lockId,
+        'operationLocks.giroSpin.atIso': new Date().toISOString(),
+      },
+    },
+    { new: true },
+  );
+}
+
+async function releaseGiroSpinLock(playerId, lockId) {
+  if (!playerId || !lockId) return;
+  await Player.updateOne(
+    { _id: playerId, 'operationLocks.giroSpin.id': lockId },
+    { $set: { 'operationLocks.giroSpin.id': null, 'operationLocks.giroSpin.atIso': null } },
+  );
+}
+
+function markGiroSpinLockOnDocument(player, lockId) {
+  if (!player || !lockId) return;
+  player.operationLocks = player.operationLocks || {};
+  player.operationLocks.giroSpin = { id: lockId, atIso: new Date().toISOString() };
+  if (typeof player.markModified === 'function') player.markModified('operationLocks');
+}
+
+function clearGiroSpinLockOnDocument(player) {
+  if (!player) return;
+  player.operationLocks = player.operationLocks || {};
+  player.operationLocks.giroSpin = { id: null, atIso: null };
+  if (typeof player.markModified === 'function') player.markModified('operationLocks');
+}
+
 function todayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -50,7 +99,8 @@ function weightedPick(entries) {
 
 function ensureEconomyState(player) {
   if (!player.balances) player.balances = { corre: 0, dirtyMoney: 0, cleanMoney: 0 };
-  if (!player.dailyCorre) player.dailyCorre = { streak: 0, lastClaimDate: '', totalClaims: 0 };
+  if (!player.dailyCorre) player.dailyCorre = { streak: 0, lastClaimDate: '', totalClaims: 0, lastClaimAt: 0 };
+  if (typeof player.dailyCorre.lastClaimAt !== 'number') player.dailyCorre.lastClaimAt = 0;
   if (!player.prisonHistory) {
     player.prisonHistory = { windowStart: 0, countInWindow: 0, lastPrisonAt: 0, cooldownUntil: 0 };
   }
@@ -265,6 +315,16 @@ function applyPrisonPenalty(player, now) {
   };
 }
 
+function isDailyStreakActive(player, now = Date.now()) {
+  const lastClaimAt = Number(player?.dailyCorre?.lastClaimAt || 0);
+  if (lastClaimAt > 0 && now - lastClaimAt <= DAILY_STREAK_WINDOW_MS) return true;
+
+  // Compatibilidade com documentos antigos que só tinham lastClaimDate.
+  const legacyLastClaimDate = String(player?.dailyCorre?.lastClaimDate || '');
+  if (!legacyLastClaimDate) return false;
+  return legacyLastClaimDate === yesterdayKey();
+}
+
 function maybeDropCard(player, result) {
   if (result.prison) return null;
 
@@ -288,19 +348,20 @@ function maybeDropCard(player, result) {
 
 function applyDailyCorreReward(player) {
   ensureEconomyState(player);
-  const today = todayKey();
-  const yesterday = yesterdayKey();
+  const now = Date.now();
+  const today = todayKey(new Date(now));
 
   if (player.dailyCorre.lastClaimDate === today) {
     return { ok: false, error: 'Corre diário já foi resgatado hoje' };
   }
 
-  const wasStreak = player.dailyCorre.lastClaimDate === yesterday;
+  const wasStreak = isDailyStreakActive(player, now);
   const nextStreak = wasStreak ? Number(player.dailyCorre.streak || 0) + 1 : 1;
   const reward = ECONOMY.CORRE.dailyRewards[(nextStreak - 1) % ECONOMY.CORRE.dailyRewards.length];
 
   player.dailyCorre.streak = nextStreak;
   player.dailyCorre.lastClaimDate = today;
+  player.dailyCorre.lastClaimAt = now;
   player.dailyCorre.totalClaims = Number(player.dailyCorre.totalClaims || 0) + 1;
 
   player.balances.corre = Math.max(0, Number(player.balances.corre || 0)) + reward.corre;
@@ -381,81 +442,98 @@ export async function gameAction(req, res) {
       }
 
       const now = Date.now();
-      const cooldownUntil = Number(player.prisonHistory?.cooldownUntil || 0);
-      if (cooldownUntil > now) {
-        return res.status(429).json({
-          error: 'Corre esfriando depois da blitz.',
-          retryAfter: cooldownUntil - now,
-          cooldownUntil,
+      const giroLockId = randomUUID();
+      const lockedPlayer = await acquireGiroSpinLock(player._id, giroLockId);
+      if (!lockedPlayer) {
+        return res.status(409).json({ error: 'Giro já em processamento. Aguarda esse corre terminar.' });
+      }
+
+      let shouldReleaseGiroLock = true;
+      markGiroSpinLockOnDocument(player, giroLockId);
+
+      try {
+        const cooldownUntil = Number(player.prisonHistory?.cooldownUntil || 0);
+        if (cooldownUntil > now) {
+          return res.status(429).json({
+            error: 'Corre esfriando depois da blitz.',
+            retryAfter: cooldownUntil - now,
+            cooldownUntil,
+          });
+        }
+
+        const rate = applySpinRateLimit(player, now);
+        if (!rate.ok) {
+          return res.status(rate.status).json({
+            error: rate.error,
+            retryAfter: rate.retryAfter,
+          });
+        }
+
+        const correCost = multiplier;
+        if ((player.balances?.corre || 0) < correCost) {
+          return res.status(400).json({ error: 'Corre insuficiente' });
+        }
+
+        player.balances.corre = Math.max(0, Number(player.balances.corre || 0) - correCost);
+        player.lastSpinAt = now;
+
+        const factionContext = await getFactionBuffsForPlayer(player);
+        const factionDirtyBonusPercent = safeNumber(
+          factionContext?.investmentBuffs?.dirtyMoneyGainPercent,
+          0
+        );
+
+        const result = resolveSlotSpin(multiplier);
+
+        let finalDirtyGain = 0;
+        let baseDirtyGain = 0;
+        let prisonPenalty = null;
+        let cardDrop = null;
+
+        if (result.prison) {
+          prisonPenalty = applyPrisonPenalty(player, now);
+          result.label = `${result.label} — perdeu ${Math.round(prisonPenalty.lossPct * 100)}% do Commands Sujo`;
+        } else {
+          baseDirtyGain = Math.floor(result.dirtyGain * multiplier);
+          finalDirtyGain = Math.floor(baseDirtyGain * (1 + factionDirtyBonusPercent / 100));
+          player.balances.dirtyMoney += finalDirtyGain;
+          cardDrop = maybeDropCard(player, result);
+        }
+
+        bumpVersion(player);
+        clearGiroSpinLockOnDocument(player);
+        await player.save();
+        shouldReleaseGiroLock = false;
+        emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
+
+        return res.json({
+          result: {
+            ...result,
+            dirtyGain: finalDirtyGain,
+            baseDirtyGain,
+            factionDirtyBonusPercent,
+            correCost,
+            multiplier,
+            prisonPenalty,
+            cardDrop,
+            cooldownUntil: player.prisonHistory?.cooldownUntil || 0,
+          },
+          economy: publicEconomyConfig(),
+          factionBuffs: factionContext
+            ? {
+                factionId: factionContext.factionId,
+                factionName: factionContext.factionName,
+                factionTag: factionContext.factionTag,
+                investmentBuffs: factionContext.investmentBuffs,
+              }
+            : null,
+          player: mergePlayerState(player.toObject()),
         });
+      } finally {
+        if (shouldReleaseGiroLock) {
+          await releaseGiroSpinLock(player._id, giroLockId);
+        }
       }
-
-      const rate = applySpinRateLimit(player, now);
-      if (!rate.ok) {
-        return res.status(rate.status).json({
-          error: rate.error,
-          retryAfter: rate.retryAfter,
-        });
-      }
-
-      const correCost = multiplier;
-      if ((player.balances?.corre || 0) < correCost) {
-        return res.status(400).json({ error: 'Corre insuficiente' });
-      }
-
-      const factionContext = await getFactionBuffsForPlayer(player);
-      const factionDirtyBonusPercent = safeNumber(
-        factionContext?.investmentBuffs?.dirtyMoneyGainPercent,
-        0
-      );
-
-      player.balances.corre -= correCost;
-      player.lastSpinAt = now;
-
-      const result = resolveSlotSpin(multiplier);
-
-      let finalDirtyGain = 0;
-      let baseDirtyGain = 0;
-      let prisonPenalty = null;
-      let cardDrop = null;
-
-      if (result.prison) {
-        prisonPenalty = applyPrisonPenalty(player, now);
-        result.label = `${result.label} — perdeu ${Math.round(prisonPenalty.lossPct * 100)}% do Commands Sujo`;
-      } else {
-        baseDirtyGain = Math.floor(result.dirtyGain * multiplier);
-        finalDirtyGain = Math.floor(baseDirtyGain * (1 + factionDirtyBonusPercent / 100));
-        player.balances.dirtyMoney += finalDirtyGain;
-        cardDrop = maybeDropCard(player, result);
-      }
-
-      bumpVersion(player);
-      await player.save();
-      emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
-
-      return res.json({
-        result: {
-          ...result,
-          dirtyGain: finalDirtyGain,
-          baseDirtyGain,
-          factionDirtyBonusPercent,
-          correCost,
-          multiplier,
-          prisonPenalty,
-          cardDrop,
-          cooldownUntil: player.prisonHistory?.cooldownUntil || 0,
-        },
-        economy: publicEconomyConfig(),
-        factionBuffs: factionContext
-          ? {
-              factionId: factionContext.factionId,
-              factionName: factionContext.factionName,
-              factionTag: factionContext.factionTag,
-              investmentBuffs: factionContext.investmentBuffs,
-            }
-          : null,
-        player: mergePlayerState(player.toObject()),
-      });
     }
 
     if (action === 'get_giro_state') {

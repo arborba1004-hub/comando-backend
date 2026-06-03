@@ -112,6 +112,11 @@ const attackSchema = new mongoose.Schema(
     arriveAtIso: { type: String, default: null },
     resolvedAtIso: { type: String, default: null },
 
+
+    // Lock curto contra resolução dupla por duas abas/socket/polling.
+    resolutionLockId: { type: String, default: null, index: true },
+    resolutionLockAtIso: { type: String, default: null },
+
     selectedTroops: { type: [selectedTroopSchema], default: [] },
     selectedMemberIds: { type: [String], default: [] },
 
@@ -133,6 +138,11 @@ const attackSchema = new mongoose.Schema(
     versionKey: false,
   }
 );
+
+attackSchema.index({ attackerId: 1, targetId: 1, status: 1 }, {
+  unique: true,
+  partialFilterExpression: { status: 'travelling' },
+});
 
 const Attack = mongoose.models.Attack || mongoose.model('Attack', attackSchema);
 

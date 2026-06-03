@@ -70,6 +70,15 @@ const barracoAcceleratorsSchema = new mongoose.Schema(
   { _id: false }
 );
 
+
+const operationLockSchema = new mongoose.Schema(
+  {
+    id: { type: String, default: null },
+    atIso: { type: String, default: null },
+  },
+  { _id: false }
+);
+
 const barracoUpgradeSchema = new mongoose.Schema(
   {
     active: { type: Boolean, default: false },
@@ -613,6 +622,14 @@ const playerSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       min: 0,
+    },
+
+    // Locks curtos para impedir duplo clique/duas abas em operações que mexem
+    // com arrays embutidos da gangue e economia. Stale locks são reaproveitados.
+    operationLocks: {
+      training: { type: operationLockSchema, default: () => ({ id: null, atIso: null }) },
+      attackStart: { type: operationLockSchema, default: () => ({ id: null, atIso: null }) },
+      azideiaStart: { type: operationLockSchema, default: () => ({ id: null, atIso: null }) },
     },
 
     lastPassiveIncomeAt: {

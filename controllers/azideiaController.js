@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import mongoose from 'mongoose';
 import Player from '../models/Player.js';
 import Faction from '../models/Faction.js';
@@ -1589,14 +1590,18 @@ export async function getActiveAzideiaMissions(req, res) {
     const player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
-    await reconcileAzideiaMissionsForPlayerThrottled(player);
+    const reconcileResult = await reconcileAzideiaMissionsForPlayerThrottled(player);
 
     const missions = await AzideiaMission.find({
       playerId: String(player._id),
       status: { $in: ['travelling', 'returning'] },
     }).sort({ createdAt: 1 }).lean();
 
-    return res.json({ missions: missions.map(normalizeMission) });
+    const payload = { missions: missions.map(normalizeMission) };
+    if (reconcileResult?.changedPlayer) {
+      payload.player = mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player);
+    }
+    return res.json(payload);
   } catch (error) {
     console.error('[AZIDEIA_ACTIVE_MISSIONS]', error);
     return res.status(500).json({ error: 'Erro ao buscar Azidéias ativas' });
@@ -1768,9 +1773,9 @@ export async function attackX9(req, res) {
     }
 
     clearAzideiaStartLockOnDocument(player);
-    azideiaStartLockId = null;
     bumpVersion(player);
     await player.save();
+    azideiaStartLockId = null;
     emitPlayerUpdate(player);
 
     return res.json({
@@ -1991,9 +1996,9 @@ export async function negotiateCorreria(req, res) {
     }
 
     clearAzideiaStartLockOnDocument(player);
-    azideiaStartLockId = null;
     bumpVersion(player);
     await player.save();
+    azideiaStartLockId = null;
     emitPlayerUpdate(player);
 
     return res.json({
@@ -2183,9 +2188,9 @@ export async function payMestreObras(req, res) {
     }
 
     clearAzideiaStartLockOnDocument(player);
-    azideiaStartLockId = null;
     bumpVersion(player);
     await player.save();
+    azideiaStartLockId = null;
     emitPlayerUpdate(player);
 
     return res.json({

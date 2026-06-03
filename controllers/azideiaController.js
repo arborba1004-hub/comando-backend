@@ -1919,6 +1919,13 @@ export async function negotiateCorreria(req, res) {
       });
     }
 
+    if (player?.punishments?.dirtyMoneyBlocked) {
+      return res.status(423).json({
+        error: 'Dinheiro sujo bloqueado. Você não pode lançar Azidéia durante a punição.',
+        reason: 'dirty_money_blocked',
+      });
+    }
+
     const reservationKey = `pending:${String(player._id)}:${Date.now()}`;
     const target = await AzideiaTarget.findOneAndUpdate(
       {

@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Faction from '../models/Faction.js';
 import Player from '../models/Player.js';
 import { generateId, bumpVersion } from '../utils/gameHelpers.js';
@@ -45,6 +46,15 @@ const DEFAULT_INVESTMENT_BUFFS = {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function buildFactionLookupByAnyId(factionId) {
+  const id = String(factionId || '').trim();
+  const query = [{ id }];
+  if (mongoose.isValidObjectId(id)) {
+    query.push({ _id: id });
+  }
+  return { $or: query };
 }
 
 function safeNumber(value, fallback = 0) {
@@ -372,32 +382,33 @@ joinRequests: Array.isArray(faction.joinRequests) ? faction.joinRequests : [],
   };
 }
 
-async function syncFactionMemberSnapshot(faction, playerId, playerHint = null) {
+async function syncFactionMemberSnapshot(faction, playerId, options = {}) {
   const member = faction.members.find((item) => String(item.playerId) === String(playerId));
   if (!member) return false;
 
-  const player = playerHint || await Player.findById(playerId)
+  const player = await Player.findById(playerId)
     .select('_id name avatar power niveis hierarchyBadge')
     .lean();
   if (!player) return false;
 
   let changed = false;
-  const nextName = player.name || member.playerName || 'Jogador';
-  const nextAvatar = player.avatar || '';
-  const nextPower = safeNumber(player.power, 0);
-  const nextBarracoLevel = Math.max(1, safeNumber(player.niveis?.barracoLevel, 1));
-  const nextBadge = player.hierarchyBadge || '';
+  const next = {
+    playerName: player.name || member.playerName || 'Jogador',
+    avatar: player.avatar || '',
+    power: safeNumber(player.power, 0),
+    barracoLevel: Math.max(1, safeNumber(player.niveis?.barracoLevel, 1)),
+    hierarchyBadge: player.hierarchyBadge || '',
+  };
 
-  if (member.playerName !== nextName) { member.playerName = nextName; changed = true; }
-  if (member.avatar !== nextAvatar) { member.avatar = nextAvatar; changed = true; }
-  if (safeNumber(member.power, 0) !== nextPower) { member.power = nextPower; changed = true; }
-  if (safeNumber(member.barracoLevel, 1) !== nextBarracoLevel) { member.barracoLevel = nextBarracoLevel; changed = true; }
-  if ((member.hierarchyBadge || '') !== nextBadge) { member.hierarchyBadge = nextBadge; changed = true; }
+  for (const [key, value] of Object.entries(next)) {
+    if (String(member[key] ?? '') !== String(value ?? '')) {
+      member[key] = value;
+      changed = true;
+    }
+  }
 
-  // lastSeenAt não deve forçar save a cada abertura da página de facção.
-  // Atualiza no máximo a cada 5 min para não travar Mongo/Render em mobile.
-  const lastSeenMs = Date.parse(member.lastSeenAt || '') || 0;
-  if (Date.now() - lastSeenMs > 5 * 60 * 1000) {
+  // lastSeenAt não deve forçar save em toda abertura da página.
+  if (options.touchLastSeen === true) {
     member.lastSeenAt = nowIso();
     changed = true;
   }
@@ -412,6 +423,7 @@ async function clearPlayerFaction(playerId) {
   player.factionId = null;
   bumpVersion(player);
   await player.save();
+  emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
   return player;
 }
@@ -420,17 +432,13 @@ async function getFactionByPlayer(player) {
   const playerId = String(player?._id || '');
   const factionId = String(player?.factionId || '').trim();
 
-  const or = [];
   if (factionId) {
-    or.push({ id: factionId });
-    // Compatibilidade com documentos antigos onde player.factionId recebeu o
-    // _id Mongo da facção em vez do campo customizado faction.id.
-    if (/^[a-f0-9]{24}$/i.test(factionId)) or.push({ _id: factionId });
+    const faction = await Faction.findOne(buildFactionLookupByAnyId(factionId));
+    if (faction) return faction;
   }
-  if (playerId) or.push({ 'members.playerId': playerId });
 
-  if (!or.length) return null;
-  return Faction.findOne({ $or: or });
+  if (!playerId) return null;
+  return Faction.findOne({ 'members.playerId': playerId });
 }
 
 function requireFactionPermission(faction, playerId, permissionKey) {
@@ -532,6 +540,8 @@ const faction = await Faction.create({
 export async function getMyFaction(req, res) {
   try {
     const player = req.player;
+    const playerId = String(player._id);
+
     const faction = await getFactionByPlayer(player);
 
     if (!faction) {
@@ -539,26 +549,33 @@ export async function getMyFaction(req, res) {
         player.factionId = null;
         bumpVersion(player);
         await player.save();
-        emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
+        emitToPlayer(playerId, 'playerUpdate', { player: mergePlayerState(player.toObject()) });
       }
       return res.status(404).json({ error: 'Você não pertence a nenhuma facção' });
     }
 
-    const canonicalFactionId = String(faction.id);
-    let playerChanged = false;
-    if (String(player.factionId || '') !== canonicalFactionId) {
-      player.factionId = canonicalFactionId;
+    const isMember = faction.members.some((member) => String(member.playerId) === playerId);
+    if (!isMember) {
+      player.factionId = null;
       bumpVersion(player);
-      playerChanged = true;
+      await player.save();
+      emitToPlayer(playerId, 'playerUpdate', { player: mergePlayerState(player.toObject()) });
+      return res.status(404).json({ error: 'Você não consta como membro dessa facção' });
     }
 
-    const memberChanged = await syncFactionMemberSnapshot(faction, player._id, player.toObject());
+    let shouldSaveFaction = false;
+    if (String(player.factionId || '') !== String(faction.id)) {
+      player.factionId = faction.id;
+      bumpVersion(player);
+      await player.save();
+      emitToPlayer(playerId, 'playerUpdate', { player: mergePlayerState(player.toObject()) });
+    }
+
+    shouldSaveFaction = (await syncFactionMemberSnapshot(faction, player._id, { touchLastSeen: false })) || shouldSaveFaction;
     refreshFactionDerivedFields(faction);
 
-    if (memberChanged) await faction.save();
-    if (playerChanged) {
-      await player.save();
-      emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
+    if (shouldSaveFaction) {
+      await faction.save();
     }
 
     return res.json({
@@ -573,11 +590,12 @@ export async function getMyFaction(req, res) {
 export async function listFactions(req, res) {
   try {
     const factions = await Faction.find({})
+      .select('id name tag leaderId level exp expToNext description isPrivate minimumPower minimumBarracoLevel members totalInvestmentLevel investmentTierName investments investmentBuffs createdAt updatedAt')
       .sort({ level: -1, totalInvestmentLevel: -1, createdAt: 1 })
-      .limit(100);
+      .limit(100)
+      .lean();
 
     const normalized = factions.map((faction) => {
-      refreshFactionDerivedFields(faction);
       const data = normalizeFactionDocument(faction);
 
       return {
@@ -620,7 +638,7 @@ export async function joinFaction(req, res) {
       return res.status(400).json({ error: 'Você já pertence a uma facção' });
     }
 
-    const faction = await Faction.findOne({ id: factionId });
+    const faction = await Faction.findOne(buildFactionLookupByAnyId(factionId));
 
     if (!faction) {
       return res.status(404).json({ error: 'Facção não encontrada' });
@@ -691,7 +709,7 @@ export async function leaveFaction(req, res) {
       return res.status(400).json({ error: 'Você não pertence a nenhuma facção' });
     }
 
-    const faction = await Faction.findOne({ id: String(player.factionId) });
+    const faction = await Faction.findOne(buildFactionLookupByAnyId(player.factionId));
 
 if (!faction) {
       player.factionId = null;
@@ -714,6 +732,7 @@ if (!faction) {
     player.factionId = null;
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     if (faction.members.length === 0) {
       await Faction.deleteOne({ _id: faction._id });
@@ -790,6 +809,7 @@ export async function donate(req, res) {
     player.balances[currency] -= amount;
     bumpVersion(player);
     await player.save();
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
 
     faction.treasury[currency] =
       Math.max(0, safeNumber(faction.treasury?.[currency], 0)) + amount;
@@ -1220,6 +1240,7 @@ export async function acceptJoinRequest(req, res) {
     targetPlayer.factionId = faction.id;
     bumpVersion(targetPlayer);
     await targetPlayer.save();
+    emitToPlayer(String(targetPlayer._id), 'playerUpdate', { player: mergePlayerState(targetPlayer.toObject()) });
 
     return res.json({
       success: true,

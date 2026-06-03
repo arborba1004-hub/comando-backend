@@ -1,6 +1,16 @@
+import mongoose from 'mongoose';
 import Player from '../models/Player.js';
 import Faction from '../models/Faction.js';
 import FactionInvite from '../models/FactionInvite.js';
+
+function buildFactionLookupByAnyId(factionId) {
+  const id = String(factionId || '').trim();
+  const query = [{ id }];
+  if (mongoose.isValidObjectId(id)) {
+    query.push({ _id: id });
+  }
+  return { $or: query };
+}
 
 function getActorMember(faction, playerId) {
   return faction?.members?.find(
@@ -60,13 +70,7 @@ export async function invitePlayerToFaction(req, res, next) {
       return res.status(400).json({ error: 'Você não está em uma facção' });
     }
 
-    const actorFactionId = String(actor.factionId || '').trim();
-    const faction = await Faction.findOne({
-      $or: [
-        { id: actorFactionId },
-        ...( /^[a-f0-9]{24}$/i.test(actorFactionId) ? [{ _id: actorFactionId }] : [] ),
-      ],
-    });
+    const faction = await Faction.findOne(buildFactionLookupByAnyId(actor.factionId));
     if (!faction) {
       return res.status(404).json({ error: 'Facção não encontrada' });
     }
@@ -93,7 +97,7 @@ export async function invitePlayerToFaction(req, res, next) {
     const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
     const invite = await FactionInvite.create({
-      factionId: String(faction.id),
+      factionId: String(faction.id || faction._id),
       factionName: faction.name || '',
       factionTag: faction.tag || '',
       invitedPlayerId: String(targetPlayer._id),

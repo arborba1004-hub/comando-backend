@@ -35,6 +35,10 @@ const azideiaMissionSchema = new mongoose.Schema(
 
     selectedGangMemberId: { type: String, default: null },
 
+    // Visual do comboio escolhido no momento da missão.
+    // Salvo aqui para todos os jogadores verem o mesmo comboio em tempo real.
+    convoySkinId: { type: String, default: 'comboio_padrao', index: true },
+
     status: {
       type: String,
       enum: ['travelling', 'returning', 'completed', 'cancelled'],

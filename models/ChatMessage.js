@@ -42,6 +42,10 @@ const chatMessageSchema = new mongoose.Schema(
 
 chatMessageSchema.index({ channel: 1, createdAt: -1 });
 chatMessageSchema.index({ recipientId: 1, read: 1, createdAt: -1 });
+chatMessageSchema.index({ channel: 1, factionId: 1, createdAt: 1 });
+chatMessageSchema.index({ channel: 1, senderId: 1, createdAt: -1 });
+chatMessageSchema.index({ channel: 1, recipientId: 1, createdAt: -1 });
+chatMessageSchema.index({ channel: 1, messageType: 1, createdAt: -1 });
 
 const ChatMessage =
   mongoose.models.ChatMessage || mongoose.model('ChatMessage', chatMessageSchema);

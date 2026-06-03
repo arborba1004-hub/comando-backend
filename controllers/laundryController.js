@@ -12,6 +12,78 @@ function safeNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+
+const LAUNDRY_BUSINESSES = Object.freeze({
+  1: { id: 1, name: 'Lava Jato do Zé', initialMoney: 500, feePercentage: 20, operationTimeSeconds: 15 },
+  2: { id: 2, name: 'Barbearia do Malandrão', initialMoney: 500, feePercentage: 12, operationTimeSeconds: 25 },
+  3: { id: 3, name: 'Pizzaria do Clandestino', initialMoney: 500, feePercentage: 10, operationTimeSeconds: 30 },
+  4: { id: 4, name: 'Suqueria da Galera', initialMoney: 500, feePercentage: 8, operationTimeSeconds: 40 },
+  5: { id: 5, name: 'Lavanderia da Dona Maria', initialMoney: 500, feePercentage: 5, operationTimeSeconds: 50 },
+});
+
+function clamp(value, min, max) {
+  const n = Math.floor(safeNumber(value, min));
+  return Math.min(max, Math.max(min, n));
+}
+
+function roundMoney(value) {
+  return Math.max(0, Math.floor(safeNumber(value, 0)));
+}
+
+function getPlayerLevel(player) {
+  return clamp(player?.niveis?.playerLevel ?? player?.pageLevels?.home ?? 1, 1, 100);
+}
+
+function calculateServerLaundryValues({ player, business, factionContext }) {
+  const playerLevel = getPlayerLevel(player);
+  const levelMultiplier = Math.pow(1.1, playerLevel - 1);
+
+  const grossAmount = roundMoney(business.initialMoney * levelMultiplier);
+
+  const cleanMoneyGainPercent = Math.max(
+    0,
+    safeNumber(factionContext?.investmentBuffs?.cleanMoneyGainPercent, 0)
+  );
+  const donationEfficiencyPercent = Math.max(
+    0,
+    safeNumber(factionContext?.investmentBuffs?.donationEfficiencyPercent, 0)
+  );
+  const buffDurationPercent = Math.max(
+    0,
+    safeNumber(factionContext?.investmentBuffs?.buffDurationPercent, 0)
+  );
+
+  const baseFeeAmount = roundMoney((grossAmount * business.feePercentage) / 100);
+  const feeReductionFactor = Math.min(0.5, donationEfficiencyPercent / 100);
+  const effectiveFeeAmount = roundMoney(baseFeeAmount * (1 - feeReductionFactor));
+
+  const originalNetAmount = roundMoney(grossAmount - baseFeeAmount);
+  const netBeforeFactionBonus = roundMoney(grossAmount - effectiveFeeAmount);
+  const bonusCleanAmount = roundMoney(originalNetAmount * (cleanMoneyGainPercent / 100));
+  const finalNetAmount = roundMoney(netBeforeFactionBonus + bonusCleanAmount);
+
+  const durationReductionFactor = Math.min(0.7, buffDurationPercent / 100);
+  const durationSeconds = Math.max(
+    5,
+    Math.round(business.operationTimeSeconds * levelMultiplier * (1 - durationReductionFactor))
+  );
+
+  return {
+    playerLevel,
+    grossAmount,
+    feePercentage: business.feePercentage,
+    originalFeeAmount: baseFeeAmount,
+    effectiveFeeAmount,
+    originalNetAmount,
+    bonusCleanAmount,
+    finalNetAmount,
+    durationSeconds,
+    factionCleanMoneyGainPercent: cleanMoneyGainPercent,
+    factionDonationEfficiencyPercent: donationEfficiencyPercent,
+    factionBuffDurationPercent: buffDurationPercent,
+  };
+}
+
 function calculateFactionInvestmentBuffs(investments = {}) {
   const arsenal = Math.max(0, safeNumber(investments.arsenalColetivo, 0));
   const caixa = Math.max(0, safeNumber(investments.caixaOperacional, 0));
@@ -89,12 +161,14 @@ async function getFactionLaundryContext(player) {
   }
 }
 
+
 export async function canOperateLaundry(req, res) {
   try {
     const player = req.player;
     const businessId = Number(req.params.businessId);
+    const business = LAUNDRY_BUSINESSES[businessId];
 
-    if (!Number.isFinite(businessId)) {
+    if (!Number.isFinite(businessId) || !business) {
       return res.status(400).json({ error: 'businessId inválido' });
     }
 
@@ -106,8 +180,26 @@ export async function canOperateLaundry(req, res) {
     );
 
     const allowed = operationsToday.length < 1;
+    const factionContext = await getFactionLaundryContext(player);
+    const calculation = calculateServerLaundryValues({ player, business, factionContext });
 
-    return res.json({ allowed });
+    return res.json({
+      allowed,
+      business: {
+        id: business.id,
+        name: business.name,
+      },
+      calculation: {
+        grossAmount: calculation.grossAmount,
+        feePercentage: calculation.feePercentage,
+        originalFeeAmount: calculation.originalFeeAmount,
+        effectiveFeeAmount: calculation.effectiveFeeAmount,
+        originalNetAmount: calculation.originalNetAmount,
+        bonusCleanAmount: calculation.bonusCleanAmount,
+        finalNetAmount: calculation.finalNetAmount,
+        durationSeconds: calculation.durationSeconds,
+      },
+    });
   } catch (error) {
     console.error('Erro em canOperateLaundry:', error);
     return res.status(500).json({ error: 'Erro ao verificar operação de lavagem' });
@@ -117,90 +209,46 @@ export async function canOperateLaundry(req, res) {
 export async function startLaundry(req, res) {
   try {
     const player = req.player;
+    const businessId = Number(req.body?.businessId);
+    const business = LAUNDRY_BUSINESSES[businessId];
 
-    const {
-      businessId,
-      businessName,
-      grossAmount,
-      feePercentage,
-      feeAmount,
-      netAmount,
-    } = req.body || {};
-
-    if (!businessId || !businessName) {
-      return res.status(400).json({ error: 'Dados da operação incompletos' });
+    if (!Number.isFinite(businessId) || !business) {
+      return res.status(400).json({ error: 'businessId inválido' });
     }
 
-    if (player.punishments?.dirtyMoneyBlocked) {
+    if (player.punishments?.dirtyMoneyBlocked || player.punishments?.delacao?.active) {
       return res.status(403).json({ error: 'Dinheiro sujo bloqueado' });
-    }
-
-    const amount = safeNumber(grossAmount, 0);
-    const fee = safeNumber(feeAmount, 0);
-    const net = safeNumber(netAmount, 0);
-    const feePct = safeNumber(feePercentage, 0);
-
-    if (amount <= 0 || fee < 0 || net < 0 || feePct < 0) {
-      return res.status(400).json({ error: 'Valores de lavagem inválidos' });
     }
 
     const dailyOperations = player.laundryProgress?.dailyOperations || [];
     const today = todayString();
 
     const operationsToday = dailyOperations.filter(
-      (op) => Number(op.businessId) === Number(businessId) && op.date === today
+      (op) => Number(op.businessId) === businessId && op.date === today
     );
 
     if (operationsToday.length >= 1) {
       return res.status(400).json({ error: 'Você já operou neste comércio hoje' });
     }
 
+    const factionContext = await getFactionLaundryContext(player);
+    const calculation = calculateServerLaundryValues({ player, business, factionContext });
+    const amount = calculation.grossAmount;
+
+    if (amount <= 0) {
+      return res.status(400).json({ error: 'Valor de lavagem inválido' });
+    }
+
     if ((player.balances?.dirtyMoney || 0) < amount) {
       return res.status(400).json({ error: 'Dinheiro sujo insuficiente' });
     }
 
-    const factionContext = await getFactionLaundryContext(player);
-    const cleanMoneyGainPercent = safeNumber(
-      factionContext?.investmentBuffs?.cleanMoneyGainPercent,
-      0
-    );
-    const donationEfficiencyPercent = safeNumber(
-      factionContext?.investmentBuffs?.donationEfficiencyPercent,
-      0
-    );
-    const buffDurationPercent = safeNumber(
-      factionContext?.investmentBuffs?.buffDurationPercent,
-      0
-    );
-
     const operationId = `${Date.now()}-${businessId}-${player._id}`;
     const startedAt = new Date().toISOString();
+    const endsAt = new Date(Date.now() + calculation.durationSeconds * 1000).toISOString();
 
-    const baseDurationSeconds = 15;
-    const durationReductionFactor = Math.min(0.7, buffDurationPercent / 100);
-    const durationSeconds = Math.max(
-      5,
-      Math.round(baseDurationSeconds * (1 - durationReductionFactor))
-    );
-
-    const effectiveFeeAmount = Math.max(
-      0,
-      Math.floor(fee * (1 - Math.min(0.5, donationEfficiencyPercent / 100)))
-    );
-
-    const baseNetAmount = Math.max(0, Math.floor(net));
-    const bonusCleanAmount = Math.max(
-      0,
-      Math.floor(baseNetAmount * (cleanMoneyGainPercent / 100))
-    );
-    const finalNetAmount = Math.max(
-      0,
-      Math.floor(amount - effectiveFeeAmount + bonusCleanAmount)
-    );
-
-    const endsAt = new Date(Date.now() + durationSeconds * 1000).toISOString();
-
-    player.balances.dirtyMoney -= amount;
+    if (!player.balances) player.balances = { dirtyMoney: 0, cleanMoney: 0, corre: 0 };
+    player.balances.dirtyMoney = Math.max(0, safeNumber(player.balances.dirtyMoney, 0) - amount);
 
     if (!player.laundryProgress) {
       player.laundryProgress = {
@@ -220,38 +268,50 @@ export async function startLaundry(req, res) {
     player.laundryProgress.activeOperations.push({
       id: operationId,
       operationId,
-      businessId: Number(businessId),
-      businessName: String(businessName),
+      businessId: business.id,
+      businessName: business.name,
       startedAt,
       endsAt,
       grossAmount: amount,
-      feePercentage: feePct,
-      feeAmount: effectiveFeeAmount,
-      originalFeeAmount: fee,
-      originalNetAmount: baseNetAmount,
-      factionCleanMoneyGainPercent: cleanMoneyGainPercent,
-      factionDonationEfficiencyPercent: donationEfficiencyPercent,
-      factionBuffDurationPercent: buffDurationPercent,
-      bonusCleanAmount,
-      netAmount: finalNetAmount,
-      durationSeconds,
+      feePercentage: calculation.feePercentage,
+      feeAmount: calculation.effectiveFeeAmount,
+      originalFeeAmount: calculation.originalFeeAmount,
+      originalNetAmount: calculation.originalNetAmount,
+      factionCleanMoneyGainPercent: calculation.factionCleanMoneyGainPercent,
+      factionDonationEfficiencyPercent: calculation.factionDonationEfficiencyPercent,
+      factionBuffDurationPercent: calculation.factionBuffDurationPercent,
+      bonusCleanAmount: calculation.bonusCleanAmount,
+      netAmount: calculation.finalNetAmount,
+      durationSeconds: calculation.durationSeconds,
+      serverCalculated: true,
       status: 'processing',
     });
 
     player.laundryProgress.dailyOperations.push({
-      businessId: Number(businessId),
+      businessId: business.id,
       date: today,
       amount,
     });
 
+    if (typeof player.markModified === 'function') {
+      player.markModified('balances');
+      player.markModified('laundryProgress');
+    }
+
     bumpVersion(player);
     await player.save();
-    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()) });
+
+    const mappedPlayer = mergePlayerState(player.toObject());
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mappedPlayer });
 
     return res.status(201).json({
       operationId,
       endsAt,
-      durationSeconds,
+      durationSeconds: calculation.durationSeconds,
+      business: {
+        id: business.id,
+        name: business.name,
+      },
       factionBuffs: factionContext
         ? {
             factionId: factionContext.factionId,
@@ -262,13 +322,15 @@ export async function startLaundry(req, res) {
         : null,
       laundrySummary: {
         grossAmount: amount,
-        originalFeeAmount: fee,
-        effectiveFeeAmount,
-        originalNetAmount: baseNetAmount,
-        bonusCleanAmount,
-        finalNetAmount,
+        feePercentage: calculation.feePercentage,
+        originalFeeAmount: calculation.originalFeeAmount,
+        effectiveFeeAmount: calculation.effectiveFeeAmount,
+        originalNetAmount: calculation.originalNetAmount,
+        bonusCleanAmount: calculation.bonusCleanAmount,
+        finalNetAmount: calculation.finalNetAmount,
+        serverCalculated: true,
       },
-      player: mergePlayerState(player.toObject()),
+      player: mappedPlayer,
     });
   } catch (error) {
     console.error('Erro em startLaundry:', error);

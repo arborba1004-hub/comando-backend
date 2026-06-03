@@ -1,15 +1,26 @@
 import { emitToPlayer } from '../services/socketEmitter.js';
 import { syncBarracoGangStatBonus } from '../services/gangStatisticsService.js';
 import Faction from '../models/Faction.js';
-import { mergePlayerState, sanitizePlayerState } from '../utils/playerMapper.js';
+import { mergePlayerState } from '../utils/playerMapper.js';
 import {
   applyPassiveIncome,
   bumpVersion,
   calculatePlayerPower,
 } from '../utils/gameHelpers.js';
 
-const ALLOWED_TOP_LEVEL_FIELDS = [
-  'hp',
+
+// /player/update agora é deliberadamente estreito.
+// Ele existe só para customização visual do perfil (nome/avatar/cabeçalho).
+// Economia, inventário, gangue, mapa, facção, histórico, VIP e punições devem
+// passar apenas por endpoints oficiais do backend.
+const ALLOWED_PROFILE_FIELDS = new Set(['headerCustomization']);
+
+const SERVER_CONTROLLED_FIELDS = new Set([
+  'niveis',
+  'balances',
+  'pageLevels',
+  'barracoUpgrade',
+  'barracoAccelerators',
   'inventory',
   'skills',
   'vip',
@@ -21,7 +32,6 @@ const ALLOWED_TOP_LEVEL_FIELDS = [
   'laundryProgress',
   'punishments',
   'skillBoostMultiplier',
-  'headerCustomization',
   'ownedVehicles',
   'purchasedAccessories',
   'accessories',
@@ -30,29 +40,81 @@ const ALLOWED_TOP_LEVEL_FIELDS = [
   'factionId',
   'gangId',
   'gang',
-];
-
-// Campos controlados por sistemas oficiais do backend.
-// Eles são ignorados em /player/update para impedir adulteração direta do barraco/economia.
-const SERVER_CONTROLLED_FIELDS = new Set([
-  'niveis',
-  'balances',
-  'pageLevels',
-  'barracoUpgrade',
-  'barracoAccelerators',
+  'gangMembers',
+  'gangStats',
+  'power',
+  'battlePrestige',
+  'dailyCorre',
+  'prisonHistory',
+  'spinRateLimit',
+  'cardCollection',
+  'pvpProtectionUntil',
+  'currentRank',
+  'unlockedRanks',
 ]);
 
-function pickAllowedFields(payload = {}) {
-  const safe = {};
+function sanitizeString(value, maxLength = 120) {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, maxLength);
+}
 
-  for (const [field, value] of Object.entries(payload)) {
-    if (SERVER_CONTROLLED_FIELDS.has(field)) continue;
-    if (ALLOWED_TOP_LEVEL_FIELDS.includes(field)) {
-      safe[field] = value;
+function sanitizeHeaderCustomization(value = {}, current = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+
+  const next = { ...(current || {}) };
+
+  if (Object.prototype.hasOwnProperty.call(value, 'playerNameFont')) {
+    next.playerNameFont = sanitizeString(value.playerNameFont, 40) || current?.playerNameFont || 'oswald';
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'playerNameFontSize')) {
+    next.playerNameFontSize = sanitizeString(value.playerNameFontSize, 32) || current?.playerNameFontSize || '1.875rem';
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'playerNameColor')) {
+    next.playerNameColor = sanitizeString(value.playerNameColor, 32) || current?.playerNameColor || '#ffffff';
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'customName')) {
+    next.customName = sanitizeString(value.customName, 30);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'customAvatar')) {
+    const avatar = typeof value.customAvatar === 'string' ? value.customAvatar : '';
+    // Aceita URLs HTTPS, assets Wix e data URL de imagem comprimida pelo frontend.
+    // Limite evita payload gigante em /player/update.
+    if (
+      avatar === '' ||
+      ((avatar.startsWith('https://') || avatar.startsWith('data:image/')) && avatar.length <= 250_000)
+    ) {
+      next.customAvatar = avatar;
     }
   }
 
-  return safe;
+  return next;
+}
+
+function pickAllowedFields(payload = {}, currentPlayer = {}) {
+  const safe = {};
+  const ignored = [];
+
+  for (const [field, value] of Object.entries(payload || {})) {
+    if (ALLOWED_PROFILE_FIELDS.has(field)) {
+      if (field === 'headerCustomization') {
+        const sanitized = sanitizeHeaderCustomization(value, currentPlayer.headerCustomization || {});
+        if (sanitized) safe.headerCustomization = sanitized;
+      }
+      continue;
+    }
+
+    // Campos sensíveis são ignorados sem erro para manter compatibilidade com clients antigos,
+    // mas não são persistidos de forma alguma.
+    if (SERVER_CONTROLLED_FIELDS.has(field) || field !== 'headerCustomization') {
+      ignored.push(field);
+    }
+  }
+
+  return { safe, ignored };
 }
 
 function safeNumber(value, fallback = 0) {
@@ -177,96 +239,38 @@ export async function getMe(req, res) {
   }
 }
 
+
 export async function updateMe(req, res) {
   try {
     const player = req.player;
     const incoming = req.body || {};
+    const current = player.toObject();
 
-    const allowedIncoming = pickAllowedFields(incoming);
+    const { safe: allowedIncoming, ignored } = pickAllowedFields(incoming, current);
 
-    const mergedSkills = {
-      ...(player.toObject().skills || {}),
-      ...(allowedIncoming.skills || {}),
-    };
+    if (allowedIncoming.headerCustomization) {
+      player.headerCustomization = {
+        ...(current.headerCustomization || {}),
+        ...allowedIncoming.headerCustomization,
+      };
+      if (typeof player.markModified === 'function') player.markModified('headerCustomization');
+    }
 
-    const mergedInventory = {
-      ...(player.toObject().inventory || {}),
-      ...(allowedIncoming.inventory || {}),
-      items: allowedIncoming.inventory?.items ?? player.inventory?.items ?? [],
-      gifts: allowedIncoming.inventory?.gifts ?? player.inventory?.gifts ?? [],
-      rewards: allowedIncoming.inventory?.rewards ?? player.inventory?.rewards ?? [],
-    };
-
-    const mergedNiveis = {
-      ...(player.toObject().niveis || {}),
-      ...(allowedIncoming.niveis || {}),
-    };
-
-    const merged = mergePlayerState({
-      ...player.toObject(),
-      ...allowedIncoming,
-      balances: {
-        ...(player.toObject().balances || {}),
-        ...(allowedIncoming.balances || {}),
-      },
-      niveis: mergedNiveis,
-      skills: mergedSkills,
-      inventory: mergedInventory,
-      pageLevels: {
-        ...(player.toObject().pageLevels || {}),
-        ...(allowedIncoming.pageLevels || {}),
-      },
-      barracoPosition: {
-        ...(player.toObject().barracoPosition || {}),
-        ...(allowedIncoming.barracoPosition || {}),
-      },
-      mapPosition: {
-        ...(player.toObject().mapPosition || {}),
-        ...(allowedIncoming.mapPosition || {}),
-      },
-      laundryProgress: {
-        ...(player.toObject().laundryProgress || {}),
-        ...(allowedIncoming.laundryProgress || {}),
-      },
-      punishments: {
-        ...(player.toObject().punishments || {}),
-        ...(allowedIncoming.punishments || {}),
-        delacao: {
-          ...(player.toObject().punishments?.delacao || {}),
-          ...(allowedIncoming.punishments?.delacao || {}),
-        },
-      },
-      headerCustomization: {
-        ...(player.toObject().headerCustomization || {}),
-        ...(allowedIncoming.headerCustomization || {}),
-      },
-      accessories: {
-        ...(player.toObject().accessories || {}),
-        ...(allowedIncoming.accessories || {}),
-      },
-      gang: {
-        ...(player.toObject().gang || {}),
-        ...(allowedIncoming.gang || {}),
-        members: Array.isArray(allowedIncoming.gang?.members)
-          ? allowedIncoming.gang.members
-          : player.toObject().gang?.members || [],
-      },
-    });
-
-    merged.power = calculatePlayerPower(merged);
-
-    const sanitized = sanitizePlayerState(merged);
-
-    Object.assign(player, sanitized);
     bumpVersion(player);
     await player.save();
 
     const faction = await getFactionContextForPlayer(player);
-    emitToPlayer(String(player._id), 'playerUpdate', { player: mergePlayerState(player.toObject()), faction });
+    const mappedPlayer = mergePlayerState(player.toObject());
+
+    emitToPlayer(String(player._id), 'playerUpdate', { player: mappedPlayer, faction });
 
     return res.json({
-      player: mergePlayerState(player.toObject()),
+      player: mappedPlayer,
       faction,
+      ignoredFields: ignored,
+      message: ignored.length
+        ? 'Campos sensíveis ignorados. Use os endpoints oficiais do backend para economia, mapa, gangue, inventário, histórico, VIP e punições.'
+        : undefined,
     });
   } catch (error) {
     console.error('Erro em /player/update:', error);

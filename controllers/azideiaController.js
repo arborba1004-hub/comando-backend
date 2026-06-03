@@ -903,11 +903,19 @@ function emitAzideiaMapChanged(reason, extra = {}) {
 }
 
 function emitAzideiaMissionChanged(reason, mission) {
-  broadcastToAll('azideia:missionChanged', {
+  const payload = {
     reason,
     atIso: new Date().toISOString(),
     mission: normalizeMission(mission),
-  });
+  };
+  broadcastToAll('azideia:missionChanged', payload);
+
+  // Evento explícito para a animação do comboio da Azidéia. Mantém o evento
+  // antigo por compatibilidade, mas dá à GamePage um gatilho inequívoco para
+  // iniciar o visual de X9/Correria/Mestre de Obras.
+  if (reason === 'mission_started') {
+    broadcastToAll('azideia:convoyStarted', { ...payload, reason: 'convoy_started' });
+  }
 }
 
 function normalizeMission(mission) {
@@ -974,7 +982,7 @@ function getAzideiaTravelDuration(routeTiles, player) {
   const barracoLevel = Math.max(1, Math.floor(toNumber(player?.niveis?.barracoLevel, 1)));
   const levelSpeedMultiplier = 1 + (barracoLevel - 1) * 0.025;
   const msPerTile = Math.max(180, Math.round(520 / levelSpeedMultiplier));
-  return Math.max(1400, Math.min(18000, tileCount * msPerTile));
+  return Math.max(6500, Math.min(24000, tileCount * msPerTile));
 }
 
 function releaseAzideiaGangMember(player, mission) {

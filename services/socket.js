@@ -13,6 +13,8 @@ const playerTeleportTimestamps = new Map();
 
 const MOVE_COOLDOWN_MS     = 1000;
 const TELEPORT_COOLDOWN_MS = 30000;
+const MAP_SNAPSHOT_CACHE_MS = 2000;
+let mapSnapshotCache = { expiresAt: 0, data: null };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function send(ws, event, data) {
@@ -49,11 +51,22 @@ function projectForMap(player) {
 }
 
 async function fetchMapSnapshot(limit = 1000) {
+  const now = Date.now();
+  if (mapSnapshotCache.data && mapSnapshotCache.expiresAt > now) {
+    return mapSnapshotCache.data;
+  }
+
   const players = await Player.find(
     {},
     { _id: 1, name: 1, mapPosition: 1, power: 1, factionId: 1, 'niveis.barracoLevel': 1 }
-  ).limit(limit).lean();
-  return players.map(projectForMap);
+  )
+    .sort({ 'mapPosition.tileY': 1, 'mapPosition.tileX': 1, _id: 1 })
+    .limit(limit)
+    .lean();
+
+  const data = players.map(projectForMap);
+  mapSnapshotCache = { expiresAt: now + MAP_SNAPSHOT_CACHE_MS, data };
+  return data;
 }
 
 function clampTile(value) {
@@ -153,13 +166,10 @@ export function initSocket(server) {
       if (fullPlayer) send(ws, 'playerInit', { player: mergePlayerState(fullPlayer) });
     } catch (err) { console.error('❌ playerInit:', err.message); }
 
-    // ── 2. mapSnapshot ───────────────────────────────────────────────────
-    try {
-      const snapshot = await fetchMapSnapshot();
-      send(ws, 'mapSnapshot', snapshot.filter((p) => p.id !== playerId));
-    } catch (err) { console.error('❌ mapSnapshot:', err.message); }
-
-    // ── 3. Anuncia chegada ───────────────────────────────────────────────
+    // ── 2. Anuncia chegada ───────────────────────────────────────────────
+    // O snapshot completo não é enviado automaticamente aqui para não duplicar
+    // consultas Mongo. A GamePage pede 'requestMapSnapshot' quando a camada 3D
+    // já está pronta para receber o payload.
     broadcast('playerJoined', { id: playerId, name: playerName, tileX, tileY, barracoLevel, power, factionId }, ws);
 
     // ── Mensagens do cliente ──────────────────────────────────────────────
@@ -184,6 +194,7 @@ export function initSocket(server) {
         const cx = clampTile(tx); const cy = clampTile(ty);
         tileX = cx; tileY = cy;
 
+        mapSnapshotCache.expiresAt = 0;
         Player.findByIdAndUpdate(playerId, {
           $set: { 'mapPosition.tileX': cx, 'mapPosition.tileY': cy },
         }).catch((e) => console.error('❌ move save:', e.message));
@@ -208,6 +219,7 @@ export function initSocket(server) {
         const oldPosition = { tileX, tileY };
         tileX = cx; tileY = cy;
 
+        mapSnapshotCache.expiresAt = 0;
         Player.findByIdAndUpdate(playerId, {
           $set: { 'mapPosition.tileX': cx, 'mapPosition.tileY': cy },
         }).catch((e) => console.error('❌ teleport save:', e.message));

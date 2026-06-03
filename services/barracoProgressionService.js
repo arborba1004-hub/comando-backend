@@ -39,6 +39,14 @@ function parseIsoTime(value) {
   return Number.isFinite(time) ? time : 0;
 }
 
+// A Garagem da Fuga atual possui 20 estágios/veículos, enquanto o barraco vai até 100.
+// Para não travar o barraco no nível 21, cada 5 níveis de barraco exigem +1 estágio de Fuga.
+// Ex.: barraco 1-5 => Fuga 1; 6-10 => Fuga 2; ...; 96-100 => Fuga 20.
+export function getFugaRequirementForBarracoLevel(level) {
+  const safeLevel = normalizeLevel(level, 1);
+  return clamp(Math.ceil(safeLevel / 5), 1, 20);
+}
+
 export function getBarracoUpgradeCost(level) {
   const safeLevel = normalizeLevel(level, 1);
   return Math.floor(
@@ -171,6 +179,7 @@ export function getBarracoUpgradeRequirements(player = {}) {
   // os sistemas centrais precisam estar no nível N.
   // Isso força progressão horizontal, fortalece retenção e impede rush de barraco.
   const sideRequirement = Math.max(1, barracoLevel);
+  const fugaRequirement = getFugaRequirementForBarracoLevel(barracoLevel);
 
   const rules = [
     {
@@ -207,8 +216,8 @@ export function getBarracoUpgradeRequirements(player = {}) {
     },
     {
       key: 'fuga',
-      ok: fugaLevel >= sideRequirement,
-      reason: `Sua Fuga precisa estar no nível ${sideRequirement}. Atual: ${fugaLevel}.`,
+      ok: fugaLevel >= fugaRequirement,
+      reason: `Sua Fuga precisa estar no estágio ${fugaRequirement} da garagem. Atual: ${fugaLevel}.`,
     },
     {
       key: 'bribery',
@@ -244,13 +253,13 @@ export function getBarracoUpgradeRequirements(player = {}) {
     },
     requiredSystemLevels: {
       arsenal: sideRequirement,
-      fuga: sideRequirement,
+      fuga: fugaRequirement,
       bribery: sideRequirement,
       luxury: sideRequirement,
     },
     requirements: {
       arsenal: sideRequirement,
-      fuga: sideRequirement,
+      fuga: fugaRequirement,
       bribery: sideRequirement,
       luxury: sideRequirement,
     },

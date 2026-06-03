@@ -115,6 +115,7 @@ export async function startBarracoUpgrade(req, res) {
         'niveis.barracoLevel': previousLevel,
         'balances.cleanMoney': { $gte: cost },
         'punishments.levelProgressionBlocked': { $ne: true },
+        'punishments.cleanMoneyBlocked': { $ne: true },
         $or: [
           { 'barracoUpgrade.active': { $ne: true } },
           { barracoUpgrade: { $exists: false } },
@@ -204,9 +205,14 @@ export async function claimBarracoUpgrade(req, res) {
     const updatedPlayer = await Player.findOneAndUpdate(
       {
         _id: player._id,
+        'niveis.barracoLevel': previousLevel,
         'barracoUpgrade.active': true,
+        'barracoUpgrade.fromLevel': previousLevel,
         'barracoUpgrade.toLevel': nextLevel,
-        'barracoUpgrade.endsAt': { $lte: nowIso },
+        $and: [
+          { 'barracoUpgrade.endsAt': operation.endsAt },
+          { 'barracoUpgrade.endsAt': { $lte: nowIso } },
+        ],
       },
       {
         $set: {
@@ -320,6 +326,8 @@ export async function accelerateBarracoUpgrade(req, res) {
       {
         _id: player._id,
         'barracoUpgrade.active': true,
+        'barracoUpgrade.status': 'building',
+        'barracoUpgrade.endsAt': operation.endsAt,
         'barracoAccelerators.seconds': { $gte: applySeconds },
       },
       {

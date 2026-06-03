@@ -12,6 +12,34 @@ function ensureInventory(player) {
   }
 }
 
+
+function getWeaponLevel(item = {}) {
+  return Math.max(1, Math.floor(Number(item?.level || item?.arsenalLevel || 1)));
+}
+
+function syncArsenalPageLevel(player) {
+  if (!player.pageLevels || typeof player.pageLevels !== 'object') player.pageLevels = {};
+  if (!player.niveis || typeof player.niveis !== 'object') player.niveis = {};
+
+  const weaponItems = Array.isArray(player.inventory?.items)
+    ? player.inventory.items.filter((item) => item?.source === 'arsenal' || item?.category === 'weapon' || item?.type === 'weapon')
+    : [];
+  const highestWeaponLevel = weaponItems.reduce(
+    (max, item) => Math.max(max, getWeaponLevel(item)),
+    1
+  );
+
+  player.pageLevels.arsenal = Math.max(Number(player.pageLevels?.arsenal || 1), highestWeaponLevel);
+  player.niveis.arsenalLevel = Math.max(Number(player.niveis?.arsenalLevel || 1), highestWeaponLevel);
+
+  if (typeof player.markModified === 'function') {
+    player.markModified('pageLevels');
+    player.markModified('niveis');
+  }
+
+  return player.pageLevels.arsenal;
+}
+
 export async function buyWeapon(req, res) {
   try {
     const player = req.player;
@@ -55,6 +83,8 @@ export async function buyWeapon(req, res) {
         source: 'arsenal',
       });
     }
+
+    syncArsenalPageLevel(player);
 
     bumpVersion(player);
     await player.save();
@@ -100,6 +130,7 @@ export async function upgradeWeapon(req, res) {
     player.balances.dirtyMoney -= cost;
     item.level = targetLevel;
     item.upgradedAt = new Date().toISOString();
+    syncArsenalPageLevel(player);
 
     bumpVersion(player);
     await player.save();

@@ -14,11 +14,11 @@ import {
 acceptJoinRequest,
   rejectJoinRequest,
 } from '../controllers/factionController.js';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import authMiddleware, { authOnly } from '../middlewares/authMiddleware.js';
 
 const router = Router();
 
-router.get('/list', authMiddleware, listFactions);
+router.get('/list', authOnly, listFactions);
 router.get('/my', authMiddleware, getMyFaction);
 
 router.post('/create', authMiddleware, createFaction);

@@ -1,5 +1,5 @@
 import express from 'express';
-import authMiddleware from '../middlewares/authMiddleware.js';
+import authMiddleware, { authOnly } from '../middlewares/authMiddleware.js';
 import {
   listPlayersWithoutFaction,
   invitePlayerToFaction,
@@ -7,7 +7,7 @@ import {
 
 const router = express.Router();
 
-router.get('/players-without-faction', authMiddleware, listPlayersWithoutFaction);
+router.get('/players-without-faction', authOnly, listPlayersWithoutFaction);
 router.post('/invite', authMiddleware, invitePlayerToFaction);
 
 export default router;

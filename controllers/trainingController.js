@@ -1,8 +1,9 @@
 import { randomUUID } from 'crypto';
 import { bumpVersion } from '../utils/gameHelpers.js';
 import { emitToPlayer } from '../services/socketEmitter.js';
-import { recalculateGangStats } from '../utils/playerMapper.js';
+import { mergePlayerState, recalculateGangStats } from '../utils/playerMapper.js';
 import { ECONOMY } from '../config/economyConfig.js';
+import Player from '../models/Player.js';
 import {
   applyBarracoGangStatSourceToList,
   buildGangStatSnapshot,
@@ -41,6 +42,47 @@ const TRAINING_DURATION_MIN_BY_LEVEL = {
 };
 
 const LEVEL_COST_MULTIPLIER_BASE = 1.32;
+
+const TRAINING_LOCK_STALE_MS = 90 * 1000;
+
+async function acquireTrainingLock(playerId, lockId) {
+  const staleIso = new Date(Date.now() - TRAINING_LOCK_STALE_MS).toISOString();
+  return Player.findOneAndUpdate(
+    {
+      _id: playerId,
+      $or: [
+        { 'operationLocks.training.id': null },
+        { 'operationLocks.training.id': '' },
+        { 'operationLocks.training.atIso': null },
+        { 'operationLocks.training.atIso': { $lte: staleIso } },
+        { operationLocks: { $exists: false } },
+      ],
+    },
+    {
+      $set: {
+        'operationLocks.training.id': lockId,
+        'operationLocks.training.atIso': new Date().toISOString(),
+      },
+    },
+    { new: true },
+  );
+}
+
+async function releaseTrainingLock(playerId, lockId) {
+  if (!playerId || !lockId) return;
+  await Player.updateOne(
+    { _id: playerId, 'operationLocks.training.id': lockId },
+    { $set: { 'operationLocks.training.id': null, 'operationLocks.training.atIso': null } },
+  );
+}
+
+function clearTrainingLockOnDocument(player) {
+  if (!player) return;
+  player.operationLocks = player.operationLocks || {};
+  player.operationLocks.training = { id: null, atIso: null };
+  if (typeof player.markModified === 'function') player.markModified('operationLocks');
+}
+
 
 function ensureGang(player) {
   if (!player.gang) {
@@ -132,6 +174,7 @@ function buildTrainingPayload(player) {
     trainingSlots: gang.trainingSlots,
     balances: player.balances,
     playerBalances: player.balances,
+    player: mergePlayerState(typeof player.toObject === 'function' ? player.toObject() : player),
     config: {
       barracoLevel,
       maxTroopLevel: getMaxTroopLevel(barracoLevel),
@@ -167,9 +210,13 @@ async function saveAndBroadcastTrainingState(player, event = 'training:updated')
 // ─────────────────────────────────────────────────────────────
 
 export async function startTraining(req, res) {
+  let trainingLockId = null;
+  let lockedPlayerId = null;
+
   try {
-    const player = req.player;
-    const gang = ensureGang(player);
+    const initialPlayer = req.player;
+    if (!initialPlayer?._id) return res.status(401).json({ error: 'Usuário não autenticado' });
+
     const { ctKey, troopType, troopLevel } = req.body || {};
 
     if (!VALID_CT_KEYS.includes(String(ctKey))) {
@@ -177,6 +224,26 @@ export async function startTraining(req, res) {
     }
     if (!VALID_MEMBER_TYPES.includes(String(troopType))) {
       return res.status(400).json({ error: 'Tipo de membro inválido' });
+    }
+
+    trainingLockId = randomUUID();
+    lockedPlayerId = initialPlayer._id;
+    const player = await acquireTrainingLock(lockedPlayerId, trainingLockId);
+    if (!player) {
+      trainingLockId = null;
+      return res.status(409).json({
+        error: 'Outro treinamento está sendo processado. Tente novamente em instantes.',
+        reason: 'training_operation_in_progress',
+      });
+    }
+
+    const gang = ensureGang(player);
+
+    if (player?.punishments?.dirtyMoneyBlocked) {
+      return res.status(423).json({
+        error: 'Dinheiro sujo bloqueado. Treinamento indisponível durante a punição.',
+        reason: 'dirty_money_blocked',
+      });
     }
 
     const barracoLevel = getBarracoLevel(player);
@@ -198,11 +265,19 @@ export async function startTraining(req, res) {
       (slot) => String(slot.ctKey) === String(ctKey)
     );
     if (ctAlreadyOccupied) {
-      if (completedChanged) await saveAndBroadcastTrainingState(player);
+      if (completedChanged) {
+        clearTrainingLockOnDocument(player);
+        trainingLockId = null;
+        await saveAndBroadcastTrainingState(player);
+      }
       return res.status(409).json({ error: 'Este CT já possui um treinamento pendente' });
     }
     if (gang.trainingSlots.length >= 4) {
-      if (completedChanged) await saveAndBroadcastTrainingState(player);
+      if (completedChanged) {
+        clearTrainingLockOnDocument(player);
+        trainingLockId = null;
+        await saveAndBroadcastTrainingState(player);
+      }
       return res.status(409).json({ error: 'Todos os CTs já estão ocupados' });
     }
 
@@ -214,7 +289,11 @@ export async function startTraining(req, res) {
 
     const dirtyMoney = Number(player.balances?.dirtyMoney || 0);
     if (dirtyMoney < cost) {
-      if (completedChanged) await saveAndBroadcastTrainingState(player);
+      if (completedChanged) {
+        clearTrainingLockOnDocument(player);
+        trainingLockId = null;
+        await saveAndBroadcastTrainingState(player);
+      }
       return res.status(400).json({
         error: `Dinheiro sujo insuficiente. Precisa de ${cost.toLocaleString('pt-BR')}.`,
       });
@@ -235,6 +314,8 @@ export async function startTraining(req, res) {
 
     player.balances.dirtyMoney = Math.max(0, dirtyMoney - cost);
     gang.trainingSlots.push(slot);
+    clearTrainingLockOnDocument(player);
+    trainingLockId = null;
 
     const payload = await saveAndBroadcastTrainingState(player);
     return res.status(201).json({
@@ -244,19 +325,39 @@ export async function startTraining(req, res) {
   } catch (error) {
     console.error('Erro em startTraining:', error);
     return res.status(500).json({ error: 'Erro ao iniciar treinamento' });
+  } finally {
+    if (trainingLockId && lockedPlayerId) {
+      await releaseTrainingLock(lockedPlayerId, trainingLockId).catch(() => {});
+    }
   }
 }
 
 export async function collectTraining(req, res) {
+  let trainingLockId = null;
+  let lockedPlayerId = null;
+
   try {
-    const player = req.player;
-    const gang = ensureGang(player);
+    const initialPlayer = req.player;
+    if (!initialPlayer?._id) return res.status(401).json({ error: 'Usuário não autenticado' });
+
     const { slotId } = req.body || {};
 
     if (!slotId) {
       return res.status(400).json({ error: 'slotId é obrigatório' });
     }
 
+    trainingLockId = randomUUID();
+    lockedPlayerId = initialPlayer._id;
+    const player = await acquireTrainingLock(lockedPlayerId, trainingLockId);
+    if (!player) {
+      trainingLockId = null;
+      return res.status(409).json({
+        error: 'Outra coleta/treinamento está sendo processada. Tente novamente em instantes.',
+        reason: 'training_operation_in_progress',
+      });
+    }
+
+    const gang = ensureGang(player);
     updateCompletedTrainingSlots(player);
 
     const slotIndex = gang.trainingSlots.findIndex(
@@ -292,6 +393,8 @@ export async function collectTraining(req, res) {
 
     gang.members.push(...newMembers);
     gang.trainingSlots.splice(slotIndex, 1);
+    clearTrainingLockOnDocument(player);
+    trainingLockId = null;
 
     const payload = await saveAndBroadcastTrainingState(player);
     return res.json({
@@ -302,6 +405,10 @@ export async function collectTraining(req, res) {
   } catch (error) {
     console.error('Erro em collectTraining:', error);
     return res.status(500).json({ error: 'Erro ao coletar treinamento' });
+  } finally {
+    if (trainingLockId && lockedPlayerId) {
+      await releaseTrainingLock(lockedPlayerId, trainingLockId).catch(() => {});
+    }
   }
 }
 

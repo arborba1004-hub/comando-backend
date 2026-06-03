@@ -197,10 +197,11 @@ export async function getChatMessages(req, res) {
     }
 
     const messages = await ChatMessage.find(filters)
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: -1 })
       .limit(300)
       .lean();
 
+    messages.reverse();
     return res.json(messages.map(normalizeMessage));
   } catch (error) {
     console.error('Erro ao buscar mensagens:', error);

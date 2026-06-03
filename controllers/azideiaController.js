@@ -33,6 +33,47 @@ const VISIBLE_TARGET_CACHE_MS = 1500;
 let lastTargetPoolEnsureAt = 0;
 let targetPoolEnsurePromise = null;
 let visibleTargetsCache = { expiresAt: 0, data: null };
+
+const AZIDEIA_START_LOCK_STALE_MS = 90 * 1000;
+
+async function acquireAzideiaStartLock(playerId, lockId) {
+  const staleIso = new Date(Date.now() - AZIDEIA_START_LOCK_STALE_MS).toISOString();
+  return Player.findOneAndUpdate(
+    {
+      _id: playerId,
+      $or: [
+        { 'operationLocks.azideiaStart.id': null },
+        { 'operationLocks.azideiaStart.id': '' },
+        { 'operationLocks.azideiaStart.atIso': null },
+        { 'operationLocks.azideiaStart.atIso': { $lte: staleIso } },
+        { operationLocks: { $exists: false } },
+      ],
+    },
+    {
+      $set: {
+        'operationLocks.azideiaStart.id': lockId,
+        'operationLocks.azideiaStart.atIso': new Date().toISOString(),
+      },
+    },
+    { new: true },
+  );
+}
+
+async function releaseAzideiaStartLock(playerId, lockId) {
+  if (!playerId || !lockId) return;
+  await Player.updateOne(
+    { _id: playerId, 'operationLocks.azideiaStart.id': lockId },
+    { $set: { 'operationLocks.azideiaStart.id': null, 'operationLocks.azideiaStart.atIso': null } },
+  );
+}
+
+function clearAzideiaStartLockOnDocument(player) {
+  if (!player) return;
+  player.operationLocks = player.operationLocks || {};
+  player.operationLocks.azideiaStart = { id: null, atIso: null };
+  if (typeof player.markModified === 'function') player.markModified('operationLocks');
+}
+
 const lastMissionReconcileByPlayer = new Map();
 
 function availableTargetQuery(type) {
@@ -1563,14 +1604,30 @@ export async function getActiveAzideiaMissions(req, res) {
 }
 
 export async function attackX9(req, res) {
+  let azideiaStartLockId = null;
+  let lockedPlayerId = null;
+
   try {
-    const player = req.player;
+    let player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     const targetId = String(req.params?.targetId || req.body?.targetId || '').trim();
     if (!mongoose.Types.ObjectId.isValid(targetId)) {
       return res.status(400).json({ error: 'X9 inválido', reason: 'invalid_target_id' });
     }
+
+
+    azideiaStartLockId = randomUUID();
+    lockedPlayerId = player._id;
+    const lockedPlayer = await acquireAzideiaStartLock(lockedPlayerId, azideiaStartLockId);
+    if (!lockedPlayer) {
+      azideiaStartLockId = null;
+      return res.status(409).json({
+        error: 'Outro comboio Azidéia está sendo iniciado. Tente novamente em instantes.',
+        reason: 'azideia_start_in_progress',
+      });
+    }
+    player = lockedPlayer;
 
     await reconcileAzideiaMissionsForPlayer(player);
 
@@ -1599,6 +1656,13 @@ export async function attackX9(req, res) {
         error: 'Limite diário de Azidéia atingido.',
         reason: 'daily_limit_reached',
         ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras),
+      });
+    }
+
+    if (player?.punishments?.dirtyMoneyBlocked) {
+      return res.status(423).json({
+        error: 'Dinheiro sujo bloqueado. Você não pode lançar Azidéia durante a punição.',
+        reason: 'dirty_money_blocked',
       });
     }
 
@@ -1703,6 +1767,8 @@ export async function attackX9(req, res) {
       player.markModified('azideiaDaily');
     }
 
+    clearAzideiaStartLockOnDocument(player);
+    azideiaStartLockId = null;
     bumpVersion(player);
     await player.save();
     emitPlayerUpdate(player);
@@ -1724,6 +1790,10 @@ export async function attackX9(req, res) {
   } catch (error) {
     console.error('[AZIDEIA_ATTACK_X9]', error);
     return res.status(500).json({ error: 'Erro ao lançar Azidéia contra X9' });
+  } finally {
+    if (azideiaStartLockId && lockedPlayerId) {
+      await releaseAzideiaStartLock(lockedPlayerId, azideiaStartLockId).catch(() => {});
+    }
   }
 }
 
@@ -1781,14 +1851,30 @@ async function grantMestreObrasRewards({ player, mission }) {
 }
 
 export async function negotiateCorreria(req, res) {
+  let azideiaStartLockId = null;
+  let lockedPlayerId = null;
+
   try {
-    const player = req.player;
+    let player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     const targetId = String(req.params?.targetId || req.body?.targetId || '').trim();
     if (!mongoose.Types.ObjectId.isValid(targetId)) {
       return res.status(400).json({ error: 'Correria inválido', reason: 'invalid_target_id' });
     }
+
+
+    azideiaStartLockId = randomUUID();
+    lockedPlayerId = player._id;
+    const lockedPlayer = await acquireAzideiaStartLock(lockedPlayerId, azideiaStartLockId);
+    if (!lockedPlayer) {
+      azideiaStartLockId = null;
+      return res.status(409).json({
+        error: 'Outro comboio Azidéia está sendo iniciado. Tente novamente em instantes.',
+        reason: 'azideia_start_in_progress',
+      });
+    }
+    player = lockedPlayer;
 
     await reconcileAzideiaMissionsForPlayer(player);
 
@@ -1904,6 +1990,8 @@ export async function negotiateCorreria(req, res) {
       player.markModified('azideiaDaily');
     }
 
+    clearAzideiaStartLockOnDocument(player);
+    azideiaStartLockId = null;
     bumpVersion(player);
     await player.save();
     emitPlayerUpdate(player);
@@ -1925,18 +2013,38 @@ export async function negotiateCorreria(req, res) {
   } catch (error) {
     console.error('[AZIDEIA_NEGOTIATE_CORRERIA]', error);
     return res.status(500).json({ error: 'Erro ao negociar com Correria' });
+  } finally {
+    if (azideiaStartLockId && lockedPlayerId) {
+      await releaseAzideiaStartLock(lockedPlayerId, azideiaStartLockId).catch(() => {});
+    }
   }
 }
 
 export async function payMestreObras(req, res) {
+  let azideiaStartLockId = null;
+  let lockedPlayerId = null;
+
   try {
-    const player = req.player;
+    let player = req.player;
     if (!player) return res.status(401).json({ error: 'Usuário não autenticado' });
 
     const targetId = String(req.params?.targetId || req.body?.targetId || '').trim();
     if (!mongoose.Types.ObjectId.isValid(targetId)) {
       return res.status(400).json({ error: 'Mestre de Obras inválido', reason: 'invalid_target_id' });
     }
+
+
+    azideiaStartLockId = randomUUID();
+    lockedPlayerId = player._id;
+    const lockedPlayer = await acquireAzideiaStartLock(lockedPlayerId, azideiaStartLockId);
+    if (!lockedPlayer) {
+      azideiaStartLockId = null;
+      return res.status(409).json({
+        error: 'Outro comboio Azidéia está sendo iniciado. Tente novamente em instantes.',
+        reason: 'azideia_start_in_progress',
+      });
+    }
+    player = lockedPlayer;
 
     await reconcileAzideiaMissionsForPlayer(player);
 
@@ -1965,6 +2073,13 @@ export async function payMestreObras(req, res) {
         error: 'Limite diário de Mestre de Obras atingido.',
         reason: 'daily_limit_reached',
         ...buildDailyEnvelope(player, activeCounts.travellingX9, activeCounts.travellingCorreria, activeCounts.travellingMestreObras),
+      });
+    }
+
+    if (player?.punishments?.dirtyMoneyBlocked) {
+      return res.status(423).json({
+        error: 'Dinheiro sujo bloqueado. Você não pode lançar Azidéia durante a punição.',
+        reason: 'dirty_money_blocked',
       });
     }
 
@@ -2067,6 +2182,8 @@ export async function payMestreObras(req, res) {
       player.markModified('azideiaDaily');
     }
 
+    clearAzideiaStartLockOnDocument(player);
+    azideiaStartLockId = null;
     bumpVersion(player);
     await player.save();
     emitPlayerUpdate(player);
@@ -2088,6 +2205,10 @@ export async function payMestreObras(req, res) {
   } catch (error) {
     console.error('[AZIDEIA_PAY_MESTRE_OBRAS]', error);
     return res.status(500).json({ error: 'Erro ao pagar Mestre de Obras' });
+  } finally {
+    if (azideiaStartLockId && lockedPlayerId) {
+      await releaseAzideiaStartLock(lockedPlayerId, azideiaStartLockId).catch(() => {});
+    }
   }
 }
 
@@ -2393,35 +2514,40 @@ export async function claimMyAzideiaRewards(req, res) {
       const quantity = Math.max(0, Math.floor(toNumber(batch.quantityPerMember, 1)));
       if (quantity <= 0) continue;
 
+      let grant = 0;
       if (rewardType === 'corre') {
-        const grant = Math.min(quantity, correRemaining);
-        if (grant <= 0) continue;
+        grant = Math.min(quantity, correRemaining);
+      } else if (rewardType === 'barraco_time') {
+        grant = mestreObrasRemaining > 0 ? quantity : 0;
+      } else {
+        grant = Math.min(quantity, x9Remaining);
+      }
+      if (grant <= 0) continue;
 
+      const claimResult = await AzideiaRewardBatch.updateOne(
+        { _id: batch._id, claimedBy: { $ne: playerId } },
+        { $addToSet: { claimedBy: playerId } },
+      );
+      if (!claimResult?.modifiedCount) continue;
+
+      if (rewardType === 'corre') {
         player.balances.corre = Math.max(0, Math.floor(toNumber(player.balances.corre, 0))) + grant;
         daily.correriaFactionCorreReceived = normalizeCorreriaFactionRewardCap(daily.correriaFactionCorreReceived + grant);
         correRemaining -= grant;
         claimed.corre += grant;
       } else if (rewardType === 'barraco_time') {
-        if (mestreObrasRemaining <= 0) continue;
-
-        barracoAccelerators.seconds += quantity;
+        barracoAccelerators.seconds += grant;
         daily.mestreObrasFactionBarracoAcceleratorsReceived = normalizeMestreObrasFactionRewardCap(
           daily.mestreObrasFactionBarracoAcceleratorsReceived + 1,
         );
         mestreObrasRemaining -= 1;
-        claimed.barraco_time += quantity;
+        claimed.barraco_time += grant;
       } else {
-        const grant = Math.min(quantity, x9Remaining);
-        if (grant <= 0) continue;
-
         convoyAccelerators.twoX += grant;
         daily.x9FactionAcceleratorsReceived = normalizeX9FactionRewardCap(daily.x9FactionAcceleratorsReceived + grant);
         x9Remaining -= grant;
         claimed.convoy_2x += grant;
       }
-
-      batch.claimedBy.push(playerId);
-      await batch.save();
     }
 
     const totalClaimed = claimed.convoy_2x + claimed.corre + claimed.barraco_time;

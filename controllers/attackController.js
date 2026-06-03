@@ -38,6 +38,46 @@ function isRequestAuthenticated(req) {
 const ATTACK_SPACE_WIDTH_TILES  = 6;
 const ATTACK_SPACE_HEIGHT_TILES = 6;
 
+const ATTACK_START_LOCK_STALE_MS = 90 * 1000;
+
+async function acquireAttackStartLock(playerId, lockId) {
+  const staleIso = new Date(Date.now() - ATTACK_START_LOCK_STALE_MS).toISOString();
+  return Player.findOneAndUpdate(
+    {
+      _id: playerId,
+      $or: [
+        { 'operationLocks.attackStart.id': null },
+        { 'operationLocks.attackStart.id': '' },
+        { 'operationLocks.attackStart.atIso': null },
+        { 'operationLocks.attackStart.atIso': { $lte: staleIso } },
+        { operationLocks: { $exists: false } },
+      ],
+    },
+    {
+      $set: {
+        'operationLocks.attackStart.id': lockId,
+        'operationLocks.attackStart.atIso': new Date().toISOString(),
+      },
+    },
+    { new: true },
+  );
+}
+
+async function releaseAttackStartLock(playerId, lockId) {
+  if (!playerId || !lockId) return;
+  await Player.updateOne(
+    { _id: playerId, 'operationLocks.attackStart.id': lockId },
+    { $set: { 'operationLocks.attackStart.id': null, 'operationLocks.attackStart.atIso': null } },
+  );
+}
+
+function clearAttackStartLockOnDocument(player) {
+  if (!player) return;
+  player.operationLocks = player.operationLocks || {};
+  player.operationLocks.attackStart = { id: null, atIso: null };
+  if (typeof player.markModified === 'function') player.markModified('operationLocks');
+}
+
 function getAttackCenterFromMapPosition(position = {}) {
   const originTileX = toNumber(position?.tileX, 0);
   const originTileY = toNumber(position?.tileY, 0);
@@ -344,12 +384,46 @@ async function resolveAttackDocument(attack) {
     return { ok: false, status: 409, error: 'A marcha ainda não chegou ao destino', remainingMs };
   }
 
+  const resolutionLockId = randomUUID();
+  const staleLockIso = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const lockedAttack = await Attack.findOneAndUpdate(
+    {
+      id: String(attack.id),
+      status: 'travelling',
+      $or: [
+        { resolutionLockId: null },
+        { resolutionLockId: '' },
+        { resolutionLockAtIso: { $lte: staleLockIso } },
+        { resolutionLockAtIso: null },
+      ],
+    },
+    {
+      $set: {
+        resolutionLockId,
+        resolutionLockAtIso: new Date().toISOString(),
+      },
+    },
+    { new: true },
+  );
+
+  if (!lockedAttack) {
+    const latest = await Attack.findOne({ id: String(attack.id) });
+    if (latest?.status === 'resolved') {
+      return { ok: true, data: buildResolvedPayload(latest) };
+    }
+    return { ok: false, status: 409, error: 'Batalha já está sendo resolvida. Tente novamente em instantes.' };
+  }
+
+  attack = lockedAttack;
+
   const attacker = await Player.findById(String(attack.attackerId));
   const defender = await Player.findById(String(attack.targetId));
 
   if (!attacker || !defender) {
     attack.status = 'cancelled';
     attack.resolvedAtIso = new Date().toISOString();
+    attack.resolutionLockId = null;
+    attack.resolutionLockAtIso = null;
     await attack.save();
     return { ok: false, status: 404, error: 'Jogadores não encontrados (batalha cancelada)' };
   }
@@ -439,6 +513,8 @@ async function resolveAttackDocument(attack) {
   attack.critical      = result.critical;
   attack.loot          = result.lootDirtyMoney;
   attack.resolvedAtIso = new Date().toISOString();
+  attack.resolutionLockId = null;
+  attack.resolutionLockAtIso = null;
   attack.report = {
     resolution,
     winner:               result.winner,
@@ -674,10 +750,12 @@ export async function estimateBattle(req, res) {
 export async function startBattle(req, res) {
   let attackId = null;
   let attackerIdForRollback = null;
+  let attackStartLockId = null;
 
   try {
     const requesterId = getRequesterId(req);
     if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
+    attackerIdForRollback = requesterId;
 
     const {
       targetId,
@@ -688,8 +766,15 @@ export async function startBattle(req, res) {
 
     if (!targetId) return res.status(400).json({ error: 'targetId é obrigatório' });
 
-    const attacker = await Player.findById(requesterId);
-    if (!attacker) return res.status(401).json({ error: 'Atacante não encontrado' });
+    attackStartLockId = randomUUID();
+    let attacker = await acquireAttackStartLock(requesterId, attackStartLockId);
+    if (!attacker) {
+      attackStartLockId = null;
+      return res.status(409).json({
+        error: 'Outro ataque está sendo iniciado. Tente novamente em instantes.',
+        reason: 'attack_start_in_progress',
+      });
+    }
 
     const defender = await Player.findById(String(targetId));
     if (!defender)  return res.status(404).json({ error: 'Defensor não encontrado' });
@@ -779,6 +864,8 @@ export async function startBattle(req, res) {
       }
     }
 
+    clearAttackStartLockOnDocument(attacker);
+    attackStartLockId = null;
     markGangModified(attacker);
     bumpVersion(attacker);
     await attacker.save();
@@ -871,10 +958,15 @@ export async function startBattle(req, res) {
     return res.status(201).json({
       success: true,
       ...buildResponse(attack),
+      player: mergePlayerState(typeof attacker.toObject === 'function' ? attacker.toObject() : attacker),
     });
   } catch (err) {
     console.error('[START_BATTLE]', err);
     return res.status(500).json({ error: 'Erro ao iniciar batalha' });
+  } finally {
+    if (attackStartLockId && attackerIdForRollback) {
+      await releaseAttackStartLock(attackerIdForRollback, attackStartLockId).catch(() => {});
+    }
   }
 }
 
@@ -886,6 +978,7 @@ export async function resolveBattle(req, res) {
   try {
     const requesterId = getRequesterId(req);
     if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
+    attackerIdForRollback = requesterId;
 
     const { battleId } = req.params;
     const attack = await Attack.findOne({ id: String(battleId) });
@@ -904,7 +997,11 @@ export async function resolveBattle(req, res) {
       });
     }
 
-    return res.json(result.data);
+    const freshRequester = await Player.findById(requesterId).lean();
+    return res.json({
+      ...result.data,
+      player: freshRequester ? mergePlayerState(freshRequester) : undefined,
+    });
   } catch (err) {
     console.error('[RESOLVE]', err);
     return res.status(500).json({ error: 'Erro ao resolver batalha', message: err.message });
@@ -919,6 +1016,7 @@ export async function getBattleReport(req, res) {
   try {
     const requesterId = getRequesterId(req);
     if (!requesterId) return res.status(401).json({ error: 'Usuário não autenticado' });
+    attackerIdForRollback = requesterId;
 
     const { battleId } = req.params;
     const attack = await Attack.findOne({ id: String(battleId) });

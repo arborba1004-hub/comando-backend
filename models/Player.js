@@ -548,6 +548,15 @@ const playerSchema = new mongoose.Schema(
       default: [],
     },
 
+    // Maior unlockBarracoLevel comprado na Garagem da Fuga.
+    // pageLevels.fuga continua representando estágios/contratos ativos (1-20)
+    // para não quebrar a regra do barraco.
+    fugaMaxUnlockBarracoLevel: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+
     purchasedAccessories: {
       type: [purchasedAccessorySchema],
       default: [],

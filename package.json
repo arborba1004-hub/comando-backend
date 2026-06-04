@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "migrate:azideia": "node scripts/migrate-azideia-rewards.js",
-    "migrate:performance": "node scripts/ensure-performance-indexes.js"
+    "migrate:performance": "node scripts/ensure-performance-indexes.js",
+    "migrate:fuga": "node scripts/migrate-fuga-stat-sources.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

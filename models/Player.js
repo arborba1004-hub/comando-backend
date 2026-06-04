@@ -327,6 +327,11 @@ const gangStateSchema = new mongoose.Schema(
   {
     members: { type: [gangMemberSchema], default: createEmptyGangState().members },
     trainingSlots: { type: [trainingSlotSchema], default: createEmptyGangState().trainingSlots },
+    formation: {
+      type: String,
+      enum: ['pressao_total', 'linha_fechada', 'bote_certo', 'cerco', 'saque_rapido'],
+      default: 'pressao_total',
+    },
     stats: { type: gangStatsSchema, default: createEmptyGangState().stats },
     statSources: { type: [gangStatSourceSchema], default: createEmptyGangState().statSources },
     statSnapshot: { type: mongoose.Schema.Types.Mixed, default: createEmptyGangState().statSnapshot },

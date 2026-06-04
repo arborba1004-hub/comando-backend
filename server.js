@@ -18,6 +18,7 @@ import laundryRoutes from './routes/laundryRoutes.js';
 import gameRoutes from './routes/gameRoutes.js';
 import briberyRoutes from './routes/briberyRoutes.js';
 import trainingRoutes from './routes/trainingRoutes.js';
+import gangRoutes from './routes/gangRoutes.js';
 import gangWarRoutes from './routes/gangWarRoutes.js';
 import attackRoutes from './routes/attackRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
@@ -111,6 +112,7 @@ app.use('/faction-help', factionHelpRoutes);
 app.use('/laundry', laundryRoutes);
 app.use('/game', gameRoutes);
 app.use('/api/training', trainingRoutes);
+app.use('/api/gang', gangRoutes);
 
 // Corrigido: prefixo explícito para gang-war
 app.use('/gang-war', gangWarRoutes);

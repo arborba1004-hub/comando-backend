@@ -129,6 +129,7 @@ export function initSocket(server) {
 
   wss.on('connection', async (ws, req) => {
     let playerId, playerName, barracoLevel, power, factionId, tileX, tileY;
+    let fullPlayer = null;
 
     try {
       // [PATCH 1] usa extractToken (subprotocol-first, query-string fallback)
@@ -136,18 +137,18 @@ export function initSocket(server) {
       if (!token) { ws.close(1008, 'TOKEN_MISSING'); return; }
 
       const decoded = jwt.verify(token, env.JWT_SECRET);
-      const player  = await Player.findById(decoded.id)
-        .select('_id name mapPosition niveis power factionId')
-        .lean();
-      if (!player) { ws.close(1008, 'PLAYER_NOT_FOUND'); return; }
+      // Uma única leitura do jogador: os mesmos dados servem para presença no mapa
+      // e para o playerInit completo. Antes eram duas queries findById seguidas.
+      fullPlayer = await Player.findById(decoded.id).lean();
+      if (!fullPlayer) { ws.close(1008, 'PLAYER_NOT_FOUND'); return; }
 
-      playerId     = String(player._id);
-      playerName   = player.name ?? 'Jogador';
-      barracoLevel = player.niveis?.barracoLevel ?? 1;
-      power        = player.power ?? 0;
-      factionId    = player.factionId ?? null;
-      tileX        = player.mapPosition?.tileX ?? 0;
-      tileY        = player.mapPosition?.tileY ?? 0;
+      playerId     = String(fullPlayer._id);
+      playerName   = fullPlayer.name ?? 'Jogador';
+      barracoLevel = fullPlayer.niveis?.barracoLevel ?? 1;
+      power        = fullPlayer.power ?? 0;
+      factionId    = fullPlayer.factionId ?? null;
+      tileX        = fullPlayer.mapPosition?.tileX ?? 0;
+      tileY        = fullPlayer.mapPosition?.tileY ?? 0;
     } catch (err) {
       ws.close(1008, 'TOKEN_INVALID');
       return;
@@ -162,7 +163,6 @@ export function initSocket(server) {
 
     // ── 1. playerInit ────────────────────────────────────────────────────
     try {
-      const fullPlayer = await Player.findById(playerId).lean();
       if (fullPlayer) send(ws, 'playerInit', { player: mergePlayerState(fullPlayer) });
     } catch (err) { console.error('❌ playerInit:', err.message); }
 
